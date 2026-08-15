@@ -17,6 +17,10 @@ the **moest** client based on [Telegram-X](https://github.com/TGX-Android/Telegr
 [![Updates](https://img.shields.io/badge/Release-%40moe__chat-blue?style=flat-square&logo=telegram&label=Discussion)](https://t.me/moe_log)
 </div>
 
+## This fork
+
+Adds configurable Ghost Mode, **Read until**, message filters, and local shadow bans to moeGramX. Feature behavior is inspired by [AyuGram](https://github.com/AyuGram/AyuGram4A); the Telegram X/TDLib implementation is independent.
+
 ## Features
 
 - Message details
