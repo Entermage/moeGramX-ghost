@@ -3597,7 +3597,13 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public void onReplyLoaded () {
-
+    if (replyData != null && replyData.isShadowHidden()) {
+      replyData.performDestroy();
+      replyData = null;
+      rebuildLayout();
+      notifyBubbleChanged();
+      requestLayout();
+    }
   }
 
   @MessageChangeType

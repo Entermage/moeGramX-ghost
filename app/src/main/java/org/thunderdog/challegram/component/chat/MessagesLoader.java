@@ -50,6 +50,8 @@ import java.util.Calendar;
 import java.util.Collections;
 import java.util.List;
 
+import moe.kirao.mgx.MoexMessageFilter;
+
 import me.vkryl.core.DateUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
@@ -1411,6 +1413,9 @@ public class MessagesLoader implements Client.ResultHandler {
     TGMessage unreadBadged = null;
 
     for (int j = maxIndex; j >= minIndex; j--) {
+      if (MoexMessageFilter.shouldHideInChat(tdlib, messages[j], isChannel)) {
+        continue;
+      }
       if (needMeasureSpeed) {
         startMeasureStep();
       }

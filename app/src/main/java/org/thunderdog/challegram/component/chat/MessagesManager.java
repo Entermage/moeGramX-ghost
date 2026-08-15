@@ -92,6 +92,8 @@ import tgx.td.ChatId;
 import tgx.td.MessageId;
 import tgx.td.Td;
 
+import moe.kirao.mgx.MoexMessageFilter;
+
 public class MessagesManager implements Client.ResultHandler, MessagesSearchManager.Delegate,
   MessageListener, MessageEditListener, MessageThreadListener, Comparator<TGMessage>, TGPlayerController.PlayListBuilder, BaseActivity.PasscodeListener, TdlibCache.ChatMemberStatusChangeListener, TdlibSettingsManager.DismissMessageListener {
   private final MessagesController controller;
@@ -3422,9 +3424,12 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   public void onNewMessage (final TdApi.Message message) {
     final ThreadInfo messageThread = loader.getMessageThread();
     if (TD.isScheduled(message) == areScheduled()) {
+      final TdApi.Chat chat = tdlib.chatStrict(message.chatId);
+      if (MoexMessageFilter.shouldHideInChat(tdlib, message, tdlib.isChannelChat(chat))) {
+        return;
+      }
       if (indexOfSentMessage(message.chatId, message.id) != -1)
         return;
-      final TdApi.Chat chat = tdlib.chatStrict(message.chatId);
       final TGMessage parsedMessage = TGMessage.valueOf(this, message, chat, messageThread, chatAdmins);
       showMessage(chat.id, parsedMessage);
     } else if (isFocused() && TD.isScheduled(message) && messageThread == null) {
@@ -3448,6 +3453,9 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     TGMessage cur = null;
     LongSparseArray<TdApi.ChatAdministrator> chatAdmins = this.chatAdmins;
     for (TdApi.Message message : messages) {
+      if (MoexMessageFilter.shouldHideInChat(tdlib, message, tdlib.isChannelChat(chat))) {
+        continue;
+      }
       if (cur != null) {
         if (cur.combineWith(message, true)) {
           continue;

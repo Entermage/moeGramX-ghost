@@ -27,6 +27,8 @@ import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import moe.kirao.mgx.MoexMessageFilter;
+
 import org.drinkless.tdlib.Client;
 import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
@@ -559,6 +561,29 @@ public class ReplyComponent implements Client.ResultHandler, Destroyable {
   private String pollOptionId;
   private Drawable cornerDrawable;
 
+  private boolean shadowHidden;
+
+  public boolean isShadowHidden () {
+    return shadowHidden;
+  }
+
+  private void hideShadowBannedReply () {
+    shadowHidden = true;
+    currentMessage = null;
+    currentError = null;
+    sender = null;
+    senderName = null;
+    accentColor = null;
+    content = null;
+    mediaPreview = null;
+    trimmedTitle = null;
+    trimmedContent = null;
+    if (parent != null) {
+      UI.execute(parent::onReplyLoaded);
+    }
+    invalidate(true);
+  }
+
   public void load () {
     if (parent == null)
       return;
@@ -577,6 +602,11 @@ public class ReplyComponent implements Client.ResultHandler, Destroyable {
         }
         if (replyToMessage.origin != null) {
           handleOrigin(replyToMessage.origin);
+          if (sender != null && sender.getConstructor() == TdApi.MessageSenderUser.CONSTRUCTOR &&
+              MoexMessageFilter.isShadowBannedUser(tdlib, ((TdApi.MessageSenderUser) sender).userId)) {
+            hideShadowBannedReply();
+            return;
+          }
         }
         this.pollOptionId = replyToMessage.pollOptionId;
         if (!Td.isEmpty(replyToMessage.quote) || replyToMessage.content != null) {
@@ -1020,6 +1050,11 @@ public class ReplyComponent implements Client.ResultHandler, Destroyable {
   }
 
   private void setMessage (TdApi.Message msg, boolean forceRequestImage, boolean forceLocal) {
+    if (MoexMessageFilter.isShadowBanned(tdlib, msg)) {
+      hideShadowBannedReply();
+      return;
+    }
+    shadowHidden = false;
     currentMessage = msg;
     MediaPreview mediaPreview = newMediaPreview(msg.chatId, msg.content);
     ContentPreview contentPreview = ContentPreview.getChatListPreview(tdlib, msg.chatId, msg, true);

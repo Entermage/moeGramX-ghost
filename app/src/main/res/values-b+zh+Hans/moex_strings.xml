@@ -89,4 +89,25 @@
   <string name="ProxyAlertCheck">检查</string>
   <string name="moex_birthdayBarSubtitle">今天生日</string>
   <string name="moex_birthdaysTodayTitle">%1$d 今天生日</string>
+  <string name="GhostMode">全局隐身模式</string>
+  <string name="GhostReadChannels">频道隐藏已读</string>
+  <string name="GhostReadGroups">群组隐藏已读</string>
+  <string name="GhostReadPrivate">私聊隐藏已读</string>
+  <string name="GhostOnline">保持离线</string>
+  <string name="GhostActions">隐藏输入与上传状态</string>
+  <string name="GhostModeInfo">参考 AyuGram 行为实现。频道、群组和私聊可分别隐藏已读回执；需要主动已读时，可在消息菜单中选择“读到此处”。</string>
+  <string name="MessageFilter">消息过滤器</string>
+  <string name="EnableMessageFilter">启用正则过滤</string>
+  <string name="FilterPatterns">过滤规则</string>
+  <string name="FilterPatternsHint">每行一个正则表达式；无效表达式会被忽略。</string>
+  <string name="FilterInChats">在聊天内隐藏匹配消息</string>
+  <string name="FilterCaseInsensitive">忽略大小写</string>
+  <string name="MessageFilterInfo">匹配的会话预览会被遮盖。启用后也会隐藏聊天内的匹配消息；频道消息始终隐藏，与 AyuGram 行为一致。</string>
+  <string name="FilteredMessage">已过滤消息</string>
+  <string name="ReadUntil">读到此处</string>
+  <string name="ShadowBan">屏蔽该用户发言</string>
+  <string name="RemoveShadowBan">取消屏蔽该用户</string>
+  <string name="ShadowBannedUsers">已屏蔽用户</string>
+  <string name="ShadowBannedUsersHint">每行一个 Telegram 数字用户 ID；也可从该用户任意消息的互动菜单中添加。</string>
+  <plurals name="xFilterPatterns"><item quantity="other">%d 条规则</item></plurals>
 </resources>

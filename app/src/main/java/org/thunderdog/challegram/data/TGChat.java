@@ -64,6 +64,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import moe.kirao.mgx.MoexConfig;
+import moe.kirao.mgx.MoexMessageFilter;
 
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.animator.BounceAnimator;
@@ -1227,13 +1228,15 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
         needSuffix = draftMessage != null && draftMessage.content.getConstructor() == TdApi.DraftMessageContentText.CONSTRUCTOR && !Td.isEmpty(((TdApi.DraftMessageContentText) draftMessage.content).text);
         prefix = Lang.getString(R.string.Draft);
         flags |= FLAG_CONTENT_STRING;
-      } else if (isOutgoing()) {
-        prefix = Lang.getString(listMode != Settings.CHAT_MODE_2LINE && tdlib.isMultiChat(chat) && Td.getSenderId(chat.lastMessage) == chat.id ? R.string.FromYouAnonymous : R.string.FromYou);
+      } else if (visibleMessage != null ? visibleMessage.isOutgoing : isOutgoing()) {
+        TdApi.Message prefixMessage = visibleMessage != null ? visibleMessage : chat.lastMessage;
+        prefix = Lang.getString(listMode != Settings.CHAT_MODE_2LINE && tdlib.isMultiChat(chat) && Td.getSenderId(prefixMessage) == chat.id ? R.string.FromYouAnonymous : R.string.FromYou);
         flags |= FLAG_CONTENT_STRING;
-      } else if (chat.lastMessage != null && !Td.isProximityAlertTriggered(chat.lastMessage.content)) {
-        prefix = listMode == Settings.CHAT_MODE_2LINE && Td.getMessageAuthorId(chat.lastMessage) == chat.lastMessage.chatId && StringUtils.isEmpty(chat.lastMessage.authorSignature) ?
+      } else if ((visibleMessage != null || chat.lastMessage != null) && !Td.isProximityAlertTriggered((visibleMessage != null ? visibleMessage : chat.lastMessage).content)) {
+        TdApi.Message prefixMessage = visibleMessage != null ? visibleMessage : chat.lastMessage;
+        prefix = listMode == Settings.CHAT_MODE_2LINE && Td.getMessageAuthorId(prefixMessage) == prefixMessage.chatId && StringUtils.isEmpty(prefixMessage.authorSignature) ?
           Lang.getString(R.string.FromAnonymous) :
-          tdlib.senderName(chat.lastMessage, false, listMode == Settings.CHAT_MODE_2LINE);
+          tdlib.senderName(prefixMessage, false, listMode == Settings.CHAT_MODE_2LINE);
       } else {
         prefix = null;
       }
@@ -1390,6 +1393,24 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
     TdApi.Message msg = chat.lastMessage;
     if (msg != null) {
       flags |= FLAG_MESSAGE;
+      if (MoexMessageFilter.isShadowBanned(tdlib, msg)) {
+        TdApi.Message fallback = shadowPreviewForLastMessageId == msg.id ? shadowPreviewMessage : null;
+        if (fallback != null && !MoexMessageFilter.matches(tdlib, fallback)) {
+          ContentPreview preview = ContentPreview.getChatListPreview(tdlib, fallback.chatId, fallback, false);
+          visibleMessage = fallback;
+          setContentPreview(preview);
+        } else {
+          setTextValue(R.string.FilteredMessage);
+          setPrefix();
+          requestShadowPreview(msg.id);
+        }
+        return;
+      }
+      if (MoexMessageFilter.matchesRegex(msg)) {
+        setTextValue(R.string.FilteredMessage);
+        setPrefix();
+        return;
+      }
       // No need to check tdlib.chatRestrictionReason, because it's already handled above
       ContentPreview preview = ContentPreview.getChatListPreview(tdlib, msg.chatId, msg, false);
       setContentPreview(preview);
@@ -1401,6 +1422,34 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
   }
 
   private TdApi.Message visibleMessage;
+  private long shadowPreviewForLastMessageId;
+  private long shadowPreviewRequestMessageId;
+  private TdApi.Message shadowPreviewMessage;
+
+  private void requestShadowPreview (long lastMessageId) {
+    if (shadowPreviewRequestMessageId == lastMessageId) return;
+    shadowPreviewRequestMessageId = lastMessageId;
+    tdlib.send(new TdApi.GetChatHistory(chat.id, lastMessageId, 0, 50, false), (messages, error) -> {
+      TdApi.Message fallback = null;
+      if (messages != null) {
+        for (TdApi.Message candidate : messages.messages) {
+          if (candidate.id != lastMessageId && !MoexMessageFilter.matches(tdlib, candidate)) {
+            fallback = candidate;
+            break;
+          }
+        }
+      }
+      final TdApi.Message finalFallback = fallback;
+      tdlib.ui().post(() -> {
+        if (chat.lastMessage != null && chat.lastMessage.id == lastMessageId) {
+          shadowPreviewForLastMessageId = lastMessageId;
+          shadowPreviewMessage = finalFallback;
+          setText();
+          currentViews.invalidate();
+        }
+      });
+    });
+  }
 
   @Override
   public boolean isMediaGroup () {
@@ -1431,7 +1480,7 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
       textIconIds.clear();
     setTextValue(preview.buildText(true), preview.formattedText != null ? preview.formattedText.entities : null, preview.isTranslatable);
     this.currentPreview = preview;
-    TdApi.Message lastMessage = chat != null ? chat.lastMessage : null;
+    TdApi.Message lastMessage = visibleMessage != null ? visibleMessage : (chat != null ? chat.lastMessage : null);
     if (preview.parentEmoji != null) {
       addIcon(preview.parentEmoji.iconRepresentation);
     } else if (lastMessage != null && (lastMessage.isChannelPost || getPrefixIconCount() == 0)) {
@@ -1446,10 +1495,10 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
             needShareIcon = true;
             break;
           case TdApi.MessageOriginUser.CONSTRUCTOR:
-            needShareIcon = Td.getSenderUserId(chat.lastMessage) != ((TdApi.MessageOriginUser) origin).senderUserId;
+            needShareIcon = Td.getSenderUserId(lastMessage) != ((TdApi.MessageOriginUser) origin).senderUserId;
             break;
           case TdApi.MessageOriginChat.CONSTRUCTOR:
-            needShareIcon = Td.getSenderId(chat.lastMessage) != ((TdApi.MessageOriginChat) origin).senderChatId;
+            needShareIcon = Td.getSenderId(lastMessage) != ((TdApi.MessageOriginChat) origin).senderChatId;
             break;
           default:
             Td.assertMessageOrigin_f2224a59();
@@ -1474,11 +1523,11 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
 
     if ((isGroup() || isSupergroup()) && !preview.hideAuthor) {
       flags |= FLAG_HAS_PREFIX;
-    } else if (chat.lastMessage != null && Td.isCall(chat.lastMessage.content)) {
+    } else if (lastMessage != null && Td.isCall(lastMessage.content)) {
       if (textIconIds != null)
         textIconIds.clear();
-      addIcon(CallItem.getSubtitleIcon((TdApi.MessageCall) chat.lastMessage.content, TD.isOut(chat.lastMessage)));
-      textIconColorId = CallItem.getSubtitleIconColorId((TdApi.MessageCall) chat.lastMessage.content);
+      addIcon(CallItem.getSubtitleIcon((TdApi.MessageCall) lastMessage.content, TD.isOut(lastMessage)));
+      textIconColorId = CallItem.getSubtitleIconColorId((TdApi.MessageCall) lastMessage.content);
     }
 
     setPrefix();

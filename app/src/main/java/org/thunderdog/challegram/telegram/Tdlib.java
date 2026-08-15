@@ -144,6 +144,7 @@ import tgx.td.client.TdlibOptions;
 import tgx.td.data.MessageWithProperties;
 
 import moe.kirao.mgx.MoexConfig;
+import moe.kirao.mgx.MoexMessageFilter;
 
 public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, DateChangeListener {
   @Override
@@ -282,6 +283,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       this.tdlib = tdlib;
       this.client = Client.create(this, this, this);
       tdlib.updateParameters(client);
+      tdlib.applyGhostModeOptions(client);
       if (Config.NEED_ONLINE) {
         if (tdlib.isOnline) {
           client.send(new TdApi.SetOption("online", new TdApi.OptionValueBoolean(true)), tdlib.okHandler());
@@ -6580,6 +6582,41 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
     return isOnline;
   }
 
+  private void applyGhostModeOptions (@NonNull Client client) {
+    boolean enabled = MoexConfig.ghostMode;
+    client.send(new TdApi.SetOption("x_moex_ghost_read_channels",
+      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostReadChannels)), okHandler());
+    client.send(new TdApi.SetOption("x_moex_ghost_read_groups",
+      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostReadGroups)), okHandler());
+    client.send(new TdApi.SetOption("x_moex_ghost_read_private",
+      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostReadPrivate)), okHandler());
+    client.send(new TdApi.SetOption("x_moex_ghost_online",
+      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostOnline)), okHandler());
+    client.send(new TdApi.SetOption("x_moex_ghost_actions",
+      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostActions)), okHandler());
+    client.send(new TdApi.SetOption("online",
+      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostOnline ? false : isOnline)), okHandler());
+  }
+
+  public void applyGhostModeOptions () {
+    performOptional(this::applyGhostModeOptions, null);
+  }
+
+  public boolean isGhostReadEnabled (long chatId) {
+    if (!MoexConfig.ghostMode) return false;
+    if (isChannel(chatId)) return MoexConfig.ghostReadChannels;
+    if (isMultiChat(chatId)) return MoexConfig.ghostReadGroups;
+    return MoexConfig.ghostReadPrivate;
+  }
+
+  public void readMessageOnServer (long chatId, long messageId) {
+    client().send(new TdApi.SetOption("x_moex_ghost_read_allow_once", new TdApi.OptionValueBoolean(true)), ok ->
+      client().send(new TdApi.ViewMessages(chatId, new long[] {messageId}, new TdApi.MessageSourceChatHistory(), true), result -> {
+        client().send(new TdApi.SetOption("x_moex_ghost_read_allow_once", new TdApi.OptionValueBoolean(false)), okHandler());
+        messageHandler().onResult(result);
+      }));
+  }
+
   public void setOnline (boolean isOnline) {
     if (this.isOnline != isOnline) {
       this.isOnline = isOnline;
@@ -7526,7 +7563,9 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
 
     listeners.updateNewMessage(update);
 
-    notificationManager.onUpdateNewMessage(update);
+    if (!MoexMessageFilter.isShadowBanned(this, update.message)) {
+      notificationManager.onUpdateNewMessage(update);
+    }
 
     context.global().notifyUpdateNewMessage(this, update);
 

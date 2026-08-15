@@ -113,4 +113,25 @@
   <string name="moex_birthdayBarSubtitle">Birthday today</string>
   <string name="moex_birthdaysTodayTitle">%1$d birthdays today</string>
   <string name="ProfileChannel">Profile Channel</string>
+  <string name="GhostMode">Ghost Mode</string>
+  <string name="GhostReadChannels">Hide reads in channels</string>
+  <string name="GhostReadGroups">Hide reads in groups</string>
+  <string name="GhostReadPrivate">Hide reads in private chats</string>
+  <string name="GhostOnline">Stay offline</string>
+  <string name="GhostActions">Hide typing and upload activity</string>
+  <string name="GhostModeInfo">Global mode inspired by AyuGram. Read receipts can be hidden separately for channels, groups and private chats. Use Read until in a message menu to explicitly send one read receipt.</string>
+  <string name="MessageFilter">Message filter</string>
+  <string name="EnableMessageFilter">Enable regex filters</string>
+  <string name="FilterPatterns">Filter patterns</string>
+  <string name="FilterPatternsHint">One regular expression per line. Invalid expressions are ignored.</string>
+  <string name="FilterInChats">Hide matches inside chats</string>
+  <string name="FilterCaseInsensitive">Case-insensitive matching</string>
+  <string name="MessageFilterInfo">Matching chat-list previews are redacted. Matching messages are also hidden inside chats when enabled; channel messages are always hidden, matching AyuGram behavior.</string>
+  <string name="FilteredMessage">Filtered message</string>
+  <string name="ReadUntil">Read until</string>
+  <string name="ShadowBan">Shadow ban user</string>
+  <string name="RemoveShadowBan">Remove shadow ban</string>
+  <string name="ShadowBannedUsers">Shadow-banned users</string>
+  <string name="ShadowBannedUsersHint">One numeric Telegram user ID per line. You can also add a user from any of their message menus.</string>
+  <plurals name="xFilterPatterns"><item quantity="one">%d pattern</item><item quantity="other">%d patterns</item></plurals>
 </resources>

@@ -370,7 +370,7 @@ public class MessageOptionsPagerController extends BottomSheetViewController<Opt
     }
 
     if (position == 0 && state.needShowMessageOptions) {
-      float targetPosition = getContentOffset() + HeaderView.getTopOffset();
+      float targetPosition = getContentOffset() + getHeaderTopOffset();
       float animPosition = targetPosition + (lastHeaderPosition - targetPosition) * positionOffset;
       setHeaderPosition(animPosition);
       if (positionOffset == 0f) {
@@ -456,7 +456,7 @@ public class MessageOptionsPagerController extends BottomSheetViewController<Opt
   protected int getContentOffset () {
     if (state.needShowMessageOptions) {
       return (getTargetHeight()
-        - (Screen.dp(54) + HeaderView.getTopOffset())
+        - (Screen.dp(54) + getHeaderTopOffset())
         - getOptionItemsHeight()
         - Screen.dp(1)
         - (Settings.instance().useEdgeToEdge() ? context().getRootView().getSystemInsetsWithoutIme().bottom : 0)
@@ -489,7 +489,7 @@ public class MessageOptionsPagerController extends BottomSheetViewController<Opt
       MessageOptionsController c = new MessageOptionsController(context, this.tdlib, getThemeListeners());
       c.setArguments(new MessageOptionsController.Args(state.options, onClickListener, state.message.getFirstEmojiId(), state.emojiPackIds, () -> hidePopupWindow(true)));
       c.getValue();
-      setHeaderPosition(getContentOffset() + HeaderView.getTopOffset());
+      setHeaderPosition(getContentOffset() + getHeaderTopOffset());
       setDefaultListenersAndDecorators(c);
       return c;
     }
@@ -512,7 +512,7 @@ public class MessageOptionsPagerController extends BottomSheetViewController<Opt
       MessageOptionsReactedController c = new MessageOptionsReactedController(context, this.tdlib, getPopupLayout(), state.message, state.messageReactions.reactions[position - REACTED_START_POSITION].type);
       c.getValue();
       if (isFirstCreation && !state.needShowMessageOptions) {
-        setHeaderPosition(getContentOffset() + HeaderView.getTopOffset());
+        setHeaderPosition(getContentOffset() + getHeaderTopOffset());
         isFirstCreation = false;
       }
       setDefaultListenersAndDecorators(c);
@@ -550,6 +550,11 @@ public class MessageOptionsPagerController extends BottomSheetViewController<Opt
   @Override
   protected int getHeaderHeight () {
     return Screen.dp(54);
+  }
+
+  @Override
+  protected int getHeaderTopOffset () {
+    return 0;
   }
 
 

@@ -1,6 +1,7 @@
 package moe.kirao.mgx.ui;
 
 import android.content.Context;
+import android.text.InputType;
 import android.view.View;
 import android.widget.Toast;
 
@@ -19,6 +20,7 @@ import org.thunderdog.challegram.ui.RecyclerViewController;
 import org.thunderdog.challegram.ui.SettingsAdapter;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.v.CustomRecyclerView;
+import org.thunderdog.challegram.widget.MaterialEditTextGroup;
 
 import java.util.ArrayList;
 
@@ -142,11 +144,83 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
     } else if (viewId == R.id.btn_silent) {
       MoexConfig.instance().toggleSilentMessage();
       adapter.updateValuedSettingById(viewId);
+    } else if (viewId == R.id.btn_ghostMode) {
+      MoexConfig.instance().setGhostMode(adapter.toggleView(v));
+      tdlib.applyGhostModeOptions();
+    } else if (viewId == R.id.btn_ghostReadChannels) {
+      MoexConfig.instance().setGhostReadChannels(adapter.toggleView(v));
+      tdlib.applyGhostModeOptions();
+    } else if (viewId == R.id.btn_ghostReadGroups) {
+      MoexConfig.instance().setGhostReadGroups(adapter.toggleView(v));
+      tdlib.applyGhostModeOptions();
+    } else if (viewId == R.id.btn_ghostReadPrivate) {
+      MoexConfig.instance().setGhostReadPrivate(adapter.toggleView(v));
+      tdlib.applyGhostModeOptions();
+    } else if (viewId == R.id.btn_ghostOnline) {
+      MoexConfig.instance().setGhostOnline(adapter.toggleView(v));
+      tdlib.applyGhostModeOptions();
+    } else if (viewId == R.id.btn_ghostActions) {
+      MoexConfig.instance().setGhostActions(adapter.toggleView(v));
+      tdlib.applyGhostModeOptions();
+    } else if (viewId == R.id.btn_filterEnabled) {
+      MoexConfig.instance().setFilterEnabled(adapter.toggleView(v));
+    } else if (viewId == R.id.btn_filterInChats) {
+      MoexConfig.instance().setFilterInChats(adapter.toggleView(v));
+    } else if (viewId == R.id.btn_filterCaseInsensitive) {
+      MoexConfig.instance().setFilterCaseInsensitive(adapter.toggleView(v));
+    } else if (viewId == R.id.btn_filterPatterns) {
+      showFilterPatternsEditor();
+    } else if (viewId == R.id.btn_shadowBannedUsers) {
+      showShadowBannedUsersEditor();
     } else if (viewId == R.id.btn_rearRounds) {
       showRoundVideoCameraOptions();
     } else if (viewId == R.id.btn_toggleEdgeAnimSide) {
       handleSettingClick(v, adapter);
     }
+  }
+
+  private void showFilterPatternsEditor () {
+    String patterns = MoexConfig.instance().getString(MoexConfig.KEY_FILTER_PATTERNS, "");
+    MaterialEditTextGroup group = openInputAlert(Lang.getString(R.string.FilterPatterns),
+      Lang.getString(R.string.FilterPatternsHint), R.string.Save, R.string.Cancel, patterns,
+      (inputView, result) -> {
+        MoexConfig.instance().setFilterPatterns(result);
+        adapter.updateValuedSettingById(R.id.btn_filterPatterns);
+        return true;
+      }, false);
+    group.getEditText().setSingleLine(false);
+    group.getEditText().setMaxLines(8);
+    group.getEditText().setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE |
+      InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+  }
+
+  private void showShadowBannedUsersEditor () {
+    long[] userIds = MoexConfig.instance().getShadowBannedUsers(tdlib.id());
+    StringBuilder value = new StringBuilder();
+    for (long userId : userIds) {
+      if (value.length() > 0) value.append('\n');
+      value.append(userId);
+    }
+    MaterialEditTextGroup group = openInputAlert(Lang.getString(R.string.ShadowBannedUsers),
+      Lang.getString(R.string.ShadowBannedUsersHint), R.string.Save, R.string.Cancel, value.toString(),
+      (inputView, result) -> {
+        java.util.ArrayList<Long> parsed = new java.util.ArrayList<>();
+        for (String line : result.split("\\R")) {
+          try {
+            long userId = Long.parseLong(line.trim());
+            if (userId != 0 && !parsed.contains(userId)) parsed.add(userId);
+          } catch (NumberFormatException ignored) { }
+        }
+        long[] newUserIds = new long[parsed.size()];
+        for (int i = 0; i < parsed.size(); i++) newUserIds[i] = parsed.get(i);
+        MoexConfig.instance().setShadowBannedUsers(tdlib.id(), newUserIds);
+        adapter.updateValuedSettingById(R.id.btn_shadowBannedUsers);
+        return true;
+      }, false);
+    group.getEditText().setSingleLine(false);
+    group.getEditText().setMaxLines(8);
+    group.getEditText().setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE |
+      InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
   }
 
   @Override
@@ -395,6 +469,30 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
           view.getToggler().setRadioEnabled(MoexConfig.darkenDrawer, isUpdate);
         } else if (itemId == R.id.btn_silent) {
           view.getToggler().setRadioEnabled(MoexConfig.silentMessage, isUpdate);
+        } else if (itemId == R.id.btn_ghostMode) {
+          view.getToggler().setRadioEnabled(MoexConfig.ghostMode, isUpdate);
+        } else if (itemId == R.id.btn_ghostReadChannels) {
+          view.getToggler().setRadioEnabled(MoexConfig.ghostReadChannels, isUpdate);
+        } else if (itemId == R.id.btn_ghostReadGroups) {
+          view.getToggler().setRadioEnabled(MoexConfig.ghostReadGroups, isUpdate);
+        } else if (itemId == R.id.btn_ghostReadPrivate) {
+          view.getToggler().setRadioEnabled(MoexConfig.ghostReadPrivate, isUpdate);
+        } else if (itemId == R.id.btn_ghostOnline) {
+          view.getToggler().setRadioEnabled(MoexConfig.ghostOnline, isUpdate);
+        } else if (itemId == R.id.btn_ghostActions) {
+          view.getToggler().setRadioEnabled(MoexConfig.ghostActions, isUpdate);
+        } else if (itemId == R.id.btn_filterEnabled) {
+          view.getToggler().setRadioEnabled(MoexConfig.filterEnabled, isUpdate);
+        } else if (itemId == R.id.btn_filterInChats) {
+          view.getToggler().setRadioEnabled(MoexConfig.filterInChats, isUpdate);
+        } else if (itemId == R.id.btn_filterCaseInsensitive) {
+          view.getToggler().setRadioEnabled(MoexConfig.filterCaseInsensitive, isUpdate);
+        } else if (itemId == R.id.btn_filterPatterns) {
+          String raw = MoexConfig.instance().getString(MoexConfig.KEY_FILTER_PATTERNS, "").trim();
+          int count = raw.isEmpty() ? 0 : raw.split("\\R").length;
+          view.setData(Integer.toString(count));
+        } else if (itemId == R.id.btn_shadowBannedUsers) {
+          view.setData(Integer.toString(MoexConfig.instance().getShadowBannedUsers(tdlib.id()).length));
         } else if (itemId == R.id.btn_toggleEdgeAnimSide) {
           updateSettingView(view, item, isUpdate);
         } else if (itemId == R.id.btn_rearRounds) {
@@ -463,6 +561,36 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
         items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_hideBottomBar, 0, R.string.HideBottomBar));
         break;
       case CATEGORY_CHATS:
+        items.add(new ListItem(ListItem.TYPE_HEADER, 0, 0, R.string.GhostMode));
+        items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
+        items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_ghostMode, 0, R.string.GhostMode));
+        items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+        items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_ghostReadChannels, 0, R.string.GhostReadChannels));
+        items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+        items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_ghostReadGroups, 0, R.string.GhostReadGroups));
+        items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+        items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_ghostReadPrivate, 0, R.string.GhostReadPrivate));
+        items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+        items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_ghostOnline, 0, R.string.GhostOnline));
+        items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+        items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_ghostActions, 0, R.string.GhostActions));
+        items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
+        items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.GhostModeInfo));
+
+        items.add(new ListItem(ListItem.TYPE_HEADER, 0, 0, R.string.MessageFilter));
+        items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
+        items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_filterEnabled, 0, R.string.EnableMessageFilter));
+        items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+        items.add(new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT, R.id.btn_filterPatterns, 0, R.string.FilterPatterns));
+        items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+        items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_filterInChats, 0, R.string.FilterInChats));
+        items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+        items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_filterCaseInsensitive, 0, R.string.FilterCaseInsensitive));
+        items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+        items.add(new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT, R.id.btn_shadowBannedUsers, 0, R.string.ShadowBannedUsers));
+        items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
+        items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.MessageFilterInfo));
+
         items.add(new ListItem(ListItem.TYPE_HEADER, 0, 0, R.string.MoexStickersCount));
         items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
         items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_disableStickerTimestamp, 0, R.string.DisableStickerTimestamp));

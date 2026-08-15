@@ -52,6 +52,18 @@ public class MoexConfig {
   public static final String KEY_SILENT_MESSAGE = "silent_message";
   public static final String KEY_CHAT_QUICK_EDIT = "quick_edit";
   public static final String KEY_CHAT_QUICK_FEATURED = "quick_featured";
+  public static final String KEY_GHOST_MODE = "ghost_mode";
+  public static final String KEY_GHOST_READ_RECEIPTS = "ghost_read_receipts";
+  public static final String KEY_GHOST_READ_CHANNELS = "ghost_read_channels";
+  public static final String KEY_GHOST_READ_GROUPS = "ghost_read_groups";
+  public static final String KEY_GHOST_READ_PRIVATE = "ghost_read_private";
+  public static final String KEY_GHOST_ONLINE = "ghost_online";
+  public static final String KEY_GHOST_ACTIONS = "ghost_actions";
+  public static final String KEY_FILTER_ENABLED = "filter_enabled";
+  public static final String KEY_FILTER_IN_CHATS = "filter_in_chats";
+  public static final String KEY_FILTER_CASE_INSENSITIVE = "filter_case_insensitive";
+  public static final String KEY_FILTER_PATTERNS = "filter_patterns";
+  private static final String KEY_SHADOW_BANNED_USERS_PREFIX = "shadow_banned_users_";
 
   public static final String KEY_ROUND_VIDEOS = "round_videos";
   public static final String KEY_DISABLE_PROXY_ON_VPN = "disable_proxy_on_vpn";
@@ -98,6 +110,16 @@ public class MoexConfig {
   public static boolean quickFeatured = instance().getBoolean(KEY_CHAT_QUICK_FEATURED, false);
   public static boolean disableProxyOnVpn = instance().getBoolean(KEY_DISABLE_PROXY_ON_VPN, false);
   public static boolean autoPauseResumeSystemPlayback = instance().getBoolean(KEY_AUTO_PAUSE_RESUME, false);
+  public static boolean ghostMode = instance().getBoolean(KEY_GHOST_MODE, false);
+  private static final boolean legacyGhostReadReceipts = instance().getBoolean(KEY_GHOST_READ_RECEIPTS, true);
+  public static boolean ghostReadChannels = instance().getBoolean(KEY_GHOST_READ_CHANNELS, legacyGhostReadReceipts);
+  public static boolean ghostReadGroups = instance().getBoolean(KEY_GHOST_READ_GROUPS, legacyGhostReadReceipts);
+  public static boolean ghostReadPrivate = instance().getBoolean(KEY_GHOST_READ_PRIVATE, legacyGhostReadReceipts);
+  public static boolean ghostOnline = instance().getBoolean(KEY_GHOST_ONLINE, true);
+  public static boolean ghostActions = instance().getBoolean(KEY_GHOST_ACTIONS, true);
+  public static boolean filterEnabled = instance().getBoolean(KEY_FILTER_ENABLED, false);
+  public static boolean filterInChats = instance().getBoolean(KEY_FILTER_IN_CHATS, true);
+  public static boolean filterCaseInsensitive = instance().getBoolean(KEY_FILTER_CASE_INSENSITIVE, true);
 
   private MoexConfig () {
     File configDir = new File(UI.getAppContext().getFilesDir(), "moexconf");
@@ -199,6 +221,105 @@ public class MoexConfig {
 
   public String getString (String key, String defValue) {
     return config.getString(key, defValue);
+  }
+
+  public void setGhostMode (boolean enabled) {
+    ghostMode = enabled;
+    putBoolean(KEY_GHOST_MODE, enabled);
+  }
+
+  public void setGhostReadChannels (boolean enabled) {
+    ghostReadChannels = enabled;
+    putBoolean(KEY_GHOST_READ_CHANNELS, enabled);
+  }
+
+  public void setGhostReadGroups (boolean enabled) {
+    ghostReadGroups = enabled;
+    putBoolean(KEY_GHOST_READ_GROUPS, enabled);
+  }
+
+  public void setGhostReadPrivate (boolean enabled) {
+    ghostReadPrivate = enabled;
+    putBoolean(KEY_GHOST_READ_PRIVATE, enabled);
+  }
+
+  public void setGhostOnline (boolean enabled) {
+    ghostOnline = enabled;
+    putBoolean(KEY_GHOST_ONLINE, enabled);
+  }
+
+  public void setGhostActions (boolean enabled) {
+    ghostActions = enabled;
+    putBoolean(KEY_GHOST_ACTIONS, enabled);
+  }
+
+  public void setFilterEnabled (boolean enabled) {
+    filterEnabled = enabled;
+    putBoolean(KEY_FILTER_ENABLED, enabled);
+    MoexMessageFilter.onConfigChanged();
+  }
+
+  public void setFilterInChats (boolean enabled) {
+    filterInChats = enabled;
+    putBoolean(KEY_FILTER_IN_CHATS, enabled);
+  }
+
+  public void setFilterCaseInsensitive (boolean enabled) {
+    filterCaseInsensitive = enabled;
+    putBoolean(KEY_FILTER_CASE_INSENSITIVE, enabled);
+    MoexMessageFilter.onConfigChanged();
+  }
+
+  public void setFilterPatterns (@NonNull String patterns) {
+    putString(KEY_FILTER_PATTERNS, patterns);
+    MoexMessageFilter.onConfigChanged();
+  }
+
+  private static String shadowBannedUsersKey (int accountId) {
+    return KEY_SHADOW_BANNED_USERS_PREFIX + accountId;
+  }
+
+  public synchronized boolean isShadowBanned (int accountId, long userId) {
+    if (userId == 0) return false;
+    long[] userIds = getLongArray(shadowBannedUsersKey(accountId));
+    if (userIds == null) return false;
+    for (long storedUserId : userIds) {
+      if (storedUserId == userId) return true;
+    }
+    return false;
+  }
+
+  public synchronized void setShadowBanned (int accountId, long userId, boolean banned) {
+    if (userId == 0) return;
+    String key = shadowBannedUsersKey(accountId);
+    long[] oldUserIds = getLongArray(key);
+    if (oldUserIds == null) oldUserIds = new long[0];
+    int index = -1;
+    for (int i = 0; i < oldUserIds.length; i++) {
+      if (oldUserIds[i] == userId) {
+        index = i;
+        break;
+      }
+    }
+    if (banned == (index >= 0)) return;
+    long[] newUserIds = new long[oldUserIds.length + (banned ? 1 : -1)];
+    if (banned) {
+      System.arraycopy(oldUserIds, 0, newUserIds, 0, oldUserIds.length);
+      newUserIds[oldUserIds.length] = userId;
+    } else {
+      System.arraycopy(oldUserIds, 0, newUserIds, 0, index);
+      System.arraycopy(oldUserIds, index + 1, newUserIds, index, oldUserIds.length - index - 1);
+    }
+    putLongArray(key, newUserIds);
+  }
+
+  public synchronized long[] getShadowBannedUsers (int accountId) {
+    long[] userIds = getLongArray(shadowBannedUsersKey(accountId));
+    return userIds != null ? userIds : new long[0];
+  }
+
+  public synchronized void setShadowBannedUsers (int accountId, long[] userIds) {
+    putLongArray(shadowBannedUsersKey(accountId), userIds != null ? userIds : new long[0]);
   }
 
   public boolean containsKey (String key) {

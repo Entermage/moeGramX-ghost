@@ -783,6 +783,19 @@
 
   <item type="id" name="btn_clearChatHistory" />
   <item type="id" name="btn_setPasscode" />
+  <item type="id" name="btn_ghostMode" />
+  <item type="id" name="btn_ghostReadChannels" />
+  <item type="id" name="btn_ghostReadGroups" />
+  <item type="id" name="btn_ghostReadPrivate" />
+  <item type="id" name="btn_ghostOnline" />
+  <item type="id" name="btn_ghostActions" />
+  <item type="id" name="btn_filterEnabled" />
+  <item type="id" name="btn_filterPatterns" />
+  <item type="id" name="btn_filterInChats" />
+  <item type="id" name="btn_filterCaseInsensitive" />
+  <item type="id" name="btn_messageReadUntil" />
+  <item type="id" name="btn_messageShadowBan" />
+  <item type="id" name="btn_shadowBannedUsers" />
   <item type="id" name="btn_returnToChat" />
   <item type="id" name="btn_removeChatFromList" />
   <item type="id" name="btn_removePsaChatFromList" />

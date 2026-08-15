@@ -4630,6 +4630,33 @@ public class MessagesController extends ViewController<MessagesController.Argume
 
   public void showMessageOptions (MessageContext messageContext, int[] ids, String[] options, int[] icons) {
     final TGMessage msg = messageContext.message;
+    final TdApi.Message selectedMessage = msg.getMessage();
+    final long shadowBanUserId = Td.getSenderUserId(selectedMessage);
+    final boolean canReadUntil = !msg.isScheduled() && !selectedMessage.isOutgoing &&
+      tdlib.isGhostReadEnabled(selectedMessage.chatId);
+    final boolean canShadowBan = shadowBanUserId != 0 && !tdlib.isSelfUserId(shadowBanUserId);
+    if (canReadUntil || canShadowBan) {
+      int oldLength = ids.length;
+      int extraCount = (canReadUntil ? 1 : 0) + (canShadowBan ? 1 : 0);
+      ids = Arrays.copyOf(ids, oldLength + extraCount);
+      options = Arrays.copyOf(options, oldLength + extraCount);
+      icons = Arrays.copyOf(icons, oldLength + extraCount);
+      int index = oldLength;
+      if (canReadUntil) {
+        ids[index] = R.id.btn_messageReadUntil;
+        options[index] = Lang.getString(R.string.ReadUntil);
+        icons[index++] = R.drawable.deproko_baseline_check_double_24;
+      }
+      if (canShadowBan) {
+        boolean banned = MoexConfig.instance().isShadowBanned(tdlib.id(), shadowBanUserId);
+        ids[index] = R.id.btn_messageShadowBan;
+        options[index] = Lang.getString(banned ? R.string.RemoveShadowBan : R.string.ShadowBan);
+        icons[index] = R.drawable.baseline_block_24;
+      }
+    }
+    final int[] finalIds = ids;
+    final String[] finalOptions = options;
+    final int[] finalIcons = icons;
     SpannableStringBuilder b = new SpannableStringBuilder();
     if (chat != null) {
       final boolean isChannel = tdlib.isChannel(chat.id);
@@ -4733,7 +4760,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
           OptionDelegate messageHandler = newMessageOptionDelegate(messageContext);
           Options.Builder messageOptionsBuilder = new Options.Builder()
             .info(StringUtils.isEmpty(text) ? null : text)
-            .items(ids, options, null, icons);
+            .items(finalIds, finalOptions, null, finalIcons);
           if (readDate != null) {
             switch (readDate.getConstructor()) {
               case TdApi.MessageReadDateRead.CONSTRUCTOR: {
@@ -5613,7 +5640,19 @@ public class MessagesController extends ViewController<MessagesController.Argume
       if (selectedMessage == null) {
         return false;
       }
-      if (id == R.id.btn_emojiPackInfoButton) {
+      if (id == R.id.btn_messageReadUntil) {
+        TdApi.Message message = selectedMessage.getMessage();
+        tdlib.readMessageOnServer(message.chatId, message.id);
+        return true;
+      } else if (id == R.id.btn_messageShadowBan) {
+        long userId = Td.getSenderUserId(selectedMessage.getMessage());
+        if (userId != 0 && !tdlib.isSelfUserId(userId)) {
+          boolean banned = !MoexConfig.instance().isShadowBanned(tdlib.id(), userId);
+          MoexConfig.instance().setShadowBanned(tdlib.id(), userId, banned);
+          manager.loadFromStart();
+        }
+        return true;
+      } else if (id == R.id.btn_emojiPackInfoButton) {
         cancelSheduledKeyboardOpeningAndHideAllKeyboards();
         tdlib.ui().showStickerSets(MessagesController.this, ((EmojiPacksInfoView) itemView).getEmojiPacksIds(), true, null);
         return true;
