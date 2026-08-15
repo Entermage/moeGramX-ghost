@@ -73,6 +73,7 @@ import org.thunderdog.challegram.widget.RootFrameLayout;
 import org.thunderdog.challegram.widget.SparseDrawableView;
 
 import java.util.List;
+import moe.kirao.mgx.MoexConfig;
 
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.ViewUtils;
@@ -629,6 +630,10 @@ public class MessageView extends SparseDrawableView implements Destroyable, Draw
     int messageCount = msg.getMessageCount();
     boolean isSent = !msg.isNotSent();
     Object tag = null;
+    TdApi.Message selectedMessage = msg.getMessage();
+    long shadowBanUserId = Td.getSenderUserId(selectedMessage);
+    boolean canShadowBan = shadowBanUserId != 0 && !m.tdlib().isSelfUserId(shadowBanUserId);
+    boolean canReadUntil = !msg.isScheduled() && !selectedMessage.isOutgoing && m.tdlib().isGhostReadEnabled(selectedMessage.chatId);
 
     // Promotion
 
@@ -1226,7 +1231,25 @@ public class MessageView extends SparseDrawableView implements Destroyable, Draw
       }
     }
 
-    if (moreOptions > 1) {
+    if (canShadowBan) {
+      if (isMore) {
+        boolean banned = MoexConfig.instance().isShadowBanned(m.tdlib().id(), shadowBanUserId);
+        ids.append(R.id.btn_messageShadowBan);
+        icons.append(R.drawable.baseline_block_24);
+        strings.append(banned ? R.string.RemoveShadowBan : R.string.ShadowBan);
+      } else {
+        moreOptions++;
+      }
+    }
+
+    // Keep this immediately above More in the primary menu.
+    if (!isMore && canReadUntil) {
+      ids.append(R.id.btn_messageReadUntil);
+      icons.append(R.drawable.deproko_baseline_check_double_24);
+      strings.append(R.string.ReadUntil);
+    }
+
+    if (moreOptions > 1 || (!isMore && canShadowBan)) {
       ids.append(R.id.btn_messageMore);
       icons.append(R.drawable.baseline_more_horiz_24);
       strings.append(R.string.MoreMessageOptions);
