@@ -36,46 +36,37 @@ Adds configurable Ghost Mode, **Read until**, message filters, and local shadow 
 - Copy photo or document<sup><sup>(with photo)</sup></sup> option
 - and a bit more...
 ---
-## Installation
+## Build (WSL/Linux, arm64)
 
-### Prerequisites
+Requires Git, Git LFS, OpenJDK 21, at least 4 GB RAM, and about 6 GB of free space. Windows users should build inside WSL.
 
-* At least **5,34GB** of free disk space: **487,10MB** for source codes and around **4,85GB** for files generated after building all variants
-* **4GB** of RAM
-* **macOS** or **Linux**-based operating system. **Windows** platform is supported by using [MSYS](https://www.msys2.org/) (e.g., [Git Bash](https://gitforwindows.org/)).
+```bash
+git lfs install
+git clone --recursive --depth=1 --shallow-submodules https://github.com/Entermage/moeGramX-ghost.git
+cd moeGramX-ghost
+ABIS=arm64-v8a scripts/setup.sh
+./gradlew assembleLatestArm64Release
+```
 
-#### macOS
+`setup.sh` is interactive. It asks for Telegram API credentials, the package/application information, and a path to a signing settings file stored outside the repository:
 
-* [Homebrew](https://brew.sh)
-* git with LFS, wget and sed: `$ brew install git git-lfs wget gsed && git lfs install`
+```properties
+keystore.file=/absolute/path/to/app.jks
+keystore.password=...
+key.alias=...
+key.password=...
+```
 
-#### Linux
+For FCM push notifications, use an `app/google-services.json` matching your package ID. Never commit signing files, passwords, Telegram credentials, or private Firebase configuration.
 
-* git with LFS: Install with your package manager, e.g. `# apt install git git-lfs` for any Debian-based distribution
-* Run `$ git lfs install` for the current user, if you didn't have `git-lfs` previously installed
+The APK is written to:
 
-#### Windows
+```text
+app/build/outputs/apk/latestArm64/release/
+```
 
-* **moeGramX** does not provide official build instructions for Windows platform. It is recommended to rely on Linux distributions via [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) instead.
+The `assembleLatestArm64Release` command has been verified in WSL. A completely fresh interactive setup has not been re-tested.
 
-## Build
-
--  **moeGramX** can be built with **Android Studio** <a href="#"><img src="https://i.imgur.com/cPvvFDP.png" align="center" width="20" height="23"/></a> or from the command line with **Gradle**:
-1. `$ git clone --recursive --depth=1 --shallow-submodules https://github.com/moeCrafters/moeGramX mgx` — clone **moeGramX** with submodules
-2. In case you forgot the `--recursive` flag, `cd` into `mgx` directory and: `$ git submodule init && git submodule update --init --recursive --depth=1`
-3. Create `keystore.properties` file outside of source tree with the following properties:<br/>`keystore.file`: absolute path to the keystore file<br/>`keystore.password`: password for the keystore<br/>`key.alias`: key alias that will be used to sign the app<br/>`key.password`: key password.<br/>**Warning**: keep this file safe and make sure nobody, except you, has access to it. For production builds one could use a separate user with home folder encryption to avoid harm from physical theft
-4. `$ cd mgx`
-5. Run `$ scripts/./setup.sh` and follow up the instructions
-6. If you plan to use GCM push messages, [setup Firebase](https://firebase.google.com/docs/android/setup) and replace `google-services.json` with the one that's suitable for the `app.id` you need
-7. Now you can open the project using **[Android Studio](https://developer.android.com/studio/)** <a href="#"><img src="https://i.imgur.com/cPvvFDP.png" align="center" width="20" height="23"/></a> or build manually from the command line: `./gradlew assembleUniversalRelease`.
-
-#### Available flavors <img src="https://developer.android.com/static/images/logos/android.svg" align="center" width="20" height="20"/>
-
-* `arm64`: **arm64-v8a** build with `minSdkVersion` set to `21` (**Lollipop**)
-* `arm32`: **armeabi-v7a** build
-* `x64`: **x86_64** build with `minSdkVersion` set to `21` (**Lollipop**)
-* `x86`: **x86** build
-* `universal`: universal build that includes native bundles for all platforms.
 ---
 
 ## Contributing
