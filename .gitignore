@@ -17,5 +17,10 @@ obj
 /captures
 /local.properties
 keystore.properties
+signing.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
 
 libc++_shared.so

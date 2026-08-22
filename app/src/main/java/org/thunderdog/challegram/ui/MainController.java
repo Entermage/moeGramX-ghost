@@ -870,6 +870,15 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     return hasFolders() ? getCurrentChatsController() : findMainChatsController();
   }
 
+  public void refreshMessageFilter () {
+    for (int position = 0; position < getPagerItemCount(); position++) {
+      ViewController<?> controller = getCachedControllerForPosition(position);
+      if (controller instanceof ChatsController) {
+        ((ChatsController) controller).refreshMessageFilter();
+      }
+    }
+  }
+
   @Override
   protected boolean filterChatMessageSearchResult (TdApi.Chat chat) {
     ChatsController c = findChatsControllerForSearchMessages();

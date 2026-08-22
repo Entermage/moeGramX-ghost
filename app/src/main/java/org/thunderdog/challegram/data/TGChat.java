@@ -1393,8 +1393,8 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
     TdApi.Message msg = chat.lastMessage;
     if (msg != null) {
       flags |= FLAG_MESSAGE;
-      if (MoexMessageFilter.isShadowBanned(tdlib, msg)) {
-        TdApi.Message fallback = shadowPreviewForLastMessageId == msg.id ? shadowPreviewMessage : null;
+      if (MoexMessageFilter.matches(tdlib, msg)) {
+        TdApi.Message fallback = filteredPreviewForLastMessageId == msg.id ? filteredPreviewMessage : null;
         if (fallback != null && !MoexMessageFilter.matches(tdlib, fallback)) {
           ContentPreview preview = ContentPreview.getChatListPreview(tdlib, fallback.chatId, fallback, false);
           visibleMessage = fallback;
@@ -1402,13 +1402,8 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
         } else {
           setTextValue(R.string.FilteredMessage);
           setPrefix();
-          requestShadowPreview(msg.id);
+          requestFilteredPreview(msg.id);
         }
-        return;
-      }
-      if (MoexMessageFilter.matchesRegex(msg)) {
-        setTextValue(R.string.FilteredMessage);
-        setPrefix();
         return;
       }
       // No need to check tdlib.chatRestrictionReason, because it's already handled above
@@ -1422,13 +1417,20 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
   }
 
   private TdApi.Message visibleMessage;
-  private long shadowPreviewForLastMessageId;
-  private long shadowPreviewRequestMessageId;
-  private TdApi.Message shadowPreviewMessage;
+  private long filteredPreviewForLastMessageId;
+  private long filteredPreviewRequestMessageId;
+  private TdApi.Message filteredPreviewMessage;
 
-  private void requestShadowPreview (long lastMessageId) {
-    if (shadowPreviewRequestMessageId == lastMessageId) return;
-    shadowPreviewRequestMessageId = lastMessageId;
+  public void refreshMessageFilter () {
+    filteredPreviewForLastMessageId = 0;
+    filteredPreviewRequestMessageId = 0;
+    filteredPreviewMessage = null;
+    setText();
+  }
+
+  private void requestFilteredPreview (long lastMessageId) {
+    if (filteredPreviewRequestMessageId == lastMessageId) return;
+    filteredPreviewRequestMessageId = lastMessageId;
     tdlib.send(new TdApi.GetChatHistory(chat.id, lastMessageId, 0, 50, false), (messages, error) -> {
       TdApi.Message fallback = null;
       if (messages != null) {
@@ -1442,8 +1444,8 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
       final TdApi.Message finalFallback = fallback;
       tdlib.ui().post(() -> {
         if (chat.lastMessage != null && chat.lastMessage.id == lastMessageId) {
-          shadowPreviewForLastMessageId = lastMessageId;
-          shadowPreviewMessage = finalFallback;
+          filteredPreviewForLastMessageId = lastMessageId;
+          filteredPreviewMessage = finalFallback;
           setText();
           currentViews.invalidate();
         }

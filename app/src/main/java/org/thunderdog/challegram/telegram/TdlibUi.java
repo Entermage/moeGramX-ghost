@@ -1904,6 +1904,11 @@ public class TdlibUi extends Handler {
       return highlightMessage(foundMessage);
     }
 
+    public ChatOpenParameters searchMessages (String query) {
+      this.searchQuery = query;
+      return this;
+    }
+
     public ChatOpenParameters highlightMessage (MessageId highlightMessageId) {
       this.highlightSet = true;
       this.highlightMode = MessagesManager.HIGHLIGHT_MODE_NORMAL;
@@ -2252,8 +2257,12 @@ public class TdlibUi extends Handler {
     controller.postOnAnimationReady(actor);
 
     final MessagesController.Arguments arguments;
-    if (params != null && !StringUtils.isEmpty(params.searchQuery) && params.foundMessage != null) {
-      arguments = new MessagesController.Arguments(chatList, chat, messageThread, messageTopicId, highlightMessageId, highlightMode, filter, params.foundMessage, params.searchQuery);
+    if (params != null && !StringUtils.isEmpty(params.searchQuery)) {
+      if (params.foundMessage != null) {
+        arguments = new MessagesController.Arguments(chatList, chat, messageThread, messageTopicId, highlightMessageId, highlightMode, filter, params.foundMessage, params.searchQuery);
+      } else {
+        arguments = new MessagesController.Arguments(chatList, chat, params.searchQuery, null, filter);
+      }
     } else if (highlightMessageId != null) {
       arguments = new MessagesController.Arguments(chatList, chat, messageThread, messageTopicId, highlightMessageId, highlightMode, filter);
     } else {
@@ -3425,11 +3434,77 @@ public class TdlibUi extends Handler {
       String pathArg1 = segments.size() > 1 ? segments.get(1) : null;
       switch (command) {
         case "s":
-          return !StringUtils.isEmpty(pathArg1);
+          return !StringUtils.isEmpty(pathArg1) && parsePublicChatPreviewLink(url) == null && normalizePublicChatPreviewMessageLink(url) == null;
       }
     }
 
     return false;
+  }
+
+  private static final class PublicChatPreviewLink {
+    public final String username;
+    public final @Nullable String query;
+
+    private PublicChatPreviewLink (String username, @Nullable String query) {
+      this.username = username;
+      this.query = query;
+    }
+  }
+
+  @Nullable
+  private PublicChatPreviewLink parsePublicChatPreviewLink (String url) {
+    try {
+      Uri uri = StringUtils.wrapHttps(url);
+      if (uri == null || !tdlib.isKnownHost(uri.getHost(), false)) {
+        return null;
+      }
+      List<String> segments = uri.getPathSegments();
+      if (segments == null || segments.size() != 2 || !"s".equals(segments.get(0))) {
+        return null;
+      }
+      String username = segments.get(1);
+      String query = uri.getQueryParameter("q");
+      if (StringUtils.isEmpty(username)) {
+        return null;
+      }
+      return new PublicChatPreviewLink(username, query);
+    } catch (Throwable t) {
+      Log.i("Unable to parse public chat preview link: %s", t, url);
+      return null;
+    }
+  }
+
+  @Nullable
+  private String normalizePublicChatPreviewMessageLink (String url) {
+    try {
+      Uri uri = StringUtils.wrapHttps(url);
+      if (uri == null || !tdlib.isKnownHost(uri.getHost(), false)) {
+        return null;
+      }
+      List<String> segments = uri.getPathSegments();
+      if (segments == null || (segments.size() != 3 && segments.size() != 4) || !"s".equals(segments.get(0)) || StringUtils.isEmpty(segments.get(1))) {
+        return null;
+      }
+      for (int i = 2; i < segments.size(); i++) {
+        int messageId;
+        try {
+          messageId = Integer.parseInt(segments.get(i));
+        } catch (NumberFormatException ignored) {
+          return null;
+        }
+        if (messageId <= 0) {
+          return null;
+        }
+      }
+      StringBuilder path = new StringBuilder();
+      for (int i = 1; i < segments.size(); i++) {
+        path.append('/').append(segments.get(i));
+      }
+      return uri.buildUpon().path(path.toString()).build().toString();
+    } catch (Throwable t) {
+      Log.i("Unable to normalize public chat preview message link: %s", t, url);
+      return null;
+    }
   }
 
   @NonNull
@@ -3475,7 +3550,23 @@ public class TdlibUi extends Handler {
         after.runWithBool(false);
       return;
     }
-    AtomicReference<String> url = new AtomicReference<>(preProcessTelegramUrl(rawUrl));
+    PublicChatPreviewLink publicChatPreviewLink = parsePublicChatPreviewLink(rawUrl);
+    if (publicChatPreviewLink != null) {
+      if (StringUtils.isEmpty(publicChatPreviewLink.query)) {
+        openPublicChat(context, publicChatPreviewLink.username, openParameters);
+      } else {
+        openChat(context, 0, new TdApi.SearchPublicChat(publicChatPreviewLink.username), new ChatOpenParameters()
+          .urlOpenParameters(openParameters)
+          .keepStack()
+          .searchMessages(publicChatPreviewLink.query));
+      }
+      if (after != null) {
+        after.runWithBool(true);
+      }
+      return;
+    }
+    String publicChatPreviewMessageLink = normalizePublicChatPreviewMessageLink(rawUrl);
+    AtomicReference<String> url = new AtomicReference<>(preProcessTelegramUrl(publicChatPreviewMessageLink != null ? publicChatPreviewMessageLink : rawUrl));
     tdlib.send(new TdApi.GetInternalLinkType(url.get()), new Tdlib.ResultHandler<>() {
       @Override
       public void onResult (TdApi.InternalLinkType internalLinkType, @Nullable TdApi.Error error) {

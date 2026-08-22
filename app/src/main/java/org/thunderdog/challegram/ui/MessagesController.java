@@ -5625,6 +5625,9 @@ public class MessagesController extends ViewController<MessagesController.Argume
         if (userId != 0 && !tdlib.isSelfUserId(userId)) {
           boolean banned = !MoexConfig.instance().isShadowBanned(tdlib.id(), userId);
           MoexConfig.instance().setShadowBanned(tdlib.id(), userId, banned);
+          if (banned) {
+            tdlib.status().removeShadowBannedUserActions();
+          }
           manager.loadFromStart();
         }
         return true;

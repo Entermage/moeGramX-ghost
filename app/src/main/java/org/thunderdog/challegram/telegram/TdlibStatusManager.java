@@ -19,6 +19,8 @@ import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 import androidx.annotation.UiThread;
 
+import moe.kirao.mgx.MoexMessageFilter;
+
 import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.R;
@@ -300,6 +302,17 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
       applyChanges(changeFlags);
     }
 
+    private void removeShadowBannedActions () {
+      int changeFlags = 0;
+      for (int i = actions.size() - 1; i >= 0; i--) {
+        Action pendingAction = actions.get(i);
+        if (isShadowBannedSender(tdlib, pendingAction.senderId)) {
+          changeFlags |= setActionAt(i, pendingAction.senderId, new TdApi.ChatActionCancel());
+        }
+      }
+      applyChanges(changeFlags);
+    }
+
     private int setActionAt (int index, TdApi.MessageSender senderId, TdApi.ChatAction action) {
       boolean isCancel = action.getConstructor() == TdApi.ChatActionCancel.CONSTRUCTOR;
       int changeFlags = 0;
@@ -526,6 +539,20 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
     return state != null && !state.actions.isEmpty();
   }
 
+  private static boolean isShadowBannedSender (Tdlib tdlib, TdApi.MessageSender senderId) {
+    return senderId instanceof TdApi.MessageSenderUser &&
+      MoexMessageFilter.isShadowBannedUser(tdlib, ((TdApi.MessageSenderUser) senderId).userId);
+  }
+
+  @UiThread
+  public void removeShadowBannedUserActions () {
+    if (!chatStates.isEmpty()) {
+      for (ChatState state : chatStates.values()) {
+        state.removeShadowBannedActions();
+      }
+    }
+  }
+
   private boolean canAnimate (long chatId, @Nullable TdApi.MessageTopic topicId, String key, ChatState state) {
     boolean animated = false;
     Iterator<ChatStateListener> itr = listeners.iterator(key);
@@ -545,20 +572,24 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
 
   @UiThread
   void onUpdateChatUserAction (TdApi.UpdateChatAction update) {
-    if (update.action.getConstructor() == TdApi.ChatActionWatchingAnimations.CONSTRUCTOR) {
+    TdApi.ChatAction action = update.action;
+    if (isShadowBannedSender(tdlib, update.senderId)) {
+      action = new TdApi.ChatActionCancel();
+    }
+    if (action.getConstructor() == TdApi.ChatActionWatchingAnimations.CONSTRUCTOR) {
       // TODO?
       return;
     }
     String key = makeKey(update.chatId, update.topicId);
     ChatState state = chatStates.get(key);
     if (state == null) {
-      if (update.action.getConstructor() == TdApi.ChatActionCancel.CONSTRUCTOR) {
+      if (action.getConstructor() == TdApi.ChatActionCancel.CONSTRUCTOR) {
         return;
       }
       state = new ChatState(this, tdlib, update.chatId, update.topicId);
       chatStates.put(key, state);
     }
-    state.setAction(update.senderId, update.action);
+    state.setAction(update.senderId, action);
   }
 
   private static void notifyChatActionsChanged (long chatId, @Nullable TdApi.MessageTopic topicId, ChatState chatState, int changeFlags, @Nullable Iterator<ChatStateListener> list) {

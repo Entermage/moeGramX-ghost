@@ -769,7 +769,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
           return false;
         MessageProvider provider = (MessageProvider) view;
         TGMessage msg = provider.getMessage();
-        if (msg.markAsViewed() || msg.containsUnreadReactions()) {
+        if (msg.markAsViewed() || msg.containsUnreadMention() || msg.containsUnreadReactions()) {
           long messageId = msg.getBiggestId();
           if (msg.containsUnreadMention() && messageId > lastViewedMentionMessageId) {
             lastViewedMentionMessageId = messageId;

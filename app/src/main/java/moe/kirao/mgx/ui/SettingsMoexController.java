@@ -11,11 +11,14 @@ import org.thunderdog.challegram.component.base.SettingView;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.navigation.SettingsWrapBuilder;
+import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibUi;
 import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.ui.ChatsController;
 import org.thunderdog.challegram.ui.ListItem;
+import org.thunderdog.challegram.ui.MainController;
 import org.thunderdog.challegram.ui.RecyclerViewController;
 import org.thunderdog.challegram.ui.SettingsAdapter;
 import org.thunderdog.challegram.unsorted.Settings;
@@ -164,10 +167,12 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
       tdlib.applyGhostModeOptions();
     } else if (viewId == R.id.btn_filterEnabled) {
       MoexConfig.instance().setFilterEnabled(adapter.toggleView(v));
+      refreshChatListFilter();
     } else if (viewId == R.id.btn_filterInChats) {
       MoexConfig.instance().setFilterInChats(adapter.toggleView(v));
     } else if (viewId == R.id.btn_filterCaseInsensitive) {
       MoexConfig.instance().setFilterCaseInsensitive(adapter.toggleView(v));
+      refreshChatListFilter();
     } else if (viewId == R.id.btn_filterPatterns) {
       showFilterPatternsEditor();
     } else if (viewId == R.id.btn_shadowBannedUsers) {
@@ -186,12 +191,25 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
       (inputView, result) -> {
         MoexConfig.instance().setFilterPatterns(result);
         adapter.updateValuedSettingById(R.id.btn_filterPatterns);
+        refreshChatListFilter();
         return true;
       }, false);
     group.getEditText().setSingleLine(false);
     group.getEditText().setMaxLines(8);
     group.getEditText().setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE |
       InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+  }
+
+  private void refreshChatListFilter () {
+    if (navigationController() == null) return;
+    for (ViewController<?> controller : navigationController().getStack().getAll()) {
+      if (controller.tdlib() != tdlib) continue;
+      if (controller instanceof MainController) {
+        ((MainController) controller).refreshMessageFilter();
+      } else if (controller instanceof ChatsController) {
+        ((ChatsController) controller).refreshMessageFilter();
+      }
+    }
   }
 
   private void showShadowBannedUsersEditor () {
@@ -214,6 +232,7 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
         long[] newUserIds = new long[parsed.size()];
         for (int i = 0; i < parsed.size(); i++) newUserIds[i] = parsed.get(i);
         MoexConfig.instance().setShadowBannedUsers(tdlib.id(), newUserIds);
+        tdlib.status().removeShadowBannedUserActions();
         adapter.updateValuedSettingById(R.id.btn_shadowBannedUsers);
         return true;
       }, false);

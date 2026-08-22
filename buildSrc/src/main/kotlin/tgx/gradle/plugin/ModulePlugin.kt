@@ -157,7 +157,10 @@ open class ModulePlugin : Plugin<Project> {
                 config.storePassword = keystore.password
                 config.keyAlias = keystore.keyAlias
                 config.keyPassword = keystore.keyPassword
+                config.enableV1Signing = false
                 config.enableV2Signing = true
+                config.enableV3Signing = true
+                config.enableV4Signing = false
               }
             }
 

@@ -2756,6 +2756,17 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
     }
   }
 
+  public void refreshMessageFilter () {
+    if (adapter == null) return;
+    for (TGChat chat : adapter.getChats()) {
+      chat.refreshMessageFilter();
+    }
+    adapter.notifyAllChanged();
+    if (chatsView != null) {
+      chatsView.invalidateAll();
+    }
+  }
+
   @Override
   public void onChatTopMessageChanged (final long chatId, @Nullable final TdApi.Message topMessage) {
     runOnUiThreadOptional(() -> {
