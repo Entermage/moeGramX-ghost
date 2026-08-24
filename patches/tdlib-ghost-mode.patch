@@ -1,0 +1,179 @@
+diff --git a/td/telegram/ForumTopicManager.cpp b/td/telegram/ForumTopicManager.cpp
+index 8542dfb..d5bf933 100644
+--- a/td/telegram/ForumTopicManager.cpp
++++ b/td/telegram/ForumTopicManager.cpp
+@@ -29,0 +30 @@
++#include "td/telegram/OptionManager.h"
+@@ -608 +609,5 @@ void ForumTopicManager::read_forum_topic_messages(DialogId dialog_id, ForumTopic
+-    td_->create_handler<ReadForumTopicQuery>()->send(dialog_id, forum_topic_id, max_message_id);
++    if (!td_->option_manager_->get_option_boolean("x_moex_ghost_read_groups") ||
++        td_->option_manager_->get_option_boolean("x_moex_ghost_read_allow_once")) {
++      td_->option_manager_->set_option_boolean("x_moex_ghost_read_allow_once", false);
++      td_->create_handler<ReadForumTopicQuery>()->send(dialog_id, forum_topic_id, max_message_id);
++    }
+diff --git a/td/telegram/MessageQueryManager.cpp b/td/telegram/MessageQueryManager.cpp
+index 2b295bd..d668957 100644
+--- a/td/telegram/MessageQueryManager.cpp
++++ b/td/telegram/MessageQueryManager.cpp
+@@ -37,0 +38 @@
++#include "td/telegram/OptionManager.h"
+@@ -4145,0 +4147 @@ class MessageQueryManager::ReadMessageContentsOnServerLogEvent {
++  bool allow_in_ghost_mode_ = false;
+@@ -4150,0 +4153,3 @@ class MessageQueryManager::ReadMessageContentsOnServerLogEvent {
++    BEGIN_STORE_FLAGS();
++    STORE_FLAG(allow_in_ghost_mode_);
++    END_STORE_FLAGS();
+@@ -4156,0 +4162,5 @@ class MessageQueryManager::ReadMessageContentsOnServerLogEvent {
++    if (parser.get_left_len() != 0) {
++      BEGIN_PARSE_FLAGS();
++      PARSE_FLAG(allow_in_ghost_mode_);
++      END_PARSE_FLAGS();
++    }
+@@ -4161,2 +4171,3 @@ uint64 MessageQueryManager::save_read_message_contents_on_server_log_event(Dialo
+-                                                                           const vector<MessageId> &message_ids) {
+-  ReadMessageContentsOnServerLogEvent log_event{dialog_id, message_ids};
++                                                                           const vector<MessageId> &message_ids,
++                                                                           bool allow_in_ghost_mode) {
++  ReadMessageContentsOnServerLogEvent log_event{dialog_id, message_ids, allow_in_ghost_mode};
+@@ -4169 +4180 @@ void MessageQueryManager::read_message_contents_on_server(DialogId dialog_id, ve
+-                                                          bool skip_log_event) {
++                                                          bool skip_log_event, bool allow_in_ghost_mode) {
+@@ -4171,0 +4183,26 @@ void MessageQueryManager::read_message_contents_on_server(DialogId dialog_id, ve
++  bool ghost_read = false;
++  switch (dialog_id.get_type()) {
++    case DialogType::User:
++    case DialogType::SecretChat:
++      ghost_read = td_->option_manager_->get_option_boolean("x_moex_ghost_read_private");
++      break;
++    case DialogType::Chat:
++      ghost_read = td_->option_manager_->get_option_boolean("x_moex_ghost_read_groups");
++      break;
++    case DialogType::Channel:
++      ghost_read = td_->dialog_manager_->is_broadcast_channel(dialog_id)
++                       ? td_->option_manager_->get_option_boolean("x_moex_ghost_read_channels")
++                       : td_->option_manager_->get_option_boolean("x_moex_ghost_read_groups");
++      break;
++    case DialogType::None:
++      break;
++    default:
++      UNREACHABLE();
++  }
++  if (ghost_read && !allow_in_ghost_mode) {
++    if (log_event_id != 0) {
++      binlog_erase(G()->td_db()->get_binlog(), log_event_id);
++    }
++    return promise.set_value(Unit());
++  }
++
+@@ -4175 +4212 @@ void MessageQueryManager::read_message_contents_on_server(DialogId dialog_id, ve
+-    log_event_id = save_read_message_contents_on_server_log_event(dialog_id, message_ids);
++    log_event_id = save_read_message_contents_on_server_log_event(dialog_id, message_ids, allow_in_ghost_mode);
+@@ -4220 +4257,2 @@ void MessageQueryManager::read_message_reactions_on_server(DialogId dialog_id, v
+-  read_message_contents_on_server(dialog_id, std::move(message_ids), 0, std::move(promise));
++  // Reading reactions doesn't advance the dialog history read position and must remain available in Ghost Mode.
++  read_message_contents_on_server(dialog_id, std::move(message_ids), 0, std::move(promise), false, true);
+@@ -4588 +4626,2 @@ void MessageQueryManager::on_binlog_events(vector<BinlogEvent> &&events) {
+-        read_message_contents_on_server(dialog_id, std::move(log_event.message_ids_), event.id_, Auto());
++        read_message_contents_on_server(dialog_id, std::move(log_event.message_ids_), event.id_, Auto(), false,
++                                        log_event.allow_in_ghost_mode_);
+diff --git a/td/telegram/MessageQueryManager.h b/td/telegram/MessageQueryManager.h
+index 941f381..8ff2097 100644
+--- a/td/telegram/MessageQueryManager.h
++++ b/td/telegram/MessageQueryManager.h
+@@ -253 +253,2 @@ class MessageQueryManager final : public Actor {
+-                                       Promise<Unit> &&promise, bool skip_log_event = false);
++                                       Promise<Unit> &&promise, bool skip_log_event = false,
++                                       bool allow_in_ghost_mode = false);
+@@ -383 +384,2 @@ class MessageQueryManager final : public Actor {
+-                                                               const vector<MessageId> &message_ids);
++                                                               const vector<MessageId> &message_ids,
++                                                               bool allow_in_ghost_mode);
+diff --git a/td/telegram/MessagesManager.cpp b/td/telegram/MessagesManager.cpp
+index f144f22..c286c7c 100644
+--- a/td/telegram/MessagesManager.cpp
++++ b/td/telegram/MessagesManager.cpp
+@@ -16821,0 +16822 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
++    // Unread mentions are content-level state, independent from the dialog history read position.
+@@ -16823 +16824 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
+-                                                                 Auto());
++                                                                 Auto(), false, true);
+@@ -16860,0 +16862,14 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
++  // Ghost mode marks messages as read locally. A later force-read request would normally be
++  // ignored because the local read position no longer advances, so explicitly send the selected
++  // server message ID when the UI requested a one-shot "Read until" operation.
++  if (force_read && source == MessageSource::DialogHistory && max_message_id.is_valid() &&
++      td_->option_manager_->get_option_boolean("x_moex_ghost_read_allow_once")) {
++    auto server_message_id = max_message_id.get_prev_server_message_id();
++    if (server_message_id.is_valid()) {
++      read_history_on_server(d, server_message_id);
++    } else {
++      td_->option_manager_->set_option_boolean("x_moex_ghost_read_allow_once", false);
++    }
++    return Status::OK();
++  }
++
+@@ -16930,0 +16946,26 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
++static bool is_moex_ghost_read_blocked(Td *td, DialogId dialog_id, bool consume_allow_once) {
++  if (td->option_manager_->get_option_boolean("x_moex_ghost_read_allow_once")) {
++    if (consume_allow_once) {
++      td->option_manager_->set_option_boolean("x_moex_ghost_read_allow_once", false);
++    }
++    return false;
++  }
++  switch (dialog_id.get_type()) {
++    case DialogType::User:
++    case DialogType::SecretChat:
++      return td->option_manager_->get_option_boolean("x_moex_ghost_read_private");
++    case DialogType::Chat:
++      return td->option_manager_->get_option_boolean("x_moex_ghost_read_groups");
++    case DialogType::Channel:
++      if (td->dialog_manager_->is_broadcast_channel(dialog_id)) {
++        return td->option_manager_->get_option_boolean("x_moex_ghost_read_channels");
++      }
++      return td->option_manager_->get_option_boolean("x_moex_ghost_read_groups");
++    case DialogType::None:
++      return false;
++    default:
++      UNREACHABLE();
++      return false;
++  }
++}
++
+@@ -16956 +16997,2 @@ void MessagesManager::read_dialog_inbox(Dialog *d, MessageId max_message_id) {
+-  if (read_history_on_server_message_id.is_valid()) {
++  const bool ghost_read = is_moex_ghost_read_blocked(td_, d->dialog_id, false);
++  if (read_history_on_server_message_id.is_valid() && !ghost_read) {
+@@ -16962 +17004 @@ void MessagesManager::read_dialog_inbox(Dialog *d, MessageId max_message_id) {
+-  if (read_history_on_server_message_id.is_valid()) {
++  if (read_history_on_server_message_id.is_valid() && !ghost_read) {
+@@ -17654 +17696 @@ void MessagesManager::read_history_on_server(Dialog *d, MessageId max_message_id
+-  if (td_->auth_manager_->is_bot()) {
++  if (td_->auth_manager_->is_bot() || is_moex_ghost_read_blocked(td_, d->dialog_id, true)) {
+@@ -17699 +17741 @@ void MessagesManager::read_message_thread_history_on_server(Dialog *d, MessageId
+-  if (td_->auth_manager_->is_bot()) {
++  if (td_->auth_manager_->is_bot() || is_moex_ghost_read_blocked(td_, d->dialog_id, true)) {
+diff --git a/td/telegram/OnlineManager.cpp b/td/telegram/OnlineManager.cpp
+index e73f6cc..8432d11 100644
+--- a/td/telegram/OnlineManager.cpp
++++ b/td/telegram/OnlineManager.cpp
+@@ -128,0 +129,3 @@ void OnlineManager::set_is_online(bool is_online) {
++  if (td_->option_manager_->get_option_boolean("x_moex_ghost_online")) {
++    is_online = false;
++  }
+diff --git a/td/telegram/Requests.cpp b/td/telegram/Requests.cpp
+index faf6823..85b282b 100644
+--- a/td/telegram/Requests.cpp
++++ b/td/telegram/Requests.cpp
+@@ -4862,0 +4863,3 @@ void Requests::on_request(uint64 id, td_api::sendChatAction &request) {
++  if (td_->option_manager_->get_option_boolean("x_moex_ghost_actions")) {
++    return promise.set_value(Unit());
++  }
+diff --git a/td/telegram/SavedMessagesManager.cpp b/td/telegram/SavedMessagesManager.cpp
+index 3e3e3e7..39c58ad 100644
+--- a/td/telegram/SavedMessagesManager.cpp
++++ b/td/telegram/SavedMessagesManager.cpp
+@@ -1102 +1102,3 @@ void SavedMessagesManager::read_monoforum_topic_messages(DialogId dialog_id,
+-  if (topic->is_changed_) {
++  if (topic->is_changed_ && (!td_->option_manager_->get_option_boolean("x_moex_ghost_read_private") ||
++                             td_->option_manager_->get_option_boolean("x_moex_ghost_read_allow_once"))) {
++    td_->option_manager_->set_option_boolean("x_moex_ghost_read_allow_once", false);

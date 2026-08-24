@@ -31,6 +31,7 @@ flowchart LR
 - `app/src/main/java/moe/kirao/mgx/MoexConfig.java`：moeGramX 与本分支功能配置，使用应用私有目录中的 LevelDB。
 - `app/src/main/java/moe/kirao/mgx/ui/SettingsMoexController.java`：Ghost Mode、过滤和 Shadow Ban 等设置入口。
 - `tdlib/`：TDLib Java API、原生源码和构建配置。
+- `patches/tdlib-ghost-mode.patch`：相对 `tdlib/source/td` 的原生 Ghost Mode 修改，包含已读、在线状态以及未读提及和反应内容回执的 TDLib 侧逻辑。
 - `tgcalls/`：Telegram 通话相关模块。
 - `vkryl/`：UI、核心工具和 LevelDB 等基础模块。
 - `extension/`：按构建配置选用的扩展实现。
@@ -51,7 +52,9 @@ flowchart LR
 
 ### Ghost Mode、过滤与 Shadow Ban
 
-`SettingsMoexController` 修改 `MoexConfig` 中的开关和名单。Ghost Mode 在已读、在线状态及输入动作发送路径上决定是否把操作提交给 TDLib；频道、群组和私聊的已读保护分别配置。消息过滤与 Shadow Ban 在消息列表、回复预览、聊天列表摘要和输入状态展示等本地 UI 路径生效，不改变 Telegram 服务端数据。聊天列表最后一条消息命中过滤词或 Shadow Ban 时，会异步查找并显示上一条未过滤消息；过滤配置变更后会立即重建所有已缓存聊天文件夹的摘要。Shadow Ban 名单按账号 ID 存储。
+`SettingsMoexController` 修改 `MoexConfig` 中的开关和名单。Ghost Mode 在已读、在线状态及输入动作发送路径上决定是否把操作提交给 TDLib；频道、群组和私聊的已读保护分别配置。TDLib 仍拦截普通聊天历史的云端已读位置，但会定向提交已查看消息的未读提及和未读反应内容回执，使 `@` 与表情互动提示不会在后续同步时恢复或累积；这类内容回执不推进聊天的云端已读位置。消息过滤与 Shadow Ban 在消息列表、回复预览、聊天列表摘要和输入状态展示等本地 UI 路径生效，不改变 Telegram 服务端数据。聊天列表最后一条消息命中过滤词或 Shadow Ban 时，会按 TDLib 历史页异步向前查找并跳过连续命中过滤的消息，直到显示第一条未过滤消息；只有没有更早的可见消息时才保留 `Filtered message` 占位。过滤配置变更后会立即重建所有已缓存聊天文件夹的摘要。Shadow Ban 名单按账号 ID 存储。
+
+应用内消息转发以及 Android 外部文本、文件等分享都由 `ShareController` 加载可写聊天。未显式指定聊天列表且已启用聊天文件夹时，弹窗优先选择名为 `Personal` 的已启用文件夹，并使用 `Private` 文件夹图标作为重命名或多语言场景的兼容识别；找不到时回退到 All Chats。标题菜单保持 TDLib 返回的账号文件夹顺序，并将 All Chats 固定显示在最后，用户仍可手动切换文件夹。
 
 ### Telegram 链接
 
@@ -84,6 +87,8 @@ Google 构建通过 `FirebaseListenerService` 接收 FCM，再唤醒账号和 TD
 
 ```bash
 ABIS=arm64-v8a scripts/setup.sh
+git -C tdlib/source/td apply --unidiff-zero ../../../patches/tdlib-ghost-mode.patch
+# 使用 tdlib/source/ 中的脚本重建并安装 libtdjni.so
 ./gradlew assembleLatestArm64Release
 ```
 

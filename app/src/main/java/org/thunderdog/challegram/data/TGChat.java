@@ -95,6 +95,7 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
   private static final int FLAG_MESSAGE = 1 << 17;
 
   private static final int ARCHIVE_PREVIEW_LIMIT = 9;
+  private static final int FILTERED_PREVIEW_PAGE_SIZE = 100;
 
   private int flags, listMode;
 
@@ -1419,9 +1420,11 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
   private TdApi.Message visibleMessage;
   private long filteredPreviewForLastMessageId;
   private long filteredPreviewRequestMessageId;
+  private long filteredPreviewRequestGeneration;
   private TdApi.Message filteredPreviewMessage;
 
   public void refreshMessageFilter () {
+    filteredPreviewRequestGeneration++;
     filteredPreviewForLastMessageId = 0;
     filteredPreviewRequestMessageId = 0;
     filteredPreviewMessage = null;
@@ -1431,26 +1434,53 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
   private void requestFilteredPreview (long lastMessageId) {
     if (filteredPreviewRequestMessageId == lastMessageId) return;
     filteredPreviewRequestMessageId = lastMessageId;
-    tdlib.send(new TdApi.GetChatHistory(chat.id, lastMessageId, 0, 50, false), (messages, error) -> {
+    long requestGeneration = ++filteredPreviewRequestGeneration;
+    requestFilteredPreviewPage(lastMessageId, lastMessageId, requestGeneration);
+  }
+
+  private void requestFilteredPreviewPage (long lastMessageId, long fromMessageId, long requestGeneration) {
+    tdlib.send(new TdApi.GetChatHistory(chat.id, fromMessageId, 0, FILTERED_PREVIEW_PAGE_SIZE, false), (messages, error) -> {
       TdApi.Message fallback = null;
-      if (messages != null) {
+      long nextFromMessageId = 0;
+      boolean success = error == null && messages != null;
+      if (success && messages.messages != null) {
         for (TdApi.Message candidate : messages.messages) {
-          if (candidate.id != lastMessageId && !MoexMessageFilter.matches(tdlib, candidate)) {
+          if (candidate == null || candidate.id >= fromMessageId) continue;
+          if (!MoexMessageFilter.matches(tdlib, candidate)) {
             fallback = candidate;
             break;
+          }
+          if (nextFromMessageId == 0 || candidate.id < nextFromMessageId) {
+            nextFromMessageId = candidate.id;
           }
         }
       }
       final TdApi.Message finalFallback = fallback;
+      final long finalNextFromMessageId = nextFromMessageId;
       tdlib.ui().post(() -> {
-        if (chat.lastMessage != null && chat.lastMessage.id == lastMessageId) {
-          filteredPreviewForLastMessageId = lastMessageId;
-          filteredPreviewMessage = finalFallback;
-          setText();
-          currentViews.invalidate();
+        if (filteredPreviewRequestGeneration != requestGeneration || isDestroyed) return;
+        if (chat.lastMessage == null || chat.lastMessage.id != lastMessageId) {
+          filteredPreviewRequestMessageId = 0;
+          return;
+        }
+        if (!success) {
+          filteredPreviewRequestMessageId = 0;
+        } else if (finalFallback != null) {
+          completeFilteredPreviewRequest(lastMessageId, finalFallback);
+        } else if (finalNextFromMessageId != 0 && finalNextFromMessageId < fromMessageId) {
+          requestFilteredPreviewPage(lastMessageId, finalNextFromMessageId, requestGeneration);
+        } else {
+          completeFilteredPreviewRequest(lastMessageId, null);
         }
       });
     });
+  }
+
+  private void completeFilteredPreviewRequest (long lastMessageId, @Nullable TdApi.Message fallback) {
+    filteredPreviewForLastMessageId = lastMessageId;
+    filteredPreviewMessage = fallback;
+    setText();
+    currentViews.invalidate();
   }
 
   @Override
@@ -1656,6 +1686,7 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
     currentViews.detachFromAllViews();
     setViewAttached(false);
     isDestroyed = true;
+    filteredPreviewRequestGeneration++;
     if (awaitingReactions != null) {
       for (String reactionKey : awaitingReactions) {
         tdlib.listeners().removeReactionLoadListener(reactionKey, this);

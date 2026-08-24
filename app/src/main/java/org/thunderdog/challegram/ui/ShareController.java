@@ -150,6 +150,9 @@ public class ShareController extends TelegramViewController<ShareController.Args
   View.OnClickListener, Menu, PopupLayout.TouchSectionProvider,
   EmojiLayout.Listener, BaseView.ActionListProvider, EmojiToneHelper.Delegate,
   ChatListListener, Filter<TdApi.Chat>, InputView.SelectionChangeListener {
+  private static final String DEFAULT_SHARE_CHAT_FOLDER_NAME = "Personal";
+  private static final String DEFAULT_SHARE_CHAT_FOLDER_ICON = "Private";
+
   private static final int MODE_MESSAGES = 0;
   private static final int MODE_TEXT = 1;
   private static final int MODE_GAME = 2;
@@ -378,7 +381,30 @@ public class ShareController extends TelegramViewController<ShareController.Args
   public void setArguments (Args args) {
     super.setArguments(args);
     this.mode = args.mode;
-    this.displayingChatList = args.chatList != null ? args.chatList : ChatPosition.CHAT_LIST_MAIN;
+    this.displayingChatList = args.chatList != null ? args.chatList : findDefaultShareChatList();
+  }
+
+  private TdApi.ChatList findDefaultShareChatList () {
+    if (Settings.instance().chatFoldersEnabled()) {
+      TdApi.ChatFolderInfo privateChatFolder = null;
+      for (TdApi.ChatFolderInfo chatFolderInfo : tdlib.chatFolders()) {
+        if (!tdlib.settings().isChatFolderEnabled(chatFolderInfo.id)) {
+          continue;
+        }
+        CharSequence name = TD.toCharSequence(chatFolderInfo.name);
+        if (name != null && DEFAULT_SHARE_CHAT_FOLDER_NAME.equalsIgnoreCase(name.toString().trim())) {
+          return new TdApi.ChatListFolder(chatFolderInfo.id);
+        }
+        if (privateChatFolder == null && chatFolderInfo.icon != null &&
+            DEFAULT_SHARE_CHAT_FOLDER_ICON.equals(chatFolderInfo.icon.name)) {
+          privateChatFolder = chatFolderInfo;
+        }
+      }
+      if (privateChatFolder != null) {
+        return new TdApi.ChatListFolder(privateChatFolder.id);
+      }
+    }
+    return ChatPosition.CHAT_LIST_MAIN;
   }
 
   @Override
@@ -1002,15 +1028,26 @@ public class ShareController extends TelegramViewController<ShareController.Args
     headerCell.initWithMargin(Screen.dp(56f) * getMenuItemCount(), false);
     headerCell.setThemedTextColor(ColorId.text, ColorId.textLight, this);
     updateHeader();
-    if (Settings.instance().chatFoldersEnabled() && TD.isChatListMain(displayingChatList) && tdlib.chatFolderCount() > 0) {
-      headerCell.setTitle(R.string.CategoryMain);
-      headerCell.setTitleIcon(R.drawable.baseline_keyboard_arrow_down_20);
-      headerCell.setOnClickListener(v -> {
-        if (!inSearchMode()) {
-          showFolderSelector();
+    if (Settings.instance().chatFoldersEnabled() && tdlib.chatFolderCount() > 0) {
+      CharSequence chatListTitle = null;
+      if (TD.isChatListMain(displayingChatList)) {
+        chatListTitle = Lang.getString(R.string.CategoryMain);
+      } else if (displayingChatList instanceof TdApi.ChatListFolder) {
+        TdApi.ChatFolderInfo chatFolderInfo = tdlib.chatFolderInfo(((TdApi.ChatListFolder) displayingChatList).chatFolderId);
+        if (chatFolderInfo != null) {
+          chatListTitle = TD.toCharSequence(chatFolderInfo.name);
         }
-      });
-      Views.setClickable(headerCell);
+      }
+      if (chatListTitle != null) {
+        headerCell.setTitle(chatListTitle);
+        headerCell.setTitleIcon(R.drawable.baseline_keyboard_arrow_down_20);
+        headerCell.setOnClickListener(v -> {
+          if (!inSearchMode()) {
+            showFolderSelector();
+          }
+        });
+        Views.setClickable(headerCell);
+      }
     }
 
     contentView = new RelativeLayout(context);
@@ -3695,11 +3732,6 @@ public class ShareController extends TelegramViewController<ShareController.Args
       return;
     FolderMenuWrap menu = new FolderMenuWrap(context);
     menu.init(getThemeListeners(), null);
-    menu.addItem(0, Lang.getString(R.string.CategoryMain), R.drawable.baseline_forum_24, null, v -> {
-      PopupLayout popupLayout = PopupLayout.parentOf(v);
-      popupLayout.hideWindow(true);
-      displayChatList(Lang.getString(R.string.CategoryMain), ChatPosition.CHAT_LIST_MAIN);
-    });
     View.OnClickListener onItemClickListener = v -> {
       PopupLayout popupLayout = PopupLayout.parentOf(v);
       popupLayout.hideWindow(true);
@@ -3710,6 +3742,11 @@ public class ShareController extends TelegramViewController<ShareController.Args
       View itemView = menu.addItem(View.NO_ID, TD.toCharSequence(chatFolderInfo.name), TD.findFolderIcon(chatFolderInfo.icon, R.drawable.baseline_folder_24), /* icon */ null, onItemClickListener);
       itemView.setTag(chatFolderInfo);
     }
+    menu.addItem(0, Lang.getString(R.string.CategoryMain), R.drawable.baseline_forum_24, null, v -> {
+      PopupLayout popupLayout = PopupLayout.parentOf(v);
+      popupLayout.hideWindow(true);
+      displayChatList(Lang.getString(R.string.CategoryMain), ChatPosition.CHAT_LIST_MAIN);
+    });
     menu.setAnchorMode(MenuMoreWrap.ANCHOR_MODE_HEADER);
     menu.setTranslationY(headerView.getTranslationY());
     folderSelectorLayout = new PopupLayout(context);
