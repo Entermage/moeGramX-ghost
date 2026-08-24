@@ -234,6 +234,7 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
         MoexConfig.instance().setShadowBannedUsers(tdlib.id(), newUserIds);
         tdlib.status().removeShadowBannedUserActions();
         adapter.updateValuedSettingById(R.id.btn_shadowBannedUsers);
+        refreshChatListFilter();
         return true;
       }, false);
     group.getEditText().setSingleLine(false);

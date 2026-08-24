@@ -65,6 +65,7 @@ import java.util.concurrent.TimeUnit;
 
 import moe.kirao.mgx.MoexConfig;
 import moe.kirao.mgx.MoexMessageFilter;
+import moe.kirao.mgx.MoexShadowUnreadManager;
 
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.animator.BounceAnimator;
@@ -144,6 +145,14 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
 
   private final BounceAnimator scheduleAnimator;
   private final Counter counter, mentionCounter, reactionsCounter, viewCounter;
+
+  private int shadowBannedUnreadCount;
+  private int shadowBannedUnreadForRawCount;
+  private long shadowBannedUnreadForLastReadInboxMessageId;
+  private long shadowBannedUnreadForTopMessageId;
+  private long shadowBannedUnreadRequestGeneration;
+  private long shadowBannedUnreadRefreshGeneration;
+  private boolean shadowBannedUnreadCountValid;
 
   private final ReactionsCounterDrawable reactionsCounterDrawable;
   private final HashMap<String, TGReactions.MessageReactionEntry> reactionsMapEntry = new HashMap<>();
@@ -260,6 +269,9 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
   public void onAttachToView () {
     if (emojiStatusDrawable != null) {
       emojiStatusDrawable.onAppear();
+    }
+    if (!isShadowBannedUnreadCountCurrent()) {
+      refreshShadowBannedUnreadCount();
     }
   }
 
@@ -437,6 +449,7 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
       setCounter(true);
       setTime();
       setText();
+      scheduleShadowBannedUnreadRefresh();
       layoutTitle(false);
       return true;
     }
@@ -616,6 +629,7 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
       chat.unreadCount = unreadCount;
       boolean newShowDraft = showDraft();
       setCounter(true);
+      scheduleShadowBannedUnreadRefresh();
       if (showDraft != newShowDraft) {
         setText();
       }
@@ -834,7 +848,101 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
     } else if (getSource() != null) {
       return 0;
     } else {
-      return chat.unreadCount > 0 ? chat.unreadCount : chat.isMarkedAsUnread ? Tdlib.CHAT_MARKED_AS_UNREAD : 0;
+      int unreadCount = chat.unreadCount;
+      if (isShadowBannedUnreadCountCurrent()) {
+        unreadCount = Math.max(0, unreadCount - shadowBannedUnreadCount);
+      }
+      return unreadCount > 0 ? unreadCount : chat.isMarkedAsUnread ? Tdlib.CHAT_MARKED_AS_UNREAD : 0;
+    }
+  }
+
+  private boolean isShadowBannedUnreadCountCurrent () {
+    return shadowBannedUnreadCountValid && chat != null &&
+      shadowBannedUnreadForRawCount == chat.unreadCount &&
+      shadowBannedUnreadForLastReadInboxMessageId == chat.lastReadInboxMessageId &&
+      shadowBannedUnreadForTopMessageId == getTopMessageId();
+  }
+
+  private boolean isShadowBannedUnreadRequestCurrent (long requestGeneration, int rawUnreadCount,
+                                                       long lastReadInboxMessageId, long topMessageId) {
+    return !isDestroyed && shadowBannedUnreadRequestGeneration == requestGeneration && chat != null &&
+      chat.unreadCount == rawUnreadCount && chat.lastReadInboxMessageId == lastReadInboxMessageId &&
+      getTopMessageId() == topMessageId;
+  }
+
+  private long getTopMessageId () {
+    return chat != null && chat.lastMessage != null ? chat.lastMessage.id : 0;
+  }
+
+  private void refreshShadowBannedUnreadCount () {
+    shadowBannedUnreadRefreshGeneration++;
+    long requestGeneration = ++shadowBannedUnreadRequestGeneration;
+    boolean wasFilteringUnreadCount = isShadowBannedUnreadCountCurrent() && shadowBannedUnreadCount > 0;
+    shadowBannedUnreadCountValid = false;
+    shadowBannedUnreadCount = 0;
+    if (wasFilteringUnreadCount) {
+      setCounter(needAnimateChanges());
+    }
+    if (chat == null || isDestroyed || (flags & FLAG_ATTACHED) == 0) return;
+
+    int rawUnreadCount = chat.unreadCount;
+    long lastReadInboxMessageId = chat.lastReadInboxMessageId;
+    long topMessageId = getTopMessageId();
+    if (rawUnreadCount <= 0 || isChannel() || tdlib.isForum(chat.id)) {
+      completeShadowBannedUnreadRequest(requestGeneration, rawUnreadCount,
+        lastReadInboxMessageId, topMessageId, 0);
+      return;
+    }
+
+    long privateUserId = TD.getUserId(chat);
+    if (privateUserId != 0) {
+      int hiddenUnreadCount = !tdlib.isSelfUserId(privateUserId) &&
+        MoexMessageFilter.isShadowBannedUser(tdlib, privateUserId) ? rawUnreadCount : 0;
+      completeShadowBannedUnreadRequest(requestGeneration, rawUnreadCount,
+        lastReadInboxMessageId, topMessageId, hiddenUnreadCount);
+      return;
+    }
+    if (!isGroup() && !isSupergroup()) {
+      completeShadowBannedUnreadRequest(requestGeneration, rawUnreadCount,
+        lastReadInboxMessageId, topMessageId, 0);
+      return;
+    }
+    MoexShadowUnreadManager.request(tdlib, chat.id, rawUnreadCount, lastReadInboxMessageId, topMessageId,
+      (success, hiddenUnreadCount) -> {
+        if (success) {
+          completeShadowBannedUnreadRequest(requestGeneration, rawUnreadCount,
+            lastReadInboxMessageId, topMessageId, hiddenUnreadCount);
+        }
+      });
+  }
+
+  private void scheduleShadowBannedUnreadRefresh () {
+    if (isDestroyed || (flags & FLAG_ATTACHED) == 0) return;
+    long refreshGeneration = ++shadowBannedUnreadRefreshGeneration;
+    tdlib.ui().postDelayed(() -> {
+      if (!isDestroyed && refreshGeneration == shadowBannedUnreadRefreshGeneration &&
+          !isShadowBannedUnreadCountCurrent()) {
+        refreshShadowBannedUnreadCount();
+      }
+    }, 100);
+  }
+
+  private void completeShadowBannedUnreadRequest (long requestGeneration, int rawUnreadCount,
+                                                  long lastReadInboxMessageId, long topMessageId,
+                                                  int hiddenUnreadCount) {
+    if (!isShadowBannedUnreadRequestCurrent(requestGeneration, rawUnreadCount,
+        lastReadInboxMessageId, topMessageId)) {
+      return;
+    }
+    int clampedHiddenUnreadCount = Math.max(0, Math.min(hiddenUnreadCount, rawUnreadCount));
+    boolean changed = !shadowBannedUnreadCountValid || shadowBannedUnreadCount != clampedHiddenUnreadCount;
+    shadowBannedUnreadCount = clampedHiddenUnreadCount;
+    shadowBannedUnreadForRawCount = rawUnreadCount;
+    shadowBannedUnreadForLastReadInboxMessageId = lastReadInboxMessageId;
+    shadowBannedUnreadForTopMessageId = topMessageId;
+    shadowBannedUnreadCountValid = true;
+    if (changed) {
+      setCounter(needAnimateChanges());
     }
   }
 
@@ -1429,6 +1537,7 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
     filteredPreviewRequestMessageId = 0;
     filteredPreviewMessage = null;
     setText();
+    refreshShadowBannedUnreadCount();
   }
 
   private void requestFilteredPreview (long lastMessageId) {
@@ -1687,6 +1796,8 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
     setViewAttached(false);
     isDestroyed = true;
     filteredPreviewRequestGeneration++;
+    shadowBannedUnreadRequestGeneration++;
+    shadowBannedUnreadRefreshGeneration++;
     if (awaitingReactions != null) {
       for (String reactionKey : awaitingReactions) {
         tdlib.listeners().removeReactionLoadListener(reactionKey, this);

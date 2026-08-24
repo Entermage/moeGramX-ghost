@@ -311,6 +311,7 @@ public class MoexConfig {
       System.arraycopy(oldUserIds, index + 1, newUserIds, index, oldUserIds.length - index - 1);
     }
     putLongArray(key, newUserIds);
+    MoexShadowUnreadManager.invalidateAccount(accountId);
   }
 
   public synchronized long[] getShadowBannedUsers (int accountId) {
@@ -320,6 +321,7 @@ public class MoexConfig {
 
   public synchronized void setShadowBannedUsers (int accountId, long[] userIds) {
     putLongArray(shadowBannedUsersKey(accountId), userIds != null ? userIds : new long[0]);
+    MoexShadowUnreadManager.invalidateAccount(accountId);
   }
 
   public boolean containsKey (String key) {

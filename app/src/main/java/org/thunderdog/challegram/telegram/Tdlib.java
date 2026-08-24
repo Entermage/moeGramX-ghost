@@ -145,6 +145,7 @@ import tgx.td.data.MessageWithProperties;
 
 import moe.kirao.mgx.MoexConfig;
 import moe.kirao.mgx.MoexMessageFilter;
+import moe.kirao.mgx.MoexShadowUnreadManager;
 
 public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, DateChangeListener {
   @Override
@@ -8528,6 +8529,8 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       chat.blockList = update.blockList;
     }
 
+    MoexShadowUnreadManager.onBlockListChanged(this, chatUserId(update.chatId),
+      update.blockList != null && update.blockList.getConstructor() == TdApi.BlockListMain.CONSTRUCTOR);
     listeners.updateChatBlockList(update);
   }
 

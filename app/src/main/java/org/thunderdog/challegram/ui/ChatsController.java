@@ -2825,6 +2825,11 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
   }
 
   @Override
+  public void onChatBlockListChanged (long chatId, @Nullable TdApi.BlockList blockList) {
+    runOnUiThreadOptional(this::refreshMessageFilter);
+  }
+
+  @Override
   public void onChatPhotoChanged (final long chatId, final @Nullable TdApi.ChatPhotoInfo photo) {
     runOnUiThreadOptional(() -> {
       if (chatsView != null) {

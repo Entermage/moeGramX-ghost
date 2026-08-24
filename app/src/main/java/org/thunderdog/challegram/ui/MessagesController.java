@@ -5629,6 +5629,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
             tdlib.status().removeShadowBannedUserActions();
           }
           manager.loadFromStart();
+          refreshChatListMessageFilter();
         }
         return true;
       } else if (id == R.id.btn_emojiPackInfoButton) {
@@ -6007,6 +6008,18 @@ public class MessagesController extends ViewController<MessagesController.Argume
       }
       return true;
     };
+  }
+
+  private void refreshChatListMessageFilter () {
+    if (navigationController() == null) return;
+    for (ViewController<?> controller : navigationController().getStack().getAll()) {
+      if (controller.tdlib() != tdlib) continue;
+      if (controller instanceof MainController) {
+        ((MainController) controller).refreshMessageFilter();
+      } else if (controller instanceof ChatsController) {
+        ((ChatsController) controller).refreshMessageFilter();
+      }
+    }
   }
 
   // Action button
