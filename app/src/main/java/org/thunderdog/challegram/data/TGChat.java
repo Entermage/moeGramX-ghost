@@ -888,26 +888,7 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
     int rawUnreadCount = chat.unreadCount;
     long lastReadInboxMessageId = chat.lastReadInboxMessageId;
     long topMessageId = getTopMessageId();
-    if (rawUnreadCount <= 0 || isChannel() || tdlib.isForum(chat.id)) {
-      completeShadowBannedUnreadRequest(requestGeneration, rawUnreadCount,
-        lastReadInboxMessageId, topMessageId, 0);
-      return;
-    }
-
-    long privateUserId = TD.getUserId(chat);
-    if (privateUserId != 0) {
-      int hiddenUnreadCount = !tdlib.isSelfUserId(privateUserId) &&
-        MoexMessageFilter.isShadowBannedUser(tdlib, privateUserId) ? rawUnreadCount : 0;
-      completeShadowBannedUnreadRequest(requestGeneration, rawUnreadCount,
-        lastReadInboxMessageId, topMessageId, hiddenUnreadCount);
-      return;
-    }
-    if (!isGroup() && !isSupergroup()) {
-      completeShadowBannedUnreadRequest(requestGeneration, rawUnreadCount,
-        lastReadInboxMessageId, topMessageId, 0);
-      return;
-    }
-    MoexShadowUnreadManager.request(tdlib, chat.id, rawUnreadCount, lastReadInboxMessageId, topMessageId,
+    MoexShadowUnreadManager.requestForChat(tdlib, chat,
       (success, hiddenUnreadCount) -> {
         if (success) {
           completeShadowBannedUnreadRequest(requestGeneration, rawUnreadCount,

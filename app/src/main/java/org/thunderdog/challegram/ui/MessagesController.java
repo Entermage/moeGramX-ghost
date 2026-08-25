@@ -292,6 +292,7 @@ import tgx.td.TdConstants;
 import tgx.td.data.MessageWithProperties;
 import tgx.td.ui.TdUi;
 import moe.kirao.mgx.MoexConfig;
+import moe.kirao.mgx.MoexShadowUnreadManager;
 import moe.kirao.mgx.ui.MessageDetailsController;
 import moe.kirao.mgx.utils.SystemUtils;
 
@@ -328,6 +329,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
   private int flags;
 
   private @Nullable TdApi.Chat chat;
+  private long shadowUnreadCounterGeneration;
   private @Nullable TdApi.ChatList openedFromChatList;
 
   private ChatHeaderView headerCell;
@@ -3008,6 +3010,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   private void updateCounters (boolean animated) {
+    shadowUnreadCounterGeneration++;
     if (chat != null) {
       if (messageThread != null) {
         int unreadCount;
@@ -3020,14 +3023,39 @@ public class MessagesController extends ViewController<MessagesController.Argume
         setMentionCountBadge(0);
         setReactionCountBadge(0);
       } else {
-        setUnreadCountBadge(chat.unreadCount, true);
+        setUnreadCountBadge(chat.unreadCount, animated);
         setMentionCountBadge(chat.unreadMentionCount);
         setReactionCountBadge(chat.unreadReactionCount);
+        updateShadowUnreadCounter(animated);
       }
       if (bottomButtonAction == BOTTOM_ACTION_TOGGLE_MUTE) {
         showBottomButton(bottomButtonAction, 0, animated);
       }
     }
+  }
+
+  private void updateShadowUnreadCounter (boolean animated) {
+    long requestGeneration = shadowUnreadCounterGeneration;
+    if (chat == null || messageThread != null || areScheduledOnly()) return;
+
+    TdApi.Chat requestedChat = chat;
+    long chatId = requestedChat.id;
+    int rawUnreadCount = requestedChat.unreadCount;
+    long lastReadInboxMessageId = requestedChat.lastReadInboxMessageId;
+    long topMessageId = requestedChat.lastMessage != null ? requestedChat.lastMessage.id : 0;
+    if (rawUnreadCount <= 0) return;
+
+    MoexShadowUnreadManager.requestForChat(tdlib, requestedChat, (success, hiddenUnreadCount) -> {
+      if (!success || isDestroyed() || requestGeneration != shadowUnreadCounterGeneration ||
+          chat == null || messageThread != null || areScheduledOnly() ||
+          chat.id != chatId || chat.unreadCount != rawUnreadCount ||
+          chat.lastReadInboxMessageId != lastReadInboxMessageId ||
+          (chat.lastMessage != null ? chat.lastMessage.id : 0) != topMessageId) {
+        return;
+      }
+      int clampedHiddenUnreadCount = Math.max(0, Math.min(hiddenUnreadCount, rawUnreadCount));
+      setUnreadCountBadge(rawUnreadCount - clampedHiddenUnreadCount, animated);
+    });
   }
 
   private void scrollToUnreadOrStartMessage () {
@@ -5629,6 +5657,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
             tdlib.status().removeShadowBannedUserActions();
           }
           manager.loadFromStart();
+          updateCounters(true);
           refreshChatListMessageFilter();
         }
         return true;
@@ -10930,6 +10959,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
         if (topMessage == null) {
           manager.onMissedMessagesHintReceived();
         }
+        updateCounters(true);
       }
     });
   }

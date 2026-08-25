@@ -284,6 +284,8 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       this.tdlib = tdlib;
       this.client = Client.create(this, this, this);
       tdlib.updateParameters(client);
+      client.send(new TdApi.SetOption("x_moex_ghost_read_allow_once",
+        new TdApi.OptionValueBoolean(false)), tdlib.okHandler());
       tdlib.applyGhostModeOptions(client);
       if (Config.NEED_ONLINE) {
         if (tdlib.isOnline) {
@@ -2691,6 +2693,19 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       chat = chats.get(chatId);
     }
     return chat;
+  }
+
+  public boolean isChatReadSnapshotCurrent (long chatId, int unreadCount,
+                                            long lastReadInboxMessageId,
+                                            long topMessageId,
+                                            @GhostReadScope int scope) {
+    synchronized (dataLock) {
+      TdApi.Chat chat = chats.get(chatId);
+      return chat != null && !chat.isMarkedAsUnread && chat.unreadCount == unreadCount &&
+        chat.lastReadInboxMessageId == lastReadInboxMessageId &&
+        (chat.lastMessage != null ? chat.lastMessage.id : 0) == topMessageId &&
+        ghostReadScope(chat) == scope;
+    }
   }
 
   public @NonNull TdApi.Chat chatStrict (long chatId) {
@@ -6584,37 +6599,205 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   }
 
   private void applyGhostModeOptions (@NonNull Client client) {
+    applyGhostModeOptions(client, null);
+  }
+
+  private void applyGhostModeOptions (@NonNull Client client, @Nullable Runnable after) {
     boolean enabled = MoexConfig.ghostMode;
+    AtomicInteger remaining = after != null ? new AtomicInteger(6) : null;
+    Client.ResultHandler resultHandler = object -> {
+      okHandler().onResult(object);
+      if (remaining != null && remaining.decrementAndGet() == 0) {
+        after.run();
+      }
+    };
     client.send(new TdApi.SetOption("x_moex_ghost_read_channels",
-      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostReadChannels)), okHandler());
+      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostReadChannels)), resultHandler);
     client.send(new TdApi.SetOption("x_moex_ghost_read_groups",
-      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostReadGroups)), okHandler());
+      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostReadGroups)), resultHandler);
     client.send(new TdApi.SetOption("x_moex_ghost_read_private",
-      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostReadPrivate)), okHandler());
+      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostReadPrivate)), resultHandler);
     client.send(new TdApi.SetOption("x_moex_ghost_online",
-      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostOnline)), okHandler());
+      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostOnline)), resultHandler);
     client.send(new TdApi.SetOption("x_moex_ghost_actions",
-      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostActions)), okHandler());
+      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostActions)), resultHandler);
     client.send(new TdApi.SetOption("online",
-      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostOnline ? false : isOnline)), okHandler());
+      new TdApi.OptionValueBoolean(enabled && MoexConfig.ghostOnline ? false : isOnline)), resultHandler);
   }
 
   public void applyGhostModeOptions () {
-    performOptional(this::applyGhostModeOptions, null);
+    performOptional(client -> enqueueGhostReadOperation(() -> {
+      applyGhostModeOptions(client, this::finishGhostReadOperation);
+    }), null);
+  }
+
+  @Retention(RetentionPolicy.SOURCE)
+  @IntDef({
+    GhostReadScope.NONE,
+    GhostReadScope.PRIVATE,
+    GhostReadScope.GROUPS,
+    GhostReadScope.CHANNELS
+  })
+  public @interface GhostReadScope {
+    int
+      NONE = 0,
+      PRIVATE = 1,
+      GROUPS = 2,
+      CHANNELS = 3;
+  }
+
+  public static @GhostReadScope int ghostReadScope (@Nullable TdApi.Chat chat) {
+    if (chat == null || chat.type == null) return GhostReadScope.NONE;
+    switch (chat.type.getConstructor()) {
+      case TdApi.ChatTypePrivate.CONSTRUCTOR:
+      case TdApi.ChatTypeSecret.CONSTRUCTOR:
+        return GhostReadScope.PRIVATE;
+      case TdApi.ChatTypeBasicGroup.CONSTRUCTOR:
+        return GhostReadScope.GROUPS;
+      case TdApi.ChatTypeSupergroup.CONSTRUCTOR:
+        return ((TdApi.ChatTypeSupergroup) chat.type).isChannel ?
+          GhostReadScope.CHANNELS : GhostReadScope.GROUPS;
+      default:
+        return GhostReadScope.NONE;
+    }
+  }
+
+  public boolean isGhostReadEnabled (@GhostReadScope int scope) {
+    if (!MoexConfig.ghostMode) return false;
+    switch (scope) {
+      case GhostReadScope.PRIVATE:
+        return MoexConfig.ghostReadPrivate;
+      case GhostReadScope.GROUPS:
+        return MoexConfig.ghostReadGroups;
+      case GhostReadScope.CHANNELS:
+        return MoexConfig.ghostReadChannels;
+      default:
+        return false;
+    }
   }
 
   public boolean isGhostReadEnabled (long chatId) {
+    TdApi.Chat chat = chat(chatId);
+    if (chat != null) {
+      return isGhostReadEnabled(ghostReadScope(chat));
+    }
     if (!MoexConfig.ghostMode) return false;
     if (isChannel(chatId)) return MoexConfig.ghostReadChannels;
     if (isMultiChat(chatId)) return MoexConfig.ghostReadGroups;
     return MoexConfig.ghostReadPrivate;
   }
 
+  private static @Nullable String ghostReadOptionName (@GhostReadScope int scope) {
+    switch (scope) {
+      case GhostReadScope.PRIVATE:
+        return "x_moex_ghost_read_private";
+      case GhostReadScope.GROUPS:
+        return "x_moex_ghost_read_groups";
+      case GhostReadScope.CHANNELS:
+        return "x_moex_ghost_read_channels";
+      default:
+        return null;
+    }
+  }
+
+  private final Object ghostReadOperationLock = new Object();
+  private final ArrayDeque<Runnable> ghostReadOperations = new ArrayDeque<>();
+  private boolean ghostReadOperationActive;
+
+  private void enqueueGhostReadOperation (Runnable operation) {
+    Runnable next = null;
+    synchronized (ghostReadOperationLock) {
+      ghostReadOperations.add(operation);
+      if (!ghostReadOperationActive) {
+        ghostReadOperationActive = true;
+        next = ghostReadOperations.poll();
+      }
+    }
+    if (next != null) {
+      next.run();
+    }
+  }
+
+  private void finishGhostReadOperation () {
+    Runnable next;
+    synchronized (ghostReadOperationLock) {
+      next = ghostReadOperations.poll();
+      if (next == null) {
+        ghostReadOperationActive = false;
+      }
+    }
+    if (next != null) {
+      next.run();
+    }
+  }
+
+  public interface LocalReadCondition {
+    boolean isValid ();
+  }
+
+  /** Advances only TDLib's local read position while Ghost Read is enabled for the fixed scope. */
+  public void readMessagesLocally (@GhostReadScope int scope, long chatId, long[] messageIds,
+                                   @NonNull LocalReadCondition condition,
+                                   @NonNull Client.ResultHandler handler) {
+    long[] copiedMessageIds = Arrays.copyOf(messageIds, messageIds.length);
+    enqueueGhostReadOperation(() -> {
+      String optionName = ghostReadOptionName(scope);
+      if (optionName == null || !isGhostReadEnabled(scope) || !condition.isValid()) {
+        completeGhostReadOperation(handler,
+          new TdApi.Error(400, "Local read request is no longer current"));
+        return;
+      }
+      Client operationClient = client();
+      operationClient.send(new TdApi.SetOption(optionName,
+        new TdApi.OptionValueBoolean(true)), optionResult -> {
+        if (optionResult.getConstructor() == TdApi.Error.CONSTRUCTOR) {
+          completeGhostReadOperation(handler, optionResult);
+          return;
+        }
+        if (!isGhostReadEnabled(scope) || !condition.isValid()) {
+          applyGhostModeOptions(operationClient, () -> completeGhostReadOperation(handler,
+            new TdApi.Error(400, "Local read request is no longer current")));
+          return;
+        }
+        operationClient.send(new TdApi.ViewMessages(chatId, copiedMessageIds,
+          new TdApi.MessageSourceChatHistory(), false),
+          result -> completeGhostReadOperation(handler, result));
+      });
+    });
+  }
+
+  private void completeGhostReadOperation (@NonNull Client.ResultHandler handler,
+                                           @NonNull TdApi.Object result) {
+    try {
+      handler.onResult(result);
+    } finally {
+      finishGhostReadOperation();
+    }
+  }
+
   public void readMessageOnServer (long chatId, long messageId) {
-    client().send(new TdApi.SetOption("x_moex_ghost_read_allow_once", new TdApi.OptionValueBoolean(true)), ok ->
-      client().send(new TdApi.ViewMessages(chatId, new long[] {messageId}, new TdApi.MessageSourceChatHistory(), true), result -> {
-        client().send(new TdApi.SetOption("x_moex_ghost_read_allow_once", new TdApi.OptionValueBoolean(false)), okHandler());
-        messageHandler().onResult(result);
+    enqueueGhostReadOperation(() ->
+      client().send(new TdApi.SetOption("x_moex_ghost_read_allow_once",
+        new TdApi.OptionValueBoolean(true)), optionResult -> {
+        if (optionResult.getConstructor() == TdApi.Error.CONSTRUCTOR) {
+          try {
+            messageHandler().onResult(optionResult);
+          } finally {
+            finishGhostReadOperation();
+          }
+          return;
+        }
+        client().send(new TdApi.ViewMessages(chatId, new long[] {messageId},
+          new TdApi.MessageSourceChatHistory(), true), result ->
+          client().send(new TdApi.SetOption("x_moex_ghost_read_allow_once",
+            new TdApi.OptionValueBoolean(false)), resetResult -> {
+            try {
+              okHandler().onResult(resetResult);
+              messageHandler().onResult(result);
+            } finally {
+              finishGhostReadOperation();
+            }
+          }));
       }));
   }
 

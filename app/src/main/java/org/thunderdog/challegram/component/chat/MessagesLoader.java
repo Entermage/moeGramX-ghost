@@ -1361,6 +1361,18 @@ public class MessagesLoader implements Client.ResultHandler {
     int minIndex = 0;
     int maxIndex = messages.length - 1;
 
+    boolean reachedChatHistoryEnd = false;
+    if (specialMode == SPECIAL_MODE_NONE && messageThread == null && searchFilter == null &&
+        chat != null && chat.lastMessage != null) {
+      long lastMessageId = chat.lastMessage.id;
+      for (TdApi.Message message : messages) {
+        if (message != null && message.chatId == chat.id && message.id == lastMessageId) {
+          reachedChatHistoryEnd = true;
+          break;
+        }
+      }
+    }
+
     final List<TdApi.Message> combineWithMessages = new ArrayList<>();
 
     if (needMeasureSpeed) {
@@ -1649,6 +1661,10 @@ public class MessagesLoader implements Client.ResultHandler {
         }
         break;
       }
+    }
+
+    if (reachedChatHistoryEnd) {
+      canLoadBottom = false;
     }
 
     final int scrollPosition = scrollItemIndex == -1 ? 0 : scrollItemIndex;

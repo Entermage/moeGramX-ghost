@@ -16,11 +16,13 @@ import java.util.WeakHashMap;
 import tgx.td.Td;
 
 /**
- * Derives per-chat unread counts hidden by Shadow Ban without changing TDLib's raw unread state.
- * Results and in-flight requests are shared by every folder row that represents the same chat.
+ * Derives per-chat unread counts hidden by Shadow Ban. Exact results and in-flight requests are
+ * shared by every folder row; an all-hidden unread range may also be read locally through Ghost
+ * Mode, while mixed unread ranges keep TDLib's continuous read position unchanged.
  */
 public final class MoexShadowUnreadManager {
   private static final int PAGE_SIZE = 100;
+  private static final long LOCAL_READ_DEDUP_DELAY_MS = 1500L;
   private static final Object STATES_LOCK = new Object();
   private static final Map<Tdlib, AccountState> ACCOUNT_STATES = new WeakHashMap<>();
 
@@ -29,6 +31,121 @@ public final class MoexShadowUnreadManager {
   }
 
   private MoexShadowUnreadManager () { }
+
+  /**
+   * Resolves the Shadow Ban unread count for a regular chat. When every unread inbox message is
+   * hidden, the shared result also advances TDLib's local read position while Ghost Read prevents
+   * the corresponding server read receipt.
+   */
+  public static void requestForChat (@NonNull Tdlib tdlib, @NonNull TdApi.Chat chat,
+                                     @NonNull Callback callback) {
+    AccountState accountState = accountState(tdlib);
+    long accountGeneration;
+    synchronized (accountState) {
+      accountGeneration = accountState.generation;
+    }
+    int rawUnreadCount = chat.unreadCount;
+    long lastReadInboxMessageId = chat.lastReadInboxMessageId;
+    long actualTopMessageId = chat.lastMessage != null ? chat.lastMessage.id : 0;
+    long historyTopMessageId = chat.lastMessage != null && chat.lastMessage.sendingState == null ?
+      chat.lastMessage.id : 0;
+    long privateUserId = org.thunderdog.challegram.data.TD.getUserId(chat);
+    int chatType = chat.type.getConstructor();
+    TdApi.Supergroup supergroup = chatType == TdApi.ChatTypeSupergroup.CONSTRUCTOR ?
+      tdlib.chatToSupergroup(chat.id) : null;
+    int localReadScope = chat.type.getConstructor() == TdApi.ChatTypeSecret.CONSTRUCTOR ?
+      Tdlib.GhostReadScope.NONE : Tdlib.ghostReadScope(chat);
+
+    Callback resultCallback = (success, hiddenUnreadCount) -> {
+      boolean current = success && isCurrent(accountState, accountGeneration);
+      if (current && privateUserId != 0 && hiddenUnreadCount > 0 &&
+          !MoexMessageFilter.isShadowBannedUser(tdlib, privateUserId)) {
+        hiddenUnreadCount = 0;
+      }
+      if (current) {
+        markAllUnreadHiddenLocally(tdlib, chat.id, rawUnreadCount, lastReadInboxMessageId,
+          actualTopMessageId, historyTopMessageId, privateUserId, localReadScope,
+          chat.isMarkedAsUnread, hiddenUnreadCount);
+      }
+      callback.onResult(current, hiddenUnreadCount);
+    };
+
+    if (rawUnreadCount <= 0 || tdlib.isChannelChat(chat) ||
+        chatType == TdApi.ChatTypeSupergroup.CONSTRUCTOR &&
+          (supergroup == null || supergroup.isForum)) {
+      deliver(tdlib, resultCallback, true, 0);
+      return;
+    }
+
+    if (privateUserId != 0) {
+      int hiddenUnreadCount = !tdlib.isSelfUserId(privateUserId) &&
+        MoexMessageFilter.isShadowBannedUser(tdlib, privateUserId) ? rawUnreadCount : 0;
+      deliver(tdlib, resultCallback, true, hiddenUnreadCount);
+      return;
+    }
+
+    if (chatType != TdApi.ChatTypeBasicGroup.CONSTRUCTOR &&
+        chatType != TdApi.ChatTypeSupergroup.CONSTRUCTOR) {
+      deliver(tdlib, resultCallback, true, 0);
+      return;
+    }
+
+    request(tdlib, chat.id, rawUnreadCount, lastReadInboxMessageId,
+      historyTopMessageId, resultCallback);
+  }
+
+  private static void markAllUnreadHiddenLocally (Tdlib tdlib, long chatId, int rawUnreadCount,
+                                                  long lastReadInboxMessageId,
+                                                  long actualTopMessageId,
+                                                  long historyTopMessageId, long privateUserId,
+                                                  @Tdlib.GhostReadScope int localReadScope,
+                                                  boolean isMarkedAsUnread,
+                                                  int hiddenUnreadCount) {
+    if (rawUnreadCount <= 0 || hiddenUnreadCount != rawUnreadCount || isMarkedAsUnread ||
+        historyTopMessageId <= lastReadInboxMessageId ||
+        localReadScope == Tdlib.GhostReadScope.NONE ||
+        !tdlib.isGhostReadEnabled(localReadScope)) {
+      return;
+    }
+
+    AccountState accountState = accountState(tdlib);
+    LocalReadRequest request;
+    synchronized (accountState) {
+      request = new LocalReadRequest(accountState.generation, rawUnreadCount,
+        lastReadInboxMessageId, actualTopMessageId, privateUserId, localReadScope);
+      LocalReadRequest previous = accountState.localReadRequests.get(chatId);
+      if (request.matches(previous)) {
+        return;
+      }
+      accountState.localReadRequests.put(chatId, request);
+    }
+
+    readMessagesLocally(tdlib, accountState, chatId, request, historyTopMessageId);
+  }
+
+  private static void readMessagesLocally (Tdlib tdlib, AccountState accountState, long chatId,
+                                           LocalReadRequest request, long targetMessageId) {
+    tdlib.readMessagesLocally(request.scope, chatId, new long[] {targetMessageId},
+      () -> isLocalReadRequestCurrent(tdlib, accountState, chatId, request),
+      result -> {
+        if (result.getConstructor() == TdApi.Error.CONSTRUCTOR) {
+          finishLocalReadRequest(accountState, chatId, request);
+        } else {
+          tdlib.ui().postDelayed(
+            () -> finishLocalReadRequest(accountState, chatId, request),
+            LOCAL_READ_DEDUP_DELAY_MS);
+        }
+      });
+  }
+
+  private static void finishLocalReadRequest (AccountState accountState, long chatId,
+                                              LocalReadRequest request) {
+    synchronized (accountState) {
+      if (accountState.localReadRequests.get(chatId) == request) {
+        accountState.localReadRequests.remove(chatId);
+      }
+    }
+  }
 
   public static void request (@NonNull Tdlib tdlib, long chatId, int rawUnreadCount,
                               long lastReadInboxMessageId, long topMessageId,
@@ -116,6 +233,7 @@ public final class MoexShadowUnreadManager {
     synchronized (state) {
       if (!state.hiddenUsersReady) {
         state.blockOverrides.put(userId, blocked);
+        state.localReadRequests.clear();
         return;
       }
       boolean changed;
@@ -132,6 +250,7 @@ public final class MoexShadowUnreadManager {
           request.callbacks.clear();
         }
         state.chatRequests.clear();
+        state.localReadRequests.clear();
       }
     }
   }
@@ -159,6 +278,7 @@ public final class MoexShadowUnreadManager {
         request.callbacks.clear();
       }
       state.chatRequests.clear();
+      state.localReadRequests.clear();
     }
   }
 
@@ -419,6 +539,23 @@ public final class MoexShadowUnreadManager {
     }
   }
 
+  private static boolean isLocalReadRequestCurrent (Tdlib tdlib, AccountState accountState,
+                                                    long chatId, LocalReadRequest request) {
+    synchronized (accountState) {
+      if (accountState.generation != request.generation ||
+          accountState.localReadRequests.get(chatId) != request) {
+        return false;
+      }
+    }
+    if (!tdlib.isChatReadSnapshotCurrent(chatId, request.rawUnreadCount,
+          request.lastReadInboxMessageId, request.topMessageId, request.scope) ||
+        !tdlib.isGhostReadEnabled(request.scope)) {
+      return false;
+    }
+    return request.privateUserId == 0 ||
+      MoexMessageFilter.isShadowBannedUser(tdlib, request.privateUserId);
+  }
+
   private static boolean isCurrent (AccountState accountState, ChatRequest request) {
     synchronized (accountState) {
       return isCurrentLocked(accountState, request);
@@ -442,6 +579,35 @@ public final class MoexShadowUnreadManager {
     private final HashSet<Long> manualUserIds = new HashSet<>();
     private final HashMap<Long, Boolean> blockOverrides = new HashMap<>();
     private final HashMap<Long, ChatRequest> chatRequests = new HashMap<>();
+    private final HashMap<Long, LocalReadRequest> localReadRequests = new HashMap<>();
+  }
+
+  private static final class LocalReadRequest {
+    private final long generation;
+    private final int rawUnreadCount;
+    private final long lastReadInboxMessageId;
+    private final long topMessageId;
+    private final long privateUserId;
+    private final @Tdlib.GhostReadScope int scope;
+
+    private LocalReadRequest (long generation, int rawUnreadCount, long lastReadInboxMessageId,
+                              long topMessageId, long privateUserId,
+                              @Tdlib.GhostReadScope int scope) {
+      this.generation = generation;
+      this.rawUnreadCount = rawUnreadCount;
+      this.lastReadInboxMessageId = lastReadInboxMessageId;
+      this.topMessageId = topMessageId;
+      this.privateUserId = privateUserId;
+      this.scope = scope;
+    }
+
+    private boolean matches (LocalReadRequest other) {
+      return other != null && generation == other.generation &&
+        rawUnreadCount == other.rawUnreadCount &&
+        lastReadInboxMessageId == other.lastReadInboxMessageId &&
+        topMessageId == other.topMessageId && privateUserId == other.privateUserId &&
+        scope == other.scope;
+    }
   }
 
   private static final class ChatRequest {
