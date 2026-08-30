@@ -1,10 +1,7 @@
 <div align="center">
 <a href="https://moegramx.t.me/">
-        <picture>
-          <source media="(prefers-color-scheme: dark)" srcset="https://files.kiri.su/moeGramX_dark.svg">
-          <img src="https://files.kiri.su/moeGramX.svg">
-        </picture>
-    </a>
+  <img src="./images/logo.png" alt="moegramX" width="160">
+</a>
 
 the **moest** client based on [Telegram-X](https://github.com/TGX-Android/Telegram-X) and [TDLib](https://core.telegram.org/tdlib) ~
 
@@ -12,14 +9,14 @@ the **moest** client based on [Telegram-X](https://github.com/TGX-Android/Telegr
 [![Forks](https://img.shields.io/github/forks/moeCrafters/moeGramX?style=flat-square&color=blue)](https://github.com/moeCrafters/moeGramX/network/members)
 [![Stars](https://img.shields.io/github/stars/moeCrafters/moeGramX?style=flat-square&color=yellow)](https://github.com/moeCrafters/moeGramX/stargazers)
 
-[![Channel](https://img.shields.io/badge/Channel-%40moeGramX-blue?style=flat-square&logo=telegram&label=Channel)](https://t.me/moegramx)
+[![Channel](https://img.shields.io/badge/Channel-%40moegramX-blue?style=flat-square&logo=telegram&label=Channel)](https://t.me/moegramx)
 [![Chat](https://img.shields.io/badge/Chat-%40moex__log-blue?style=flat-square&logo=telegram&label=Updates)](https://t.me/moe_chat)
 [![Updates](https://img.shields.io/badge/Release-%40moe__chat-blue?style=flat-square&logo=telegram&label=Discussion)](https://t.me/moe_log)
 </div>
 
 ## This fork
 
-Adds configurable Ghost Mode, **Read until**, message filters, and local shadow bans to moeGramX. Feature behavior is inspired by [AyuGram](https://github.com/AyuGram/AyuGram4A); the Telegram X/TDLib implementation is independent.
+Adds configurable Ghost Mode, **Read until**, message filters, and local shadow bans to moegramX. Feature behavior is inspired by [AyuGram](https://github.com/AyuGram/AyuGram4A); the Telegram X/TDLib implementation is independent.
 
 ## Features
 
@@ -77,18 +74,18 @@ Here are a few things you can do:
 
 - [Test and report issues](https://github.com/moeCrafters/moeGramX/issues/new/choose)
 - [Translate the moegram strings into your language](https://crowdin.com/project/moex) -
-  **moeGramX** is a fork of **Telegram-X** and most of the localizations follow the translations of **Telegram-X**, check it out [here](https://translations.telegram.org/en/android_x/). As for specialized strings for **moeGramX**, we use **Crowdin** to translate client.
+  **moegramX** is a fork of **Telegram-X** and most of the localizations follow the translations of **Telegram-X**, check it out [here](https://translations.telegram.org/en/android_x/). As for specialized strings for **moegramX**, we use **Crowdin** to translate client.
 ---
 
 ## Third-party dependencies
 
-List of third-party components used in **moeGramX** can be found [here](/docs/THIRDPARTY.md). Additionally, you can check the specific commit of the third-party component used, for example, [here](/app/jni/thirdparty) and [here](/thirdparty).
+List of third-party components used in **moegramX** can be found [here](/docs/THIRDPARTY.md). Additionally, you can check the specific commit of the third-party component used, for example, [here](/app/jni/thirdparty) and [here](/thirdparty).
 
 ---
 
 ## License
 
-`moeGramX` is licensed under the terms of the GNU General Public License v3.0.
+`moegramX` is licensed under the terms of the GNU General Public License v3.0.
 
 License of components and third-party dependencies it relies on might differ, check `LICENSE` file in the corresponding folder.
 
