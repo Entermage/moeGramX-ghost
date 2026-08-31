@@ -1,6 +1,6 @@
 <div align="center">
 <a href="https://moegramx.t.me/">
-  <img src="./images/logo.png" alt="moegramX" width="160">
+  <img src="./app/src/main/res/mipmap-xxxhdpi/app_launcher.webp" alt="moegramX" width="160">
 </a>
 
 the **moest** client based on [Telegram-X](https://github.com/TGX-Android/Telegram-X) and [TDLib](https://core.telegram.org/tdlib) ~
