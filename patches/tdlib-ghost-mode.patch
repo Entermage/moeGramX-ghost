@@ -89,7 +89,7 @@ index 941f381..8ff2097 100644
 +                                                               const vector<MessageId> &message_ids,
 +                                                               bool allow_in_ghost_mode);
 diff --git a/td/telegram/MessagesManager.cpp b/td/telegram/MessagesManager.cpp
-index f144f22..c286c7c 100644
+index f144f22..b254a82 100644
 --- a/td/telegram/MessagesManager.cpp
 +++ b/td/telegram/MessagesManager.cpp
 @@ -16821,0 +16822 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
@@ -97,7 +97,52 @@ index f144f22..c286c7c 100644
 @@ -16823 +16824 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
 -                                                                 Auto());
 +                                                                 Auto(), false, true);
-@@ -16860,0 +16862,14 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
+@@ -16856,0 +16858,44 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
++  // Shadow Ban already verified the complete unread range in Java. Use an atomic, snapshot-bound
++  // token to set the local count explicitly instead of asking OrderedMessages to infer it from a
++  // history cache that may contain gaps. This branch never calls read_history_on_server.
++  if (!need_read && source == MessageSource::Other) {
++    auto local_read_token = td_->option_manager_->get_option_string("x_moex_shadow_local_read");
++    if (!local_read_token.empty()) {
++      auto token_parts = full_split(Slice(local_read_token), ':');
++      if (token_parts.size() != 4) {
++        td_->option_manager_->set_option_empty("x_moex_shadow_local_read");
++        return Status::Error(400, "Invalid Shadow local read token");
++      }
++      auto r_chat_id = to_integer_safe<int64>(token_parts[0]);
++      auto r_message_id = to_integer_safe<int64>(token_parts[1]);
++      auto r_last_read_inbox_message_id = to_integer_safe<int64>(token_parts[2]);
++      auto r_unread_count = to_integer_safe<int32>(token_parts[3]);
++      if (r_chat_id.is_error() || r_message_id.is_error() || r_last_read_inbox_message_id.is_error() ||
++          r_unread_count.is_error()) {
++        td_->option_manager_->set_option_empty("x_moex_shadow_local_read");
++        return Status::Error(400, "Invalid Shadow local read snapshot");
++      }
++      auto chat_id = get_chat_id_object(dialog_id, "moex shadow local read");
++      bool is_token_request = r_chat_id.ok() == chat_id && message_ids.size() == 1 &&
++                              r_message_id.ok() == message_ids[0].get();
++      if (is_token_request) {
++        td_->option_manager_->set_option_empty("x_moex_shadow_local_read");
++        bool is_supported_dialog = dialog_type == DialogType::User || dialog_type == DialogType::Chat ||
++                                   (dialog_type == DialogType::Channel &&
++                                    !td_->dialog_manager_->is_broadcast_channel(dialog_id) && !d->is_forum);
++        int32 current_unread_count = d->server_unread_count + d->local_unread_count;
++        if (!is_supported_dialog || !max_message_id.is_server() || max_message_id != d->last_message_id ||
++            max_message_id <= d->last_read_inbox_message_id || d->is_marked_as_unread ||
++            d->local_unread_count != 0 || r_message_id.ok() != max_message_id.get() ||
++            r_last_read_inbox_message_id.ok() != d->last_read_inbox_message_id.get() ||
++            r_unread_count.ok() <= 0 || r_unread_count.ok() != current_unread_count) {
++          return Status::Error(400, "Shadow local read snapshot is no longer current");
++        }
++        LOG(INFO) << "Read all-hidden history locally in " << dialog_id << " up to " << max_message_id
++                  << " with " << current_unread_count << " unread messages";
++        read_history_inbox(d, max_message_id, 0, "moex shadow local read");
++        return Status::OK();
++      }
++    }
++  }
++
+@@ -16860,0 +16906,14 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
 +  // Ghost mode marks messages as read locally. A later force-read request would normally be
 +  // ignored because the local read position no longer advances, so explicitly send the selected
 +  // server message ID when the UI requested a one-shot "Read until" operation.
@@ -112,7 +157,7 @@ index f144f22..c286c7c 100644
 +    return Status::OK();
 +  }
 +
-@@ -16930,0 +16946,26 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
+@@ -16930,0 +16990,26 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
 +static bool is_moex_ghost_read_blocked(Td *td, DialogId dialog_id, bool consume_allow_once) {
 +  if (td->option_manager_->get_option_boolean("x_moex_ghost_read_allow_once")) {
 +    if (consume_allow_once) {
@@ -139,17 +184,17 @@ index f144f22..c286c7c 100644
 +  }
 +}
 +
-@@ -16956 +16997,2 @@ void MessagesManager::read_dialog_inbox(Dialog *d, MessageId max_message_id) {
+@@ -16956 +17041,2 @@ void MessagesManager::read_dialog_inbox(Dialog *d, MessageId max_message_id) {
 -  if (read_history_on_server_message_id.is_valid()) {
 +  const bool ghost_read = is_moex_ghost_read_blocked(td_, d->dialog_id, false);
 +  if (read_history_on_server_message_id.is_valid() && !ghost_read) {
-@@ -16962 +17004 @@ void MessagesManager::read_dialog_inbox(Dialog *d, MessageId max_message_id) {
+@@ -16962 +17048 @@ void MessagesManager::read_dialog_inbox(Dialog *d, MessageId max_message_id) {
 -  if (read_history_on_server_message_id.is_valid()) {
 +  if (read_history_on_server_message_id.is_valid() && !ghost_read) {
-@@ -17654 +17696 @@ void MessagesManager::read_history_on_server(Dialog *d, MessageId max_message_id
+@@ -17654 +17740 @@ void MessagesManager::read_history_on_server(Dialog *d, MessageId max_message_id
 -  if (td_->auth_manager_->is_bot()) {
 +  if (td_->auth_manager_->is_bot() || is_moex_ghost_read_blocked(td_, d->dialog_id, true)) {
-@@ -17699 +17741 @@ void MessagesManager::read_message_thread_history_on_server(Dialog *d, MessageId
+@@ -17699 +17785 @@ void MessagesManager::read_message_thread_history_on_server(Dialog *d, MessageId
 -  if (td_->auth_manager_->is_bot()) {
 +  if (td_->auth_manager_->is_bot() || is_moex_ghost_read_blocked(td_, d->dialog_id, true)) {
 diff --git a/td/telegram/OnlineManager.cpp b/td/telegram/OnlineManager.cpp

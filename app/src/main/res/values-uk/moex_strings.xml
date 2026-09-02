@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="MoexSettings">Опції moeGramX</string>
+  <string name="MoexSettings">Опції moegramX</string>
   <string name="GeneralMoexSettings">Загальні</string>
   <string name="InterfaceMoexSettings">Інтерфейс</string>
   <string name="ChatsMoexSettings">Чати</string>
@@ -26,7 +26,7 @@
   <string name="showIdProfile">Відображати ID користувача в профілях</string>
   <string name="DisableSendAsButton">Приховати кнопку \"Надіслати як канал\"</string>
   <string name="MoexAbout">Про додаток</string>
-  <string name="MoexAboutText" formatted="true">**moeGramX** - це симпатичний, багатий на експериментальні функції клієнт, що базується на офіційних джерелах і TDlib. Не соромтеся пропонувати функції, повідомляти про проблеми або просто спілкуватися в нашій групі!</string>
+  <string name="MoexAboutText" formatted="true">**moegramX** - це симпатичний, багатий на експериментальні функції клієнт, що базується на офіційних джерелах і TDlib. Не соромтеся пропонувати функції, повідомляти про проблеми або просто спілкуватися в нашій групі!</string>
   <string name="HideCameraButtonInfo">Опція \"Приховати кнопку камери\" також додає кнопку камери в нижню частину меню вкладених файлів</string>
   <string name="IncreaseRecents">Збільшити кількість останніх стікерів</string>
   <string name="hideMessagesBadge">Приховати значок непрочитаних повідомлень</string>
@@ -82,7 +82,7 @@
   <string name="ProxyDisableOnVpn">Відключати при активному VPN</string>
   <string name="ProxyDisableOnVpnHint">При підключенні системного VPN трафік Telegram проходитиме через нього, оминаючи проксі. Проксі відновлюється автоматично після вимкнення VPN.</string>
   <string name="AutoPauseMedia">Автопауза системних медіа</string>
-  <string name="AutoPauseMediaHint">Призупиняти музику або інші аудіо з інших програм, коли голосове повідомлення, відеоповідомлення або відео програється в moeGramX.</string>
+  <string name="AutoPauseMediaHint">Призупиняти музику або інші аудіо з інших програм, коли голосове повідомлення, відеоповідомлення або відео програється в moegramX.</string>
   <string name="AutoPauseMediaResume">Продовжити після відтворення</string>
   <string name="ProxyAlertType">Тип проксі</string>
   <string name="ProxyAlertStatus">Стан</string>

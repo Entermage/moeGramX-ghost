@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="MoexSettings">moeGramX options</string>
+  <string name="MoexSettings">moegramX options</string>
   <string name="GeneralMoexSettings">General</string>
   <string name="InterfaceMoexSettings">Interface</string>
   <string name="ChatsMoexSettings">Chats</string>
@@ -10,7 +10,7 @@
   <string name="MoexChannelText">Channel</string>
   <string name="MoexSourceText">Source</string>
   <string name="MoexCategories">Categories</string>
-  <string name="MoexChannelLink" translatable="false">https://t.me/moeGramX</string>
+  <string name="MoexChannelLink" translatable="false">https://t.me/moegramX</string>
   <string name="MoexCrowdinLink" translatable="false">https://kiri.su/crowdin</string>
   <string name="MoexChatLink" translatable="false">https://t.me/moe_chat</string>
   <string name="MoexSourceLink" translatable="false">https://github.com/moeCrafters/moeGramX</string>
@@ -31,12 +31,12 @@
   <string name="showIdProfile">Show User ID in profiles</string>
   <string name="DisableSendAsButton">Channels</string>
   <string name="MoexAbout">About</string>
-  <string name="MoexAboutText" formatted="true">**moeGramX** — is a cute features rich a bit experimental client based on the official sources and TDlib. Feel free to suggest some features, report problems or just chat in our Discuss group!</string>
-  <string name="MoexVer" translatable="false">moeGramX v1.6.1-release (Gyeongdan)</string>
+  <string name="MoexAboutText" formatted="true">**moegramX** — is a cute features rich a bit experimental client based on the official sources and TDlib. Feel free to suggest some features, report problems or just chat in our Discuss group!</string>
+  <string name="MoexVer" translatable="false">moegramX v1.6.1-release (Gyeongdan)</string>
   <string name="HideCameraButtonInfo">Hide camera button option also adds a camera button to the buttom of the attach menu</string>
   <string name="IncreaseRecents">Increase recent stickers</string>
   <string name="hideMessagesBadge">Hide unread messages badge</string>
-  <string name="moexChannel" translatable="false">\@moeGramX</string>
+  <string name="moexChannel" translatable="false">\@moegramX</string>
   <string name="moexChat" translatable="false">\@moe_chat</string>
   <string name="moexGithub" translatable="false">GitHub</string>
   <string name="MoexCuteSettings">A little moe goes a long way ~</string>
@@ -49,15 +49,15 @@
   <string name="CopiedPhoto">Photo has been copied to the clipboard</string>
   <string name="CopyPhoto">Copy photo</string>
   <string name="Repeat">Repeat</string>
-  <string name="moexHeaderClient" translatable="false">moeGramX</string>
+  <string name="moexHeaderClient" translatable="false">moegramX</string>
   <string name="changeHeaderText">Header text</string>
   <string name="RememberOptions">Remember send options</string>
   <string name="RememberOptionsInfo">Remember previously selected send option and set it by default</string>
   <string name="SquareAvatar">Square avatar corners</string>
   <string name="MoexBlurDrawer">Blur avatar</string>
   <string name="MoexChatsHeader">Chats list</string>
-  <string name="AppNameAndVersionOverride" translatable="false">moeGramX %1$s</string>
-  <string name="AppSignatureOverride" translatable="false">**moeGramX** `%1$s`</string>
+  <string name="AppNameAndVersionOverride" translatable="false">moegramX %1$s</string>
+  <string name="AppSignatureOverride" translatable="false">**moegramX** `%1$s`</string>
   <string name="TypingInstead">Send choosing sticker status</string>
   <string name="TypingInsteadInfo" formatted="true">This will send **typing** status instead of **choosing** sticker</string>
   <string name="cuteToast" translatable="false">Moe moe, kyun!</string>
@@ -102,7 +102,7 @@
   <string name="ProxyDisableOnVpn">Disable while system VPN is active</string>
   <string name="ProxyDisableOnVpnHint">When a system VPN is connected, route Telegram traffic through it instead of the proxy. The proxy is restored automatically once the VPN is disconnected.</string>
   <string name="AutoPauseMedia">Pause system media</string>
-  <string name="AutoPauseMediaHint">Briefly pause music or other audio from other apps while a voice message, round video, or video plays in moeGramX.</string>
+  <string name="AutoPauseMediaHint">Briefly pause music or other audio from other apps while a voice message, round video, or video plays in moegramX.</string>
   <string name="AutoPauseMediaResume">Resume after playback</string>
   <string name="ProxyAlertType">Proxy type</string>
   <string name="ProxyAlertStatus">Status</string>

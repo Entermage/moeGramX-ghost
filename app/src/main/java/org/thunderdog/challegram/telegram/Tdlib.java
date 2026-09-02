@@ -148,6 +148,7 @@ import moe.kirao.mgx.MoexMessageFilter;
 import moe.kirao.mgx.MoexShadowUnreadManager;
 
 public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, DateChangeListener {
+  private static final String MOEX_SHADOW_LOCAL_READ_OPTION = "x_moex_shadow_local_read";
   @Override
   public final int accountId () {
     return id();
@@ -286,6 +287,8 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       tdlib.updateParameters(client);
       client.send(new TdApi.SetOption("x_moex_ghost_read_allow_once",
         new TdApi.OptionValueBoolean(false)), tdlib.okHandler());
+      client.send(new TdApi.SetOption(MOEX_SHADOW_LOCAL_READ_OPTION,
+        new TdApi.OptionValueEmpty()), tdlib.okHandler());
       tdlib.applyGhostModeOptions(client);
       if (Config.NEED_ONLINE) {
         if (tdlib.isOnline) {
@@ -6687,19 +6690,6 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
     return MoexConfig.ghostReadPrivate;
   }
 
-  private static @Nullable String ghostReadOptionName (@GhostReadScope int scope) {
-    switch (scope) {
-      case GhostReadScope.PRIVATE:
-        return "x_moex_ghost_read_private";
-      case GhostReadScope.GROUPS:
-        return "x_moex_ghost_read_groups";
-      case GhostReadScope.CHANNELS:
-        return "x_moex_ghost_read_channels";
-      default:
-        return null;
-    }
-  }
-
   private final Object ghostReadOperationLock = new Object();
   private final ArrayDeque<Runnable> ghostReadOperations = new ArrayDeque<>();
   private boolean ghostReadOperationActive;
@@ -6735,34 +6725,47 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
     boolean isValid ();
   }
 
-  /** Advances only TDLib's local read position while Ghost Read is enabled for the fixed scope. */
-  public void readMessagesLocally (@GhostReadScope int scope, long chatId, long[] messageIds,
+  /** Advances only TDLib's local read position through a snapshot-bound native one-shot token. */
+  public void readMessagesLocally (@GhostReadScope int scope, long chatId, long messageId,
+                                   int expectedUnreadCount, long expectedLastReadInboxMessageId,
                                    @NonNull LocalReadCondition condition,
                                    @NonNull Client.ResultHandler handler) {
-    long[] copiedMessageIds = Arrays.copyOf(messageIds, messageIds.length);
     enqueueGhostReadOperation(() -> {
-      String optionName = ghostReadOptionName(scope);
-      if (optionName == null || !isGhostReadEnabled(scope) || !condition.isValid()) {
+      if (scope == GhostReadScope.NONE || scope == GhostReadScope.CHANNELS ||
+          expectedUnreadCount <= 0 || messageId <= expectedLastReadInboxMessageId ||
+          !condition.isValid()) {
         completeGhostReadOperation(handler,
           new TdApi.Error(400, "Local read request is no longer current"));
         return;
       }
+      String token = chatId + ":" + messageId + ":" + expectedLastReadInboxMessageId +
+        ":" + expectedUnreadCount;
       Client operationClient = client();
-      operationClient.send(new TdApi.SetOption(optionName,
-        new TdApi.OptionValueBoolean(true)), optionResult -> {
+      operationClient.send(new TdApi.SetOption(MOEX_SHADOW_LOCAL_READ_OPTION,
+        new TdApi.OptionValueString(token)), optionResult -> {
         if (optionResult.getConstructor() == TdApi.Error.CONSTRUCTOR) {
           completeGhostReadOperation(handler, optionResult);
           return;
         }
-        if (!isGhostReadEnabled(scope) || !condition.isValid()) {
-          applyGhostModeOptions(operationClient, () -> completeGhostReadOperation(handler,
+        if (!condition.isValid()) {
+          resetShadowLocalReadOption(operationClient, () -> completeGhostReadOperation(handler,
             new TdApi.Error(400, "Local read request is no longer current")));
           return;
         }
-        operationClient.send(new TdApi.ViewMessages(chatId, copiedMessageIds,
-          new TdApi.MessageSourceChatHistory(), false),
-          result -> completeGhostReadOperation(handler, result));
+        operationClient.send(new TdApi.ViewMessages(chatId, new long[] {messageId},
+          new TdApi.MessageSourceOther(), false), result ->
+          resetShadowLocalReadOption(operationClient,
+            () -> completeGhostReadOperation(handler, result)));
       });
+    });
+  }
+
+  private void resetShadowLocalReadOption (@NonNull Client operationClient,
+                                           @NonNull Runnable after) {
+    operationClient.send(new TdApi.SetOption(MOEX_SHADOW_LOCAL_READ_OPTION,
+      new TdApi.OptionValueEmpty()), resetResult -> {
+      okHandler().onResult(resetResult);
+      after.run();
     });
   }
 
@@ -8111,6 +8114,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       Log.i(Log.TAG_MESSAGES_LOADER, "updateChatTopMessage chatId=%d messageId=%d", update.chatId, update.lastMessage != null ? update.lastMessage.id : 0);
     }
     List<ChatListChange> listChanges;
+    boolean hasUnreadMessages;
     synchronized (dataLock) {
       final TdApi.Chat chat = chats.get(update.chatId);
       if (TdlibUtils.assertChat(update.chatId, chat, update)) {
@@ -8118,8 +8122,12 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       }
       chat.lastMessage = update.lastMessage;
       listChanges = setChatPositions(chat, update.positions);
+      hasUnreadMessages = chat.unreadCount > 0;
     }
     listeners.updateChatLastMessage(update, listChanges);
+    if (hasUnreadMessages) {
+      MoexShadowUnreadManager.scheduleForChat(this, update.chatId);
+    }
   }
 
   public static int CHAT_MARKED_AS_UNREAD = -1;
@@ -8533,11 +8541,15 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
     final TdApi.Chat chat;
     final boolean availabilityChanged;
     final TdlibChatList[] chatLists;
+    final int previousUnreadCount;
+    final long previousLastReadInboxMessageId;
     synchronized (dataLock) {
       chat = chats.get(update.chatId);
       if (TdlibUtils.assertChat(update.chatId, chat, update)) {
         return;
       }
+      previousUnreadCount = chat.unreadCount;
+      previousLastReadInboxMessageId = chat.lastReadInboxMessageId;
       chat.lastReadInboxMessageId = update.lastReadInboxMessageId;
       if (Config.TEST_CHAT_COUNTERS) {
         update.unreadCount = MathUtils.random(1, 250000);
@@ -8547,6 +8559,11 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       chatLists = chatListsImpl(chat.positions);
     }
     listeners.updateChatReadInbox(update, availabilityChanged, chat, chatLists);
+    if (update.unreadCount > 0 &&
+        (update.unreadCount != previousUnreadCount ||
+          update.lastReadInboxMessageId != previousLastReadInboxMessageId)) {
+      MoexShadowUnreadManager.scheduleForChat(this, update.chatId);
+    }
   }
 
   @TdlibThread
@@ -11119,8 +11136,16 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
         int buildNo = 0;
         String version = null;
         String commit = null;
-        final String prefix = "moeGramX-";
-        if (!StringUtils.isEmpty(document.fileName) && document.fileName.startsWith(prefix)) {
+        final String prefix;
+        if (!StringUtils.isEmpty(document.fileName) && document.fileName.startsWith("moegramX-")) {
+          prefix = "moegramX-";
+        } else if (!StringUtils.isEmpty(document.fileName) && document.fileName.startsWith("moeGramX-")) {
+          // Keep recognizing APKs published with the previous project-name casing.
+          prefix = "moeGramX-";
+        } else {
+          prefix = null;
+        }
+        if (prefix != null) {
           int i = document.fileName.indexOf('-', prefix.length());
           version = document.fileName.substring(prefix.length(), i == -1 ? document.fileName.length() : i);
           if (version.matches("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$")) {

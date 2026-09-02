@@ -1,36 +1,26 @@
 {
   "project_info": {
-    "project_number": "644911857796",
-    "project_id": "moex-8818b",
-    "storage_bucket": "moex-8818b.appspot.com"
+    "project_number": "952391007037",
+    "project_id": "ayugramx-25e1e",
+    "storage_bucket": "ayugramx-25e1e.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:644911857796:android:e852cebfa7f40e06f382d1",
+        "mobilesdk_app_id": "1:952391007037:android:31f38576bb7cc89f802354",
         "android_client_info": {
-          "package_name": "moe.kirao.mgx"
+          "package_name": "com.ayx.mgx"
         }
       },
-      "oauth_client": [
-        {
-          "client_id": "644911857796-60c7bu27n3rfltib8sd8bpkh3k4teh7v.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
+      "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyAmMh_eZQ7JED4gTYsdmhgiPa-vu5ja3uQ"
+          "current_key": "AIzaSyAr1qfOK0L2NZ8fkmq3euIE5SvcHXYX34s"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "644911857796-60c7bu27n3rfltib8sd8bpkh3k4teh7v.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
+          "other_platform_oauth_client": []
         }
       }
     }

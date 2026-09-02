@@ -1722,6 +1722,7 @@ public class TdlibUi extends Handler {
   private static final int CHAT_OPTION_SCHEDULED_MESSAGES = 1 << 6;
   private static final int CHAT_OPTION_OPEN_PROFILE_IF_DUPLICATE = 1 << 7;
   private static final int CHAT_OPTION_OPEN_DIRECT_MESSAGES_CHAT = 1 << 8;
+  private static final int CHAT_OPTION_RESOLVE_HIGHLIGHT_CANDIDATES = 1 << 9;
 
   public static class ChatOpenParameters {
     public int options;
@@ -1894,6 +1895,11 @@ public class TdlibUi extends Handler {
       return this;
     }
 
+    public ChatOpenParameters resolveHighlightCandidates () {
+      this.options |= CHAT_OPTION_RESOLVE_HIGHLIGHT_CANDIDATES;
+      return this;
+    }
+
     public ChatOpenParameters highlightMessage (TdApi.Message message) {
       return highlightMessage(new MessageId(message.chatId, message.id));
     }
@@ -2035,12 +2041,25 @@ public class TdlibUi extends Handler {
           }
           case TdApi.Messages.CONSTRUCTOR: {
             TdApi.Message[] messages = ((TdApi.Messages) object).messages;
+            TdApi.Message firstAvailableMessage = null;
+            boolean primaryMessageAvailable = false;
             for (TdApi.Message message : messages) {
               if (message != null) {
                 error = false;
-                break;
+                if (firstAvailableMessage == null) {
+                  firstAvailableMessage = message;
+                }
+                if (message.id == params.highlightMessageId.getMessageId()) {
+                  primaryMessageAvailable = true;
+                  break;
+                }
               }
             }
+            if (!primaryMessageAvailable && firstAvailableMessage != null &&
+                BitwiseUtils.hasFlag(params.options, CHAT_OPTION_RESOLVE_HIGHLIGHT_CANDIDATES)) {
+              params.highlightMessageId = new MessageId(chatFinal.id, firstAvailableMessage.id);
+            }
+            params.options &= ~CHAT_OPTION_RESOLVE_HIGHLIGHT_CANDIDATES;
             break;
           }
           case TdApi.Error.CONSTRUCTOR: {
@@ -3544,10 +3563,199 @@ public class TdlibUi extends Handler {
     return null;
   }
 
+  private static final class OpenMessageLink {
+    private final long userId;
+    private final long chatId;
+    private final long messageId;
+    private final long accountUserId;
+
+    private OpenMessageLink (long userId, long chatId, long messageId, long accountUserId) {
+      this.userId = userId;
+      this.chatId = chatId;
+      this.messageId = messageId;
+      this.accountUserId = accountUserId;
+    }
+  }
+
+  private static long parsePositiveLong (@Nullable String value) {
+    if (StringUtils.isEmpty(value)) {
+      return 0;
+    }
+    try {
+      long result = Long.parseLong(value);
+      return result > 0 ? result : 0;
+    } catch (NumberFormatException ignored) {
+      return 0;
+    }
+  }
+
+  @Nullable
+  private static OpenMessageLink parseOpenMessageLink (@Nullable String rawUrl) {
+    if (StringUtils.isEmpty(rawUrl)) {
+      return null;
+    }
+    try {
+      final String shortPrefix = "tg:openmessage";
+      String normalizedUrl = rawUrl.regionMatches(true, 0, shortPrefix, 0, shortPrefix.length()) ?
+        "tg://openmessage" + rawUrl.substring(shortPrefix.length()) : rawUrl;
+      Uri uri = Uri.parse(normalizedUrl);
+      if (!"tg".equalsIgnoreCase(uri.getScheme()) || !"openmessage".equalsIgnoreCase(uri.getHost())) {
+        return null;
+      }
+
+      String userIdValue = uri.getQueryParameter("user_id");
+      long userId = parsePositiveLong(userIdValue);
+      long chatId = userIdValue == null ? parsePositiveLong(uri.getQueryParameter("chat_id")) : 0;
+      long messageId = parsePositiveLong(uri.getQueryParameter("message_id"));
+      long accountUserId = parsePositiveLong(uri.getQueryParameter("account_user_id"));
+      return new OpenMessageLink(userId, chatId, messageId, accountUserId);
+    } catch (Throwable t) {
+      Log.i("Unable to parse tg://openmessage link: %s", t, rawUrl);
+      return null;
+    }
+  }
+
+  public static long getOpenMessageAccountUserId (@Nullable String rawUrl) {
+    OpenMessageLink link = parseOpenMessageLink(rawUrl);
+    return link != null ? link.accountUserId : 0;
+  }
+
+  public static boolean isOpenMessageLink (@Nullable String rawUrl) {
+    return parseOpenMessageLink(rawUrl) != null;
+  }
+
+  private static final long MAX_OPEN_MESSAGE_ID = ((long) Integer.MAX_VALUE) << 20;
+
+  private static long normalizeOpenMessageId (long messageId) {
+    if (messageId <= 0 || messageId > MAX_OPEN_MESSAGE_ID) {
+      return 0;
+    }
+    if (MessageId.toServerMessageId(messageId) != 0) {
+      return messageId;
+    }
+    return messageId <= Integer.MAX_VALUE ? MessageId.fromServerMessageId(messageId) : 0;
+  }
+
+  private static long getAlternativeOpenMessageId (long messageId, long normalizedMessageId) {
+    if (messageId > 0 && messageId <= Integer.MAX_VALUE && MessageId.toServerMessageId(messageId) != 0) {
+      long alternativeMessageId = MessageId.fromServerMessageId(messageId);
+      if (alternativeMessageId > 0 && alternativeMessageId <= MAX_OPEN_MESSAGE_ID && alternativeMessageId != normalizedMessageId) {
+        return alternativeMessageId;
+      }
+    }
+    return 0;
+  }
+
+  private ChatOpenParameters newOpenMessageParameters (long chatId, long messageId, @Nullable UrlOpenParameters openParameters) {
+    ChatOpenParameters params = new ChatOpenParameters().keepStack().urlOpenParameters(openParameters);
+    long normalizedMessageId = normalizeOpenMessageId(messageId);
+    if (normalizedMessageId != 0) {
+      long alternativeMessageId = getAlternativeOpenMessageId(messageId, normalizedMessageId);
+      MessageId targetMessageId = alternativeMessageId != 0 ?
+        new MessageId(chatId, normalizedMessageId, new long[] {alternativeMessageId}) :
+        new MessageId(chatId, normalizedMessageId);
+      params.highlightMessage(targetMessageId).ensureHighlightAvailable();
+      if (alternativeMessageId != 0) {
+        params.resolveHighlightCandidates();
+      }
+    }
+    return params;
+  }
+
+  private void openOpenMessageChat (TdlibDelegate context, long chatId, TdApi.Function<?> createRequest, long messageId, @Nullable UrlOpenParameters openParameters) {
+    openChat(context, chatId, createRequest, newOpenMessageParameters(chatId, messageId, openParameters));
+  }
+
+  private void showOpenMessageUnsupported (long peerId, @Nullable UrlOpenParameters openParameters) {
+    Log.i("Unable to resolve tg://openmessage peer_id=%d", peerId);
+    showLinkTooltip(tdlib, R.drawable.baseline_warning_24, Lang.getString(R.string.InternalUrlUnsupported), openParameters);
+  }
+
+  private void resolveOpenMessageBasicGroup (TdlibDelegate context, OpenMessageLink link, long basicGroupChatId, @Nullable UrlOpenParameters openParameters) {
+    if (!ChatId.isBasicGroup(basicGroupChatId)) {
+      showOpenMessageUnsupported(link.chatId, openParameters);
+      return;
+    }
+    tdlib.client().send(new TdApi.GetBasicGroup(link.chatId), basicGroupResult -> {
+      if (basicGroupResult.getConstructor() == TdApi.BasicGroup.CONSTRUCTOR) {
+        openOpenMessageChat(context, basicGroupChatId, new TdApi.CreateBasicGroupChat(link.chatId, false), link.messageId, openParameters);
+      } else {
+        showOpenMessageUnsupported(link.chatId, openParameters);
+      }
+    });
+  }
+
+  private void openOpenMessageGroup (TdlibDelegate context, OpenMessageLink link, @Nullable UrlOpenParameters openParameters) {
+    if (link.chatId > ChatId.MAX_MONOFORUM_CHANNEL_ID) {
+      showOpenMessageUnsupported(link.chatId, openParameters);
+      return;
+    }
+    long basicGroupChatId = ChatId.fromBasicGroupId(link.chatId);
+    long supergroupChatId = ChatId.fromSupergroupId(link.chatId);
+    boolean validBasicGroup = ChatId.isBasicGroup(basicGroupChatId);
+    boolean validSupergroup = ChatId.isSupergroup(supergroupChatId);
+    TdApi.Chat basicGroupChat = validBasicGroup ? tdlib.chat(basicGroupChatId) : null;
+    TdApi.Chat supergroupChat = validSupergroup ? tdlib.chat(supergroupChatId) : null;
+
+    if (supergroupChat != null) {
+      openChat(context, supergroupChat, newOpenMessageParameters(supergroupChat.id, link.messageId, openParameters));
+      return;
+    }
+    if (basicGroupChat != null) {
+      openChat(context, basicGroupChat, newOpenMessageParameters(basicGroupChat.id, link.messageId, openParameters));
+      return;
+    }
+    if (validSupergroup && tdlib.cache().supergroup(link.chatId) != null) {
+      openOpenMessageChat(context, supergroupChatId, new TdApi.CreateSupergroupChat(link.chatId, false), link.messageId, openParameters);
+      return;
+    }
+    if (validBasicGroup && tdlib.cache().basicGroup(link.chatId) != null) {
+      openOpenMessageChat(context, basicGroupChatId, new TdApi.CreateBasicGroupChat(link.chatId, false), link.messageId, openParameters);
+      return;
+    }
+    if (validSupergroup) {
+      tdlib.client().send(new TdApi.GetSupergroup(link.chatId), supergroupResult -> {
+        if (supergroupResult.getConstructor() == TdApi.Supergroup.CONSTRUCTOR) {
+          openOpenMessageChat(context, supergroupChatId, new TdApi.CreateSupergroupChat(link.chatId, false), link.messageId, openParameters);
+        } else {
+          resolveOpenMessageBasicGroup(context, link, basicGroupChatId, openParameters);
+        }
+      });
+    } else {
+      resolveOpenMessageBasicGroup(context, link, basicGroupChatId, openParameters);
+    }
+  }
+
+  private boolean openOpenMessageLink (TdlibDelegate context, String rawUrl, @Nullable UrlOpenParameters openParameters) {
+    OpenMessageLink link = parseOpenMessageLink(rawUrl);
+    if (link == null) {
+      return false;
+    }
+    if (link.userId != 0) {
+      long chatId = ChatId.fromUserId(link.userId);
+      if (ChatId.isPrivate(chatId)) {
+        openOpenMessageChat(context, chatId, new TdApi.CreatePrivateChat(link.userId, false), link.messageId, openParameters);
+      } else {
+        showOpenMessageUnsupported(link.userId, openParameters);
+      }
+    } else if (link.chatId != 0) {
+      openOpenMessageGroup(context, link, openParameters);
+    } else {
+      showOpenMessageUnsupported(0, openParameters);
+    }
+    return true;
+  }
+
   public void openTelegramUrl (final TdlibDelegate context, final String rawUrl, @Nullable UrlOpenParameters openParameters, @Nullable RunnableBool after) {
     if (StringUtils.isEmpty(rawUrl) || tdlib.context().inRecoveryMode()) {
       if (after != null)
         after.runWithBool(false);
+      return;
+    }
+    if (openOpenMessageLink(context, rawUrl, openParameters)) {
+      if (after != null) {
+        after.runWithBool(true);
+      }
       return;
     }
     PublicChatPreviewLink publicChatPreviewLink = parsePublicChatPreviewLink(rawUrl);

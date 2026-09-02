@@ -292,6 +292,7 @@ import tgx.td.TdConstants;
 import tgx.td.data.MessageWithProperties;
 import tgx.td.ui.TdUi;
 import moe.kirao.mgx.MoexConfig;
+import moe.kirao.mgx.MoexMessageFilter;
 import moe.kirao.mgx.MoexShadowUnreadManager;
 import moe.kirao.mgx.ui.MessageDetailsController;
 import moe.kirao.mgx.utils.SystemUtils;
@@ -2455,6 +2456,28 @@ public class MessagesController extends ViewController<MessagesController.Argume
     return false;
   }
 
+  private static boolean canUseRawUnreadAnchor (Tdlib tdlib, TdApi.Chat chat,
+                                                @Nullable ThreadInfo messageThread) {
+    if (chat == null) return true;
+    if (MoexMessageFilter.mayHideRegexInChat(tdlib.isChannelChat(chat))) {
+      return false;
+    }
+    if (messageThread != null) {
+      return !MoexShadowUnreadManager.hasKnownHiddenUsers(tdlib);
+    }
+
+    int hiddenUnreadCount = MoexShadowUnreadManager.getKnownHiddenUnreadCount(tdlib, chat);
+    if (hiddenUnreadCount > 0) {
+      return false;
+    }
+    if (hiddenUnreadCount == MoexShadowUnreadManager.UNKNOWN_HIDDEN_UNREAD_COUNT &&
+        (MoexShadowUnreadManager.hasKnownHiddenUsers(tdlib) ||
+          chat.lastMessage != null && MoexMessageFilter.isShadowBanned(tdlib, chat.lastMessage))) {
+      return false;
+    }
+    return true;
+  }
+
   public static class Arguments {
     private final int constructor;
 
@@ -2490,7 +2513,9 @@ public class MessagesController extends ViewController<MessagesController.Argume
       this.chat = chat;
       this.messageThread = messageThread;
       this.messageTopicId = messageTopicId;
-      this.highlightMode = MessagesManager.getAnchorHighlightMode(tdlib.id(), chat, messageThread);
+      this.highlightMode = MessagesManager.getAnchorHighlightMode(
+        tdlib.id(), chat, messageThread,
+        canUseRawUnreadAnchor(tdlib, chat, messageThread));
       this.highlightMessageId = MessagesManager.getAnchorMessageId(tdlib.id(), chat, messageThread, highlightMode);
       this.searchFilter = filter;
 
@@ -3023,7 +3048,9 @@ public class MessagesController extends ViewController<MessagesController.Argume
         setMentionCountBadge(0);
         setReactionCountBadge(0);
       } else {
-        setUnreadCountBadge(chat.unreadCount, animated);
+        int hiddenUnreadCount = MoexShadowUnreadManager.getKnownHiddenUnreadCount(tdlib, chat);
+        setUnreadCountBadge(hiddenUnreadCount != MoexShadowUnreadManager.UNKNOWN_HIDDEN_UNREAD_COUNT ?
+          Math.max(0, chat.unreadCount - hiddenUnreadCount) : chat.unreadCount, animated);
         setMentionCountBadge(chat.unreadMentionCount);
         setReactionCountBadge(chat.unreadReactionCount);
         updateShadowUnreadCounter(animated);
@@ -3059,14 +3086,17 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   private void scrollToUnreadOrStartMessage () {
-    int anchorMode = MessagesManager.getAnchorHighlightMode(tdlib.id(), chat, messageThread);
+    boolean canUseUnreadAnchor = canUseRawUnreadAnchor(tdlib, chat, messageThread);
+    int anchorMode = MessagesManager.getAnchorHighlightMode(
+      tdlib.id(), chat, messageThread, canUseUnreadAnchor);
     if (!manager.hasReturnMessage()) {
-      if (!inPreviewMode && !isInForceTouchMode() && anchorMode == MessagesManager.HIGHLIGHT_MODE_UNREAD) {
+      if (canUseUnreadAnchor && !inPreviewMode && !isInForceTouchMode() &&
+          anchorMode == MessagesManager.HIGHLIGHT_MODE_UNREAD) {
         MessageId messageId = MessagesManager.getAnchorMessageId(tdlib.id(), chat, messageThread, anchorMode);
         manager.highlightMessage(messageId, MessagesManager.HIGHLIGHT_MODE_UNREAD_NEXT, null, true);
         return;
       }
-      if (chat != null && MessagesManager.canGoUnread(chat, messageThread)) {
+      if (canUseUnreadAnchor && chat != null && MessagesManager.canGoUnread(chat, messageThread)) {
         MessageId messageId = MessagesManager.getAnchorMessageId(tdlib.id(), chat, messageThread, MessagesManager.HIGHLIGHT_MODE_UNREAD);
         int firstUnreadIndex = manager.indexOfFirstUnreadMessage();
         TGMessage bottom = manager.findBottomMessage();

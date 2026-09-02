@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="MoexSettings">Opções do moeGramX</string>
+  <string name="MoexSettings">Opções do moegramX</string>
   <string name="GeneralMoexSettings">Geral</string>
   <string name="InterfaceMoexSettings">Interface</string>
   <string name="ChatsMoexSettings">Conversas</string>
@@ -26,7 +26,7 @@
   <string name="showIdProfile">Mostrar o ID do usuário nos perfis</string>
   <string name="DisableSendAsButton">Canais</string>
   <string name="MoexAbout">Sobre</string>
-  <string name="MoexAboutText" formatted="true">**moeGramX** — é um recurso bonito rico em um pouco experimental com base nas fontes oficiais e TDlib. Sinta-se à vontade para sugerir alguns recursos, relatar problemas ou apenas conversar no nosso grupo de discussões!</string>
+  <string name="MoexAboutText" formatted="true">**moegramX** — é um recurso bonito rico em um pouco experimental com base nas fontes oficiais e TDlib. Sinta-se à vontade para sugerir alguns recursos, relatar problemas ou apenas conversar no nosso grupo de discussões!</string>
   <string name="HideCameraButtonInfo">Ocultar a opção do botão da câmera também adiciona um botão da câmera ao menu de anexo</string>
   <string name="IncreaseRecents">Aumentar stickers recentes</string>
   <string name="hideMessagesBadge">Ocultar emblema de mensagens não lidas</string>
@@ -82,7 +82,7 @@
   <string name="ProxyDisableOnVpn">Desabilitar enquanto a VPN do sistema estiver ativa</string>
   <string name="ProxyDisableOnVpnHint">Quando uma VPN do sistema está conectada, roteie o tráfego do Telegram através dele ao invés do proxy. O proxy é restaurado automaticamente quando a VPN é desconectada.</string>
   <string name="AutoPauseMedia">Pausar mídia do sistema</string>
-  <string name="AutoPauseMediaHint">Pausa a música ou outro áudio de outros aplicativos enquanto uma mensagem de voz, vídeo redondo ou vídeo toca em moeGramX.</string>
+  <string name="AutoPauseMediaHint">Pausa a música ou outro áudio de outros aplicativos enquanto uma mensagem de voz, vídeo redondo ou vídeo toca em moegramX.</string>
   <string name="AutoPauseMediaResume">Retomar após a reprodução</string>
   <string name="ProxyAlertType">Tipo de Proxy</string>
   <string name="ProxyAlertStatus">Status</string>

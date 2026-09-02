@@ -446,7 +446,6 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
       chat.lastMessage = message;
       if ((oldMessage == null && message == null) || (oldMessage != null && message != null && oldMessage.id == message.id))
         return false;
-      setCounter(true);
       setTime();
       setText();
       scheduleShadowBannedUnreadRefresh();
@@ -625,10 +624,14 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
   public boolean updateChatReadInbox (long chatId, final long lastReadInboxMessageId, final int unreadCount) {
     if (chat.id == chatId) {
       boolean showDraft = showDraft();
+      long previousLastReadInboxMessageId = chat.lastReadInboxMessageId;
+      int previousUnreadCount = chat.unreadCount;
       chat.lastReadInboxMessageId = lastReadInboxMessageId;
       chat.unreadCount = unreadCount;
       boolean newShowDraft = showDraft();
-      setCounter(true);
+      if (lastReadInboxMessageId != previousLastReadInboxMessageId || unreadCount < previousUnreadCount) {
+        setCounter(true);
+      }
       scheduleShadowBannedUnreadRefresh();
       if (showDraft != newShowDraft) {
         setText();
@@ -849,8 +852,14 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
       return 0;
     } else {
       int unreadCount = chat.unreadCount;
+      int hiddenUnreadCount = MoexShadowUnreadManager.UNKNOWN_HIDDEN_UNREAD_COUNT;
       if (isShadowBannedUnreadCountCurrent()) {
-        unreadCount = Math.max(0, unreadCount - shadowBannedUnreadCount);
+        hiddenUnreadCount = shadowBannedUnreadCount;
+      } else if (chat != null) {
+        hiddenUnreadCount = MoexShadowUnreadManager.getKnownHiddenUnreadCount(tdlib, chat);
+      }
+      if (hiddenUnreadCount != MoexShadowUnreadManager.UNKNOWN_HIDDEN_UNREAD_COUNT) {
+        unreadCount = Math.max(0, unreadCount - hiddenUnreadCount);
       }
       return unreadCount > 0 ? unreadCount : chat.isMarkedAsUnread ? Tdlib.CHAT_MARKED_AS_UNREAD : 0;
     }
@@ -877,22 +886,24 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
   private void refreshShadowBannedUnreadCount () {
     shadowBannedUnreadRefreshGeneration++;
     long requestGeneration = ++shadowBannedUnreadRequestGeneration;
-    boolean wasFilteringUnreadCount = isShadowBannedUnreadCountCurrent() && shadowBannedUnreadCount > 0;
-    shadowBannedUnreadCountValid = false;
-    shadowBannedUnreadCount = 0;
-    if (wasFilteringUnreadCount) {
-      setCounter(needAnimateChanges());
-    }
     if (chat == null || isDestroyed || (flags & FLAG_ATTACHED) == 0) return;
 
     int rawUnreadCount = chat.unreadCount;
     long lastReadInboxMessageId = chat.lastReadInboxMessageId;
     long topMessageId = getTopMessageId();
+    int knownHiddenUnreadCount = MoexShadowUnreadManager.getKnownHiddenUnreadCount(tdlib, chat);
+    if (knownHiddenUnreadCount != MoexShadowUnreadManager.UNKNOWN_HIDDEN_UNREAD_COUNT) {
+      completeShadowBannedUnreadRequest(requestGeneration, rawUnreadCount,
+        lastReadInboxMessageId, topMessageId, knownHiddenUnreadCount);
+    }
     MoexShadowUnreadManager.requestForChat(tdlib, chat,
       (success, hiddenUnreadCount) -> {
         if (success) {
           completeShadowBannedUnreadRequest(requestGeneration, rawUnreadCount,
             lastReadInboxMessageId, topMessageId, hiddenUnreadCount);
+        } else {
+          failShadowBannedUnreadRequest(requestGeneration, rawUnreadCount,
+            lastReadInboxMessageId, topMessageId);
         }
       });
   }
@@ -916,7 +927,8 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
       return;
     }
     int clampedHiddenUnreadCount = Math.max(0, Math.min(hiddenUnreadCount, rawUnreadCount));
-    boolean changed = !shadowBannedUnreadCountValid || shadowBannedUnreadCount != clampedHiddenUnreadCount;
+    boolean wasCurrent = isShadowBannedUnreadCountCurrent();
+    boolean changed = !wasCurrent || shadowBannedUnreadCount != clampedHiddenUnreadCount;
     shadowBannedUnreadCount = clampedHiddenUnreadCount;
     shadowBannedUnreadForRawCount = rawUnreadCount;
     shadowBannedUnreadForLastReadInboxMessageId = lastReadInboxMessageId;
@@ -925,6 +937,16 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
     if (changed) {
       setCounter(needAnimateChanges());
     }
+  }
+
+  private void failShadowBannedUnreadRequest (long requestGeneration, int rawUnreadCount,
+                                              long lastReadInboxMessageId, long topMessageId) {
+    if (!isShadowBannedUnreadRequestCurrent(requestGeneration, rawUnreadCount,
+        lastReadInboxMessageId, topMessageId)) {
+      return;
+    }
+    shadowBannedUnreadCountValid = false;
+    setCounter(needAnimateChanges());
   }
 
   public boolean hasUnreadReactions () {

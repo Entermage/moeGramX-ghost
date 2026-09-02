@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="MoexSettings">moeGramX баптаулары</string>
+  <string name="MoexSettings">moegramX баптаулары</string>
   <string name="GeneralMoexSettings">Жалпы</string>
   <string name="InterfaceMoexSettings">Келбеті</string>
   <string name="ChatsMoexSettings">Чат\'тар</string>
@@ -24,7 +24,7 @@
   <string name="PhoneHidden">Нөмірімді жасыру</string>
   <string name="showIdProfile">Басқалардын ID\'ің көру</string>
   <string name="DisableSendAsButton">Арналар</string>
-  <string name="MoexAbout">moeGramX туралы</string>
+  <string name="MoexAbout">moegramX туралы</string>
   <string name="MoexAboutText" formatted="true">**moeGram X** — сүкімді, мүмкіндіктерге бай, бастпақы ресми Telegram TDlib негізінде құрылған эксперемент\'алдық клиент. 
 Кейбір мүмкіндіктерді қолданудан мәселелер тапсаныз не жәй әңгімелескініз келсе, Біздің талқы тобымызға қосылыңыз!</string>
   <string name="IncreaseRecents">Соңғы стикер\'лер тізімін кеңейту</string>

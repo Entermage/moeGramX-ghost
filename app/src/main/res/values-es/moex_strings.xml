@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="MoexSettings">Opciones de moeGramX</string>
+  <string name="MoexSettings">Opciones de moegramX</string>
   <string name="GeneralMoexSettings">General</string>
   <string name="InterfaceMoexSettings">Interfaz</string>
   <string name="ChatsMoexSettings">Chats</string>
@@ -26,7 +26,7 @@
   <string name="showIdProfile">Mostrar ID de usuario en perfiles</string>
   <string name="DisableSendAsButton">Ocultar botón \"Enviar como canal\"</string>
   <string name="MoexAbout">Acerca de</string>
-  <string name="MoexAboutText" formatted="true">**moeGramX** — es un cliente lindo, rico en funciones y un poco experimental basado en las fuentes oficiales y TDlib. ¡Siéntete libre de sugerir funciones, informar problemas o simplemente chatear en nuestro grupo de discusión!</string>
+  <string name="MoexAboutText" formatted="true">**moegramX** — es un cliente lindo, rico en funciones y un poco experimental basado en las fuentes oficiales y TDlib. ¡Siéntete libre de sugerir funciones, informar problemas o simplemente chatear en nuestro grupo de discusión!</string>
   <string name="HideCameraButtonInfo">Esta opción mueve el botón de la cámara del panel de mensajes al menú adjuntar</string>
   <string name="IncreaseRecents">Incrementar stickers recientes</string>
   <string name="hideMessagesBadge">Ocultar icono de mensajes no leídos</string>

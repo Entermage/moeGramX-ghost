@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="MoexSettings">Настройки moeGramX</string>
+  <string name="MoexSettings">Настройки moegramX</string>
   <string name="GeneralMoexSettings">Основные</string>
   <string name="InterfaceMoexSettings">Оформление</string>
   <string name="ChatsMoexSettings">Чаты</string>
@@ -26,7 +26,7 @@
   <string name="showIdProfile">Показывать ID в профиле</string>
   <string name="DisableSendAsButton">Каналы</string>
   <string name="MoexAbout">О нас</string>
-  <string name="MoexAboutText" formatted="true">**moeGramX** — это милый клиент c расширенной функциональностью, основанный на официальном исходном коде и TDlib. Присоединяйтесь к нашему чату, где вы можете предложить новые функции или указать на ошибки!</string>
+  <string name="MoexAboutText" formatted="true">**moegramX** — это милый клиент c расширенной функциональностью, основанный на официальном исходном коде и TDlib. Присоединяйтесь к нашему чату, где вы можете предложить новые функции или указать на ошибки!</string>
   <string name="HideCameraButtonInfo">Скрытие кнопки камеры на самом деле просто перемещает её в экран прикрепления вложения</string>
   <string name="IncreaseRecents">Увеличить количество недавних</string>
   <string name="hideMessagesBadge">Скрыть метку с кнопки меню</string>
@@ -82,7 +82,7 @@
   <string name="ProxyDisableOnVpn">Отключить при активном VPN</string>
   <string name="ProxyDisableOnVpnHint">При подключении системного VPN трафик Telegram будет проходить минуя прокси. Прокси восстанавливается автоматически после отключения VPN.</string>
   <string name="AutoPauseMedia">Авто пауза медиа системы</string>
-  <string name="AutoPauseMediaHint">Приостанавливать музыку или другие аудио из других приложений, когда голосовое сообщение или видео проигрывается в moeGramX.</string>
+  <string name="AutoPauseMediaHint">Приостанавливать музыку или другие аудио из других приложений, когда голосовое сообщение или видео проигрывается в moegramX.</string>
   <string name="AutoPauseMediaResume">Продолжить после воспроизведения</string>
   <string name="ProxyAlertType">Тип прокси</string>
   <string name="ProxyAlertStatus">Состояние</string>

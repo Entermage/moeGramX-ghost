@@ -72,6 +72,17 @@ public class MessagesLoader implements Client.ResultHandler {
   private static final int CHUNK_SIZE_BOTTOM = 31;
   private static final int CHUNK_BOTTOM_OFFSET = -30;
 
+  private static final int FILTERED_PAGE_CHUNK_SIZE = 100;
+  private static final int FILTERED_PAGE_BOTTOM_OFFSET = -(FILTERED_PAGE_CHUNK_SIZE - 1);
+  private static final long FILTERED_PAGE_CONTINUATION_DELAY_MS = 500L;
+  private static final long FILTERED_PAGE_MAX_CONTINUATION_DELAY_MS = 5000L;
+
+  private static long filteredPageContinuationDelay (int continuationCount) {
+    int delayStep = Math.min(4, Math.max(0, continuationCount - 1) / 8);
+    return Math.min(FILTERED_PAGE_MAX_CONTINUATION_DELAY_MS,
+      FILTERED_PAGE_CONTINUATION_DELAY_MS << delayStep);
+  }
+
   public static final int MODE_INITIAL = 0;
   public static final int MODE_MORE_TOP = 1;
   public static final int MODE_MORE_BOTTOM = 2;
@@ -85,6 +96,7 @@ public class MessagesLoader implements Client.ResultHandler {
 
   private boolean isLoading;
   private int loadingMode;
+  private int filteredPageContinuationCount;
 
   private boolean isLoadingSponsoredMessage;
 
@@ -257,6 +269,26 @@ public class MessagesLoader implements Client.ResultHandler {
           return;
         }
 
+        if (object.getConstructor() == TdApi.Error.CONSTRUCTOR) {
+          Log.w(Log.TAG_MESSAGES_LOADER, "Received error: %s", TD.toErrorString(object));
+          synchronized (lock) {
+            if (contextId != currentContextId || lastHandler != this) {
+              return;
+            }
+            lastHandler = null;
+            isLoading = false;
+          }
+          mergeMode = MERGE_MODE_NONE;
+          mergeChunk = null;
+          filteredPageContinuationCount = 0;
+          UI.post(() -> {
+            if (contextId != currentContextId) return;
+            manager.onNetworkRequestSent();
+            UI.showError(object);
+          });
+          return;
+        }
+
         long ms = SystemClock.elapsedRealtime() - lastRequestTime;
 
         // int constructor = object.getConstructor();
@@ -303,13 +335,6 @@ public class MessagesLoader implements Client.ResultHandler {
               Log.i(Log.TAG_MESSAGES_LOADER, "Received %d events in %dms", ((TdApi.ChatEvents) object).events.length, ms);
             }
             messages = parseChatEvents(getChatId(), ((TdApi.ChatEvents) object).events);
-            knownTotalCount = -1;
-            nextSearchOffset = null; nextSearchFromMessageId = 0;
-            break;
-          }
-          case TdApi.Error.CONSTRUCTOR: {
-            Log.w(Log.TAG_MESSAGES_LOADER, "Received error: %s", TD.toErrorString(object));
-            messages = new TdApi.Message[0];
             knownTotalCount = -1;
             nextSearchOffset = null; nextSearchFromMessageId = 0;
             break;
@@ -551,6 +576,12 @@ public class MessagesLoader implements Client.ResultHandler {
     knownTotalMessageCount = -1;
 
     foundUnreadAtLeastOnce = false;
+    filteredPageContinuationCount = 0;
+    loadingSupportsFilteredContinuation = false;
+    loadingLocal = false;
+    loadingAllowMoreTop = false;
+    loadingAllowMoreBottom = false;
+    lastFromMessageId = null;
 
     canLoadTop = false;
     canLoadBottom = false;
@@ -1086,6 +1117,7 @@ public class MessagesLoader implements Client.ResultHandler {
 
   private long lastRequestTime;
 
+  private boolean loadingSupportsFilteredContinuation;
   private boolean loadingLocal, loadingAllowMoreTop, loadingAllowMoreBottom;
 
   private MessageId lastFromMessageId;
@@ -1120,6 +1152,7 @@ public class MessagesLoader implements Client.ResultHandler {
       loadingLocal = onlyLocal;
       loadingAllowMoreTop = allowMoreTop;
       loadingAllowMoreBottom = allowMoreBottom;
+      loadingSupportsFilteredContinuation = false;
 
       TdApi.Function<?> function;
 
@@ -1151,9 +1184,13 @@ public class MessagesLoader implements Client.ResultHandler {
             function = new TdApi.SearchChatMessages(sourceChatId, topicId, null, null, (lastFromMessageId = fromMessageId).getMessageId(), lastOffset = offset, lastLimit = limit, searchFilter);
           } else if (messageThread != null) {
             loadingLocal = false;
+            loadingSupportsFilteredContinuation = !manager.controller().inPreviewMode() &&
+              !manager.controller().isInForceTouchMode();
             Log.ensureReturnType(TdApi.GetMessageThreadHistory.class, TdApi.Messages.class);
             function = new TdApi.GetMessageThreadHistory(sourceChatId, messageThread.getOldestMessageId(), (lastFromMessageId = fromMessageId).getMessageId(), lastOffset = offset, lastLimit = limit);
           } else {
+            loadingSupportsFilteredContinuation = !manager.controller().inPreviewMode() &&
+              !manager.controller().isInForceTouchMode();
             Log.ensureReturnType(TdApi.GetChatHistory.class, TdApi.Messages.class);
             function = new TdApi.GetChatHistory(sourceChatId, (lastFromMessageId = fromMessageId).getMessageId(), lastOffset = offset, lastLimit = limit, loadingLocal);
           }
@@ -1373,6 +1410,25 @@ public class MessagesLoader implements Client.ResultHandler {
       }
     }
 
+    int filteredMessageCount = 0;
+    TdApi.Message oldestRawMessage = null;
+    TdApi.Message newestRawMessage = null;
+    boolean[] hiddenMessages = new boolean[messages.length];
+    for (int i = 0; i < messages.length; i++) {
+      TdApi.Message rawMessage = messages[i];
+      if (rawMessage == null) continue;
+      if (oldestRawMessage == null || rawMessage.id < oldestRawMessage.id) {
+        oldestRawMessage = rawMessage;
+      }
+      if (newestRawMessage == null || rawMessage.id > newestRawMessage.id) {
+        newestRawMessage = rawMessage;
+      }
+      hiddenMessages[i] = MoexMessageFilter.shouldHideInChat(tdlib, rawMessage, isChannel);
+      if (hiddenMessages[i]) {
+        filteredMessageCount++;
+      }
+    }
+
     final List<TdApi.Message> combineWithMessages = new ArrayList<>();
 
     if (needMeasureSpeed) {
@@ -1383,6 +1439,10 @@ public class MessagesLoader implements Client.ResultHandler {
         case MODE_MORE_BOTTOM: {
           while (maxIndex >= 0) {
             if (messages[maxIndex].id > startBottom) {
+              if (hiddenMessages[maxIndex]) {
+                maxIndex--;
+                continue;
+              }
               if (bottomMessage == null || !bottomMessage.wouldCombineWith(messages[maxIndex]))
                 break;
               combineWithMessages.add(messages[maxIndex]);
@@ -1394,6 +1454,10 @@ public class MessagesLoader implements Client.ResultHandler {
         case MODE_MORE_TOP: {
           while (minIndex < messages.length) {
             if (messages[minIndex].id < startTop) {
+              if (hiddenMessages[minIndex]) {
+                minIndex++;
+                continue;
+              }
               if (topMessage == null || !topMessage.wouldCombineWith(messages[minIndex]))
                 break;
               combineWithMessages.add(messages[minIndex]);
@@ -1425,7 +1489,7 @@ public class MessagesLoader implements Client.ResultHandler {
     TGMessage unreadBadged = null;
 
     for (int j = maxIndex; j >= minIndex; j--) {
-      if (MoexMessageFilter.shouldHideInChat(tdlib, messages[j], isChannel)) {
+      if (hiddenMessages[j]) {
         continue;
       }
       if (needMeasureSpeed) {
@@ -1445,7 +1509,14 @@ public class MessagesLoader implements Client.ResultHandler {
             containsScrollingMessage = true;
           }
           if (j > minIndex) {
-            while (j > minIndex && cur.combineWith(messages[j - 1], true)) {
+            while (j > minIndex) {
+              if (hiddenMessages[j - 1]) {
+                j--;
+                continue;
+              }
+              if (!cur.combineWith(messages[j - 1], true)) {
+                break;
+              }
               if (!containsScrollingMessage && scrollMessageId != null && scrollMessageId.compareTo(messages[j - 1].chatId, messages[j - 1].id)) {
                 containsScrollingMessage = true;
               }
@@ -1584,6 +1655,57 @@ public class MessagesLoader implements Client.ResultHandler {
       }
     }
 
+    boolean filteredOnlyPage = totalCount == 0 && filteredMessageCount > 0;
+    boolean continueTowardBottom = loadingMode == MODE_MORE_BOTTOM;
+    TdApi.Message continuationRawMessage = continueTowardBottom ?
+      newestRawMessage : oldestRawMessage;
+    long previousRawCursor = lastFromMessageId != null ? lastFromMessageId.getMessageId() : 0;
+    boolean rawCursorAdvanced = continuationRawMessage != null &&
+      (continueTowardBottom ?
+        previousRawCursor != 0 && continuationRawMessage.id > previousRawCursor :
+        previousRawCursor == 0 || continuationRawMessage.id < previousRawCursor);
+    boolean reachedRequestedRawEdge = continueTowardBottom && reachedChatHistoryEnd;
+    boolean continuationSupported = loadingSupportsFilteredContinuation &&
+      specialMode == SPECIAL_MODE_NONE && searchFilter == null;
+    boolean canContinueFilteredPage = continuationSupported && !loadingLocal &&
+      filteredOnlyPage && rawCursorAdvanced && !reachedRequestedRawEdge;
+
+    if (canContinueFilteredPage) {
+      final long continuationContextId = currentContextId;
+      final MessageId continuationMessageId = new MessageId(
+        continuationRawMessage.chatId, continuationRawMessage.id);
+      final int continuationOffset = continueTowardBottom ? FILTERED_PAGE_BOTTOM_OFFSET : 0;
+      final int continuationMode = loadingMode;
+      final boolean continuationAllowMoreTop = loadingAllowMoreTop;
+      final boolean continuationAllowMoreBottom = loadingAllowMoreBottom;
+      filteredPageContinuationCount++;
+      final long continuationDelay =
+        filteredPageContinuationDelay(filteredPageContinuationCount);
+      Log.i(Log.TAG_MESSAGES_LOADER,
+        "Skipping fully filtered history page %d, mode:%d previous:%d next:%s delay:%dms",
+        filteredPageContinuationCount, continuationMode, previousRawCursor,
+        continuationMessageId, continuationDelay);
+      tdlib.ui().postDelayed(() -> {
+        if (contextId != continuationContextId || getChatId() == 0) {
+          return;
+        }
+        synchronized (lock) {
+          isLoading = false;
+        }
+        load(continuationMessageId, continuationOffset, FILTERED_PAGE_CHUNK_SIZE,
+          continuationMode, false, continuationAllowMoreTop, continuationAllowMoreBottom);
+      }, continuationDelay);
+      return;
+    }
+
+    boolean filteredPageCannotAdvance = filteredOnlyPage && !loadingLocal &&
+      (!continuationSupported || reachedRequestedRawEdge || !rawCursorAdvanced);
+    boolean rawPageCannotProduceNewItems = messages.length == 0 ||
+      totalCount == 0 && filteredMessageCount == 0;
+    if (!filteredOnlyPage || filteredPageCannotAdvance) {
+      filteredPageContinuationCount = 0;
+    }
+
     final boolean couldLoadTop = canLoadTop;
     final boolean couldLoadBottom = canLoadBottom;
 
@@ -1611,7 +1733,7 @@ public class MessagesLoader implements Client.ResultHandler {
         break;
       }
       case MODE_MORE_BOTTOM: {
-        if (totalCount == 0 && !loadingLocal) {
+        if ((rawPageCannotProduceNewItems || filteredPageCannotAdvance) && !loadingLocal) {
           canLoadBottom = false;
           if (Log.isEnabled(Log.TAG_MESSAGES_LOADER)) {
             Log.i(Log.TAG_MESSAGES_LOADER, "Bottom end reached.");
@@ -1639,7 +1761,7 @@ public class MessagesLoader implements Client.ResultHandler {
         break;
       }
       case MODE_MORE_TOP: {
-        if (totalCount == 0 && !loadingLocal) {
+        if ((rawPageCannotProduceNewItems || filteredPageCannotAdvance) && !loadingLocal) {
           canLoadTop = false;
           if (Log.isEnabled(Log.TAG_MESSAGES_LOADER)) {
             Log.i(Log.TAG_MESSAGES_LOADER, "Top end reached.");

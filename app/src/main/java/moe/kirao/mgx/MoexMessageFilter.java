@@ -14,7 +14,7 @@ import tgx.td.Td;
 
 /**
  * Regex message filtering inspired by AyuGram4A's AyuFilter behavior.
- * This implementation is native to MoeGramX/TDLib and shares no Telegram UI code.
+ * This implementation is native to moegramX/TDLib and shares no Telegram UI code.
  */
 public final class MoexMessageFilter {
   private static volatile List<Pattern> compiledPatterns;
@@ -33,6 +33,11 @@ public final class MoexMessageFilter {
       if (pattern.matcher(text.text).find()) return true;
     }
     return false;
+  }
+
+  public static boolean mayHideRegexInChat (boolean isChannel) {
+    return MoexConfig.filterEnabled && (MoexConfig.filterInChats || isChannel) &&
+      !patterns().isEmpty();
   }
 
   public static boolean isShadowBanned (Tdlib tdlib, TdApi.Message message) {

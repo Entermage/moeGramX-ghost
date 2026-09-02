@@ -3317,10 +3317,15 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   public static int getAnchorHighlightMode (int accountId, TdApi.Chat chat, @Nullable ThreadInfo threadInfo) {
+    return getAnchorHighlightMode(accountId, chat, threadInfo, true);
+  }
+
+  public static int getAnchorHighlightMode (int accountId, TdApi.Chat chat,
+                                            @Nullable ThreadInfo threadInfo, boolean allowUnread) {
     if (chat == null) {
       return HIGHLIGHT_MODE_NONE;
     }
-    boolean canGoUnread = canGoUnread(chat, threadInfo);
+    boolean canGoUnread = allowUnread && canGoUnread(chat, threadInfo);
     Settings.SavedMessageId messageId = Settings.instance().getScrollMessageId(accountId, chat.id,
       threadInfo != null ? threadInfo.getMessageTopicId() : null
     );
@@ -3336,7 +3341,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
       if (canGoUnread)
         return HIGHLIGHT_MODE_UNREAD;
     }
-    if (threadInfo != null) {
+    if (threadInfo != null && allowUnread) {
       return HIGHLIGHT_MODE_UNREAD;
     }
     return HIGHLIGHT_MODE_NONE;

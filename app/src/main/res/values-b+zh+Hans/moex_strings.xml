@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="MoexSettings">moeGramX 选项</string>
+  <string name="MoexSettings">moegramX 选项</string>
   <string name="GeneralMoexSettings">通用</string>
   <string name="InterfaceMoexSettings">界面</string>
   <string name="ChatsMoexSettings">聊天</string>
@@ -26,7 +26,7 @@
   <string name="showIdProfile">在个人资料页显示用户 ID</string>
   <string name="DisableSendAsButton">频道</string>
   <string name="MoexAbout">关于</string>
-  <string name="MoexAboutText" formatted="true">**moeGramX** — 是一款基于官方源代码和 TDlib 的可爱且功能丰富的实验性客户端。欢迎您提出功能建议，报告问题，或在我们的讨论组聊天！</string>
+  <string name="MoexAboutText" formatted="true">**moegramX** — 是一款基于官方源代码和 TDlib 的可爱且功能丰富的实验性客户端。欢迎您提出功能建议，报告问题，或在我们的讨论组聊天！</string>
   <string name="HideCameraButtonInfo">隐藏相机按钮依旧会将相机按钮添加到附件菜单底部。</string>
   <string name="IncreaseRecents">增加更多的最近贴纸</string>
   <string name="hideMessagesBadge">隐藏未读消息数</string>
@@ -82,7 +82,7 @@
   <string name="ProxyDisableOnVpn">系统 VPN 开启时禁用</string>
   <string name="ProxyDisableOnVpnHint">连接系统 VPN 时，让 VPN 处理 Telegram 流量，不使用内置代理。系统 VPN 断开时，自动恢复内置代理。</string>
   <string name="AutoPauseMedia">暂停系统媒体播放</string>
-  <string name="AutoPauseMediaHint">在 moeGramX 中播放语音消息、视频消息或视频时，暂停音乐或其他应用播放的音频。</string>
+  <string name="AutoPauseMediaHint">在 moegramX 中播放语音消息、视频消息或视频时，暂停音乐或其他应用播放的音频。</string>
   <string name="AutoPauseMediaResume">结束后恢复播放</string>
   <string name="ProxyAlertType">代理类型</string>
   <string name="ProxyAlertStatus">状态</string>

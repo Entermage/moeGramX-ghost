@@ -840,6 +840,7 @@ public class MainActivity extends BaseActivity implements GlobalAccountListener,
     // System shit
 
     RunnableData<TdlibAccount> consumer = null;
+    TdlibAccount requestedAccount = null;
     String text = null;
     String actionText = null;
 
@@ -866,10 +867,25 @@ public class MainActivity extends BaseActivity implements GlobalAccountListener,
         if (navigation.isEmpty()) {
           initMainController(null, null, null);
         }
+        if (TdlibUi.isOpenMessageLink(url)) {
+          TdlibManager manager = TdlibManager.instance();
+          requestedAccount = manager.currentAccount();
+          long requestedAccountUserId = TdlibUi.getOpenMessageAccountUserId(url);
+          if (requestedAccountUserId != 0) {
+            int requestedAccountId = manager.accountIdForUserId(requestedAccountUserId, 0);
+            if (requestedAccountId != -1) {
+              requestedAccount = manager.account(requestedAccountId);
+            }
+          }
+          if (requestedAccount.isUnauthorized()) {
+            requestedAccount = manager.currentAccount();
+          }
+        }
         consumer = account -> {
           ViewController<?> context = navigation.getCurrentStackItem();
           if (context != null) {
-            account.tdlib().awaitInitialization(() -> account.tdlib().ui().openTelegramUrl(new TdlibContext(MainActivity.this, tdlib), url, null, null));
+            Tdlib accountTdlib = account.tdlib();
+            accountTdlib.awaitInitialization(() -> accountTdlib.ui().openTelegramUrl(new TdlibContext(MainActivity.this, accountTdlib), url, null, null));
           }
         };
         text = Lang.getString(R.string.OpenLinkAs);
@@ -879,7 +895,11 @@ public class MainActivity extends BaseActivity implements GlobalAccountListener,
     }
 
     if (consumer != null) {
-      performAs(text, actionText, consumer);
+      if (requestedAccount != null) {
+        consumer.runWithData(requestedAccount);
+      } else {
+        performAs(text, actionText, consumer);
+      }
       return true;
     }
 

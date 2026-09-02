@@ -1,5 +1,5 @@
 /*
- * This file is created under moeGramX project development under GPLv3 license.
+ * This file is created under moegramX project development under GPLv3 license.
  * Copyright © Kira Roubin (jplie), 2024 (kirao@kiri.su)
  *
  * This program is free software: you can redistribute it and/or modify
