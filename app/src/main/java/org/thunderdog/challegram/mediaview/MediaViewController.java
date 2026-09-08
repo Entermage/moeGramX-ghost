@@ -119,6 +119,7 @@ import org.thunderdog.challegram.navigation.RtlCheckListener;
 import org.thunderdog.challegram.navigation.StopwatchHeaderButton;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
 import org.thunderdog.challegram.navigation.ViewController;
+import org.thunderdog.challegram.player.TGPlayerController;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.CallManager;
 import org.thunderdog.challegram.telegram.MessageListener;
@@ -8486,14 +8487,30 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   }
 
   public static void openFromMessage (TGMessageMedia messageContainer, long messageId) {
+    openFromMessageLink(messageContainer, messageId, 0, false);
+  }
+
+  public static boolean openFromMessageLink (TGMessage messageContainer, long messageId, int mediaTimestamp, boolean single) {
     ViewController<?> context = messageContainer.controller();
     TdApi.Message msg = messageContainer.getMessage(messageId);
-    MediaItem item = MediaItem.valueOf(messageContainer, messageId);
-    if (item == null) {
-      return;
+    if (msg == null || context.isStackLocked()) {
+      return false;
     }
 
-    boolean allowLoadMore = !messageContainer.isSponsoredMessage() && !item.isSecret() && !item.isViewOnce();
+    switch (msg.content.getConstructor()) {
+      case TdApi.MessageAudio.CONSTRUCTOR:
+      case TdApi.MessageVoiceNote.CONSTRUCTOR:
+      case TdApi.MessageVideoNote.CONSTRUCTOR: {
+        return playMessageFromTimestamp(context, msg, mediaTimestamp);
+      }
+    }
+
+    MediaItem item = MediaItem.valueOf(messageContainer, messageId);
+    if (item == null) {
+      return false;
+    }
+
+    boolean allowLoadMore = !single && !messageContainer.isSponsoredMessage() && !item.isSecret() && !item.isViewOnce();
     TdApi.SearchMessagesFilter filter = null;
     if (allowLoadMore) {
       //noinspection SwitchIntDef
@@ -8531,9 +8548,6 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     MediaStack stack = null;
 
-    if (context.isStackLocked()) {
-      return;
-    }
     if (allowLoadMore && context instanceof MediaCollectorDelegate) {
       stack = ((MediaCollectorDelegate) context).collectMedias(msg.id, messageContainer.isSponsoredMessage(), filter);
     }
@@ -8541,6 +8555,9 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     if (stack == null) {
       stack = new MediaStack(context.context(), context.tdlib());
       stack.set(item);
+    }
+    if (mediaTimestamp > 0 && stack.getCurrent().isVideo()) {
+      stack.getCurrent().setInitialSeekPositionSeconds(mediaTimestamp);
     }
 
     Args args = new Args(context, MODE_MESSAGES, stack);
@@ -8557,6 +8574,87 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     }
 
     openWithArgs(context, args);
+    return true;
+  }
+
+  private static boolean playMessageFromTimestamp (ViewController<?> context, TdApi.Message message, int mediaTimestamp) {
+    TGPlayerController player = context.tdlib().context().player();
+    int playState = player.getPlayState(context.tdlib(), message);
+    if (playState == TGPlayerController.STATE_NONE || playState == TGPlayerController.STATE_PAUSED) {
+      player.playPauseMessage(context.tdlib(), message, null);
+    }
+    if (mediaTimestamp <= 0) {
+      return true;
+    }
+
+    final long positionMillis = TimeUnit.SECONDS.toMillis(mediaTimestamp);
+    final boolean isVideoNote = message.content.getConstructor() == TdApi.MessageVideoNote.CONSTRUCTOR;
+    if (!isVideoNote && player.canSeekTrack(message)) {
+      player.seekTrack(message, positionMillis);
+      return true;
+    }
+    if (isVideoNote) {
+      long durationMillis = player.getPlayDuration(context.tdlib(), message);
+      if (durationMillis > 0) {
+        float seekProgress = MathUtils.clamp((float) ((double) positionMillis / (double) durationMillis));
+        UI.post(() -> {
+          if (!context.isDestroyed() && player.getPlayState(context.tdlib(), message) != TGPlayerController.STATE_NONE) {
+            context.context().getRoundVideoController().seekTo(seekProgress, false);
+          }
+        });
+        return true;
+      }
+    }
+
+    player.addTrackListener(context.tdlib(), message, new TGPlayerController.TrackListener() {
+      private boolean isDone;
+
+      private void remove () {
+        if (!isDone) {
+          isDone = true;
+          UI.post(() -> player.removeTrackListener(context.tdlib(), message, this));
+        }
+      }
+
+      private void finish (Runnable action) {
+        if (!isDone) {
+          isDone = true;
+          UI.post(() -> {
+            player.removeTrackListener(context.tdlib(), message, this);
+            if (!context.isDestroyed() && player.getPlayState(context.tdlib(), message) != TGPlayerController.STATE_NONE) {
+              action.run();
+            }
+          });
+        }
+      }
+
+      @Override
+      public void onTrackStateChanged (Tdlib tdlib, long chatId, long messageId, int fileId, int state) {
+        if (state == TGPlayerController.STATE_NONE) {
+          remove();
+        }
+      }
+
+      @Override
+      public void onTrackPlayProgress (Tdlib tdlib, long chatId, long messageId, int fileId, float progress, long position, long totalDuration, boolean isBuffering) {
+        if (isDone) {
+          return;
+        }
+        if (isVideoNote) {
+          if (totalDuration <= 0) {
+            return;
+          }
+          float seekProgress = MathUtils.clamp((float) ((double) positionMillis / (double) totalDuration));
+          finish(() -> context.context().getRoundVideoController().seekTo(seekProgress, false));
+        } else {
+          if (!player.canSeekTrack(message)) {
+            return;
+          }
+          finish(() -> player.seekTrack(message, positionMillis));
+        }
+      }
+    });
+    return true;
   }
 
   @Override

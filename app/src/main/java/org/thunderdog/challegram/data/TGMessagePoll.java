@@ -733,7 +733,7 @@ public class TGMessagePoll extends TGMessage implements ClickHelper.Delegate, Co
         c.drawLine(startX + Screen.dp(34f), lineY, rightX, lineY, Paints.getProgressPaint(ColorUtils.alphaColor(separatorAlpha, getSeparatorColor()),  Screen.separatorSize()));
       }
 
-      if (highlightOptionId == optionId) {
+      if (highlightOptionId == optionId || (linkedOptionId != null && linkedOptionId.equals(state.poll.options[optionId].id))) {
         c.drawRect(startX - (useBubbles() ? getBubbleContentPadding() : 0), startY, rightX, startY + optionHeight, Paints.fillingPaint(Theme.getColor(getPressColorId())));
       }
 
@@ -1700,6 +1700,31 @@ public class TGMessagePoll extends TGMessage implements ClickHelper.Delegate, Co
   private static final int HIGHLIGHT_BUTTON = -2;
   private static final int HIGHLIGHT_EXPLANATION = -3;
   private int highlightOptionId = HIGHLIGHT_NONE;
+  private String linkedOptionId;
+  private int linkedOptionHighlightGeneration;
+
+  /** Highlights a link's stable option ID without selecting or submitting an answer. */
+  public int highlightLinkedOption (String optionId) {
+    int top = getContentY() + getQuestionTitleHeight() + Screen.dp(18f);
+    for (int i = 0; i < options.length; i++) {
+      int index = findOptionId(i, displayOrder);
+      int height = getOptionHeight(options[index].text);
+      if (optionId.equals(state.poll.options[index].id)) {
+        linkedOptionId = optionId;
+        final int generation = ++linkedOptionHighlightGeneration;
+        invalidate();
+        tdlib.ui().postDelayed(() -> {
+          if (generation == linkedOptionHighlightGeneration) {
+            linkedOptionId = null;
+            invalidate();
+          }
+        }, 2500);
+        return top + height / 2;
+      }
+      top += height;
+    }
+    return -1;
+  }
 
   private void setHighlightOption (int optionId, View view, float x, float y) {
     if (highlightOptionId != optionId) {

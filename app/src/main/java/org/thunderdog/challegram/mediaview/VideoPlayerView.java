@@ -254,6 +254,11 @@ public class VideoPlayerView implements Player.Listener, CallManager.CurrentCall
     if (seekToSavedPosition) {
       seekToSavedPosition = false;
       player.seekTo(savedPosition);
+    } else {
+      long initialSeekPositionMillis = mediaItem.consumeInitialSeekPositionMillis();
+      if (initialSeekPositionMillis > 0) {
+        player.seekTo(initialSeekPositionMillis);
+      }
     }
     if (forcePlay) {
       setPlaying(true);

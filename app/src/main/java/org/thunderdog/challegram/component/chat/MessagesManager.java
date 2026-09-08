@@ -40,6 +40,7 @@ import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.data.TGMessage;
 import org.thunderdog.challegram.data.TGMessageBotInfo;
+import org.thunderdog.challegram.data.TGMessagePoll;
 import org.thunderdog.challegram.data.TGMessageVideo;
 import org.thunderdog.challegram.data.ThreadInfo;
 import org.thunderdog.challegram.mediaview.data.MediaItem;
@@ -128,6 +129,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
       @Override
       public void onScrollStateChanged (RecyclerView recyclerView, int newState) {
         if (newState == RecyclerView.SCROLL_STATE_DRAGGING) {
+          clearMessageLinkTarget();
           controller.collapsePinnedMessagesBar(true);
           if (Settings.instance().needHideChatKeyboardOnScroll()) {
             controller.hideAllKeyboards();
@@ -539,6 +541,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   public void destroy (ViewController<?> context) {
+    clearMessageLinkTarget();
     resetScroll();
     returnToMessageIds = null;
     highlightMode = 0;
@@ -1276,6 +1279,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
         break;
       }
     }
+    scheduleMessageLinkTarget();
   }
 
   // Bot info
@@ -2544,6 +2548,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   private void onBlur () {
+    clearMessageLinkTarget();
     saveScrollPosition();
   }
 
@@ -2671,6 +2676,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     viewMessages(false);
     saveScrollPosition();
     checkSponsoredMessages();
+    scheduleMessageLinkTarget();
   }
 
   // Highlight message id
@@ -3132,6 +3138,62 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }*/
 
   private long[] returnToMessageIds;
+  private MessageId pendingMessageLinkId;
+  private TdApi.MessageLinkInfo pendingMessageLinkTarget;
+
+  public void setMessageLinkTarget (MessageId messageId, TdApi.MessageLinkInfo linkInfo) {
+    clearMessageLinkTarget();
+    if (messageId.getChatId() != loader.getChatId() || linkInfo.message == null ||
+        linkInfo.message.id != messageId.getMessageId() || linkInfo.message.chatId != messageId.getChatId()) {
+      return;
+    }
+    pendingMessageLinkId = messageId;
+    pendingMessageLinkTarget = linkInfo;
+    scheduleMessageLinkTarget();
+  }
+
+  private void clearMessageLinkTarget () {
+    pendingMessageLinkId = null;
+    pendingMessageLinkTarget = null;
+  }
+
+  private void scheduleMessageLinkTarget () {
+    final TdApi.MessageLinkInfo target = pendingMessageLinkTarget;
+    if (target == null || !controller.isFocused() || controller.isDestroyed()) {
+      return;
+    }
+    // The loader can replace the adapter during initial loading. Resolve the container
+    // after that update, and never replay a superseded link or a link from another chat.
+    controller.getMessagesView().post(() -> {
+      if (target != pendingMessageLinkTarget || pendingMessageLinkId == null ||
+          !controller.isFocused() || controller.isDestroyed()) {
+        return;
+      }
+      MessageId messageId = pendingMessageLinkId;
+      if (messageId.getChatId() != loader.getChatId()) {
+        clearMessageLinkTarget();
+        return;
+      }
+      int index = adapter.indexOfMessageContainer(messageId);
+      TGMessage message = index >= 0 ? adapter.getMessage(index) : null;
+      if (message == null || !message.isDescendantOrSelf(messageId.getMessageId())) {
+        return; // displayMessages will retry after the requested message is loaded.
+      }
+      clearMessageLinkTarget();
+      message.buildLayout(getRecyclerWidth());
+      if (message instanceof TGMessagePoll && !StringUtils.isEmpty(target.pollOptionId)) {
+        int centerY = ((TGMessagePoll) message).highlightLinkedOption(target.pollOptionId);
+        if (centerY >= 0) {
+          stopScroll();
+          // The reverse layout's offset is measured from the bottom edge.
+          scrollToPositionWithOffset(index, getTargetHeight() / 2 - message.getHeight() + centerY, false);
+          wasScrollByUser = false;
+          return;
+        }
+      }
+      controller.applyMessageLinkTarget(message, messageId, target);
+    });
+  }
 
   public long[] extendReturnToMessageIdStack (MessageId addMessageId) {
     if (!hasReturnMessage() || !highlightMessageId.compareTo(addMessageId)) {
@@ -3144,6 +3206,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     if (isEventLog()) {
       return;
     }
+    clearMessageLinkTarget();
 
     this.highlightMessageId = messageId;
     this.highlightMode = highlightMode;

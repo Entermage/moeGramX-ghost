@@ -1744,6 +1744,7 @@ public class TdlibUi extends Handler {
     public TdApi.ChatInviteLinkInfo inviteLinkInfo;
     public ThreadInfo threadInfo;
     public TdApi.MessageTopic messageTopicId;
+    public TdApi.MessageLinkInfo messageLinkTarget;
     public TdApi.SearchMessagesFilter filter;
     public TdApi.InternalLinkTypeVideoChat videoChatOrLiveStreamInvitation;
     public TdApi.FormattedText fillDraft;
@@ -1829,6 +1830,11 @@ public class TdlibUi extends Handler {
 
     public ChatOpenParameters searchFilter (TdApi.SearchMessagesFilter filter) {
       this.filter = filter;
+      return this;
+    }
+
+    public ChatOpenParameters messageLinkTarget (TdApi.MessageLinkInfo target) {
+      this.messageLinkTarget = target;
       return this;
     }
 
@@ -2141,6 +2147,8 @@ public class TdlibUi extends Handler {
     final TdApi.InternalLinkTypeVideoChat voiceChatInvitation = params != null ? params.videoChatOrLiveStreamInvitation : null;
     final ThreadInfo messageThread = params != null ? params.threadInfo : null;
     final TdApi.MessageTopic messageTopicId = params != null ? params.messageTopicId : null;
+    final TdApi.MessageLinkInfo messageLinkTarget = params != null ? params.messageLinkTarget : null;
+    final boolean openingSearch = params != null && !StringUtils.isEmpty(params.searchQuery);
     final TdApi.SearchMessagesFilter filter = params != null ? params.filter : null;
     final MessagesController.Referrer referrer = params != null && !StringUtils.isEmpty(params.inviteLink) ? new MessagesController.Referrer(params.inviteLink) : null;
     final TdApi.FormattedText forceDraft = params != null && !Td.isEmpty(params.fillDraft) ? params.fillDraft : null;
@@ -2177,10 +2185,13 @@ public class TdlibUi extends Handler {
     final boolean isSelfChat = tdlib.isSelfChat(chat.id);
 
     boolean doneOpen = false;
-    if (context instanceof MessagesController && !((MessagesController) context).inPreviewMode() && ((MessagesController) context).compareChat(chat.id, messageThread, onlyScheduled)) {
+    if (!openingSearch && context instanceof MessagesController && context.tdlib() == tdlib && !((MessagesController) context).inPreviewMode() && ((MessagesController) context).compareChat(chat.id, messageThread, onlyScheduled)) {
       boolean doneSomething = false;
       if (highlightMode == MessagesManager.HIGHLIGHT_MODE_NORMAL && highlightMessageId != null) {
         ((MessagesController) context).highlightMessage(highlightMessageId, urlOpenParameters);
+        if (messageLinkTarget != null) {
+          ((MessagesController) context).openMessageLinkTarget(highlightMessageId, messageLinkTarget);
+        }
         doneSomething = true;
       }
       if (shareItem != null) {
@@ -2207,10 +2218,13 @@ public class TdlibUi extends Handler {
       }
       doneOpen = true;
     }
-    if (!doneOpen && highlightMode == MessagesManager.HIGHLIGHT_MODE_NORMAL && highlightMessageId != null) {
+    if (!doneOpen && !openingSearch && highlightMode == MessagesManager.HIGHLIGHT_MODE_NORMAL && highlightMessageId != null) {
       ViewController<?> c = context.context().navigation().getCurrentStackItem();
-      if (c != null && c != context && c.tdlib() == context.tdlib() && c instanceof MessagesController && !((MessagesController) c).inPreviewMode() && ((MessagesController) c).compareChat(chat.id, messageThread, onlyScheduled)) {
+      if (c != null && c != context && c.tdlib() == tdlib && c instanceof MessagesController && !((MessagesController) c).inPreviewMode() && ((MessagesController) c).compareChat(chat.id, messageThread, onlyScheduled)) {
         ((MessagesController) c).highlightMessage(highlightMessageId, urlOpenParameters);
+        if (messageLinkTarget != null) {
+          ((MessagesController) c).openMessageLinkTarget(highlightMessageId, messageLinkTarget);
+        }
         doneOpen = true;
       }
     }
@@ -2264,6 +2278,9 @@ public class TdlibUi extends Handler {
     }
 
     final Runnable actor = () -> {
+      if (messageLinkTarget != null && highlightMessageId != null && !controller.isDestroyed()) {
+        controller.openMessageLinkTarget(highlightMessageId, messageLinkTarget);
+      }
       if (after != null) {
         after.runWithLong(chat.id);
       }
@@ -2427,8 +2444,28 @@ public class TdlibUi extends Handler {
     openChat(context, 0, new TdApi.SearchPublicChat(username), new ChatOpenParameters().urlOpenParameters(openParameters).keepStack().openDirectMessagesChat());
   }
 
+  private void openResolvedChatLink (TdlibDelegate context, TdApi.Function<TdApi.Chat> request, boolean profile, @Nullable String draft, @Nullable UrlOpenParameters openParameters) {
+    tdlib.send(request, (chat, error) -> post(() -> {
+      if (context.context().navigation().isDestroyed()) return;
+      if (error != null) {
+        showChatOpenError(request, error, new ChatOpenParameters().urlOpenParameters(openParameters));
+      } else if (chat != null) {
+        if (profile) {
+          openChatProfile(context, chat, null, openParameters);
+        } else {
+          ChatOpenParameters params = new ChatOpenParameters().keepStack().urlOpenParameters(openParameters);
+          if (ChatId.isPrivate(chat.id) && !tdlib.isBotChat(chat) && !StringUtils.isEmpty(draft)) {
+            // TDLib normalizes the link's draft text before returning its link type.
+            params.fillDraft(new TdApi.FormattedText(draft, null));
+          }
+          openChat(context, chat, params);
+        }
+      }
+    }));
+  }
+
   public void openVideoChatOrLiveStream (final TdlibDelegate context, final @NonNull TdApi.InternalLinkTypeVideoChat videoChatOrLiveStreamInvitation, final @Nullable UrlOpenParameters openParameters) {
-    openChat(context, 0, new TdApi.SearchPublicChat(videoChatOrLiveStreamInvitation.chatUsername), new ChatOpenParameters().urlOpenParameters(openParameters).videoChatOrLiveStreamInvitation(videoChatOrLiveStreamInvitation).keepStack().openProfileInCaseOfPrivateChat());
+    openChat(context, 0, new TdApi.SearchPublicChat(videoChatOrLiveStreamInvitation.chatUsername), new ChatOpenParameters().urlOpenParameters(openParameters).keepStack());
   }
 
   private void joinGroupCall (final TdlibDelegate context, final TdApi.InputGroupCall inputGroupCall, final @Nullable UrlOpenParameters openParameters) {
@@ -2505,13 +2542,12 @@ public class TdlibUi extends Handler {
 
   public void openMessage (final TdlibDelegate context, final TdApi.MessageLinkInfo messageLink, final @Nullable UrlOpenParameters openParameters) {
     if (messageLink.message != null) {
-      // TODO support for album, media timestamp, etc
       MessageId messageId = new MessageId(messageLink.message.chatId, messageLink.message.id);
       if (Td.messageThreadId(messageLink.topicId) != 0) {
         // FIXME TDLib/Server: need GetMessageThread alternative that accepts (chatId, messageThreadId)
         context.tdlib().send(new TdApi.GetMessageThread(messageId.getChatId(), messageId.getMessageId()), (messageThreadInfo, error) -> {
           if (error != null) {
-            openMessage(context, messageLink.chatId, messageId, openParameters);
+            openMessageLinkChat(context, messageLink, null, openParameters);
           } else {
             ThreadInfo messageThread = ThreadInfo.openedFromMessage(context.tdlib(), messageThreadInfo, openParameters != null ? openParameters.messageId : null);
             if (Config.SHOW_CHANNEL_POST_REPLY_INFO_IN_COMMENTS) {
@@ -2530,19 +2566,23 @@ public class TdlibUi extends Handler {
                       repliedMessage.content
                     );
                   }
-                  openMessage(context, messageThread.getChatId(), messageId, messageThread, openParameters);
+                  openMessageLinkChat(context, messageLink, messageThread, openParameters);
                 });
                 return;
               }
             }
-            openMessage(context, messageThread.getChatId(), messageId, messageThread, openParameters);
+            openMessageLinkChat(context, messageLink, messageThread, openParameters);
           }
         });
       } else {
-        // TODO: properly handle messageLink.topicId
-        openMessage(context, messageLink.chatId, messageId, openParameters);
+        openMessageLinkChat(context, messageLink, null, openParameters);
       }
     } else {
+      // A topic-only link has no specific message. Keep TGX's merged-chat view.
+      if (messageLink.topicId != null) {
+        openChat(context, messageLink.chatId, new ChatOpenParameters().keepStack().urlOpenParameters(openParameters));
+        return;
+      }
       if (tdlib.chat(messageLink.chatId) != null) {
         UI.showToast(tdlib.isChannel(messageLink.chatId) ? R.string.PostNotFound : R.string.MessageNotFound, Toast.LENGTH_SHORT);
       }
@@ -2556,6 +2596,19 @@ public class TdlibUi extends Handler {
 
   public void openScheduledMessage (final TdlibDelegate context, final long chatId, final MessageId messageId) {
     openChat(context, chatId, new ChatOpenParameters().keepStack().scheduledOnly().highlightMessage(messageId).ensureHighlightAvailable());
+  }
+
+  private void openMessageLinkChat (TdlibDelegate context, TdApi.MessageLinkInfo link, @Nullable ThreadInfo thread, @Nullable UrlOpenParameters openParameters) {
+    long chatId = thread != null ? thread.getChatId() : link.chatId;
+    ChatOpenParameters params = new ChatOpenParameters()
+      .keepStack()
+      .messageThread(thread)
+      .urlOpenParameters(openParameters)
+      .messageLinkTarget(link);
+    if (link.message != null) {
+      params.highlightMessage(new MessageId(chatId, link.message.id)).ensureHighlightAvailable();
+    }
+    openChat(context, chatId, params);
   }
 
   public void openPrivateChat (final TdlibDelegate context, final long userId, final @Nullable ChatOpenParameters openParameters) {
@@ -3463,10 +3516,14 @@ public class TdlibUi extends Handler {
   private static final class PublicChatPreviewLink {
     public final String username;
     public final @Nullable String query;
+    public final int beforeMessageId;
+    public final int afterMessageId;
 
-    private PublicChatPreviewLink (String username, @Nullable String query) {
+    private PublicChatPreviewLink (String username, @Nullable String query, int beforeMessageId, int afterMessageId) {
       this.username = username;
       this.query = query;
+      this.beforeMessageId = beforeMessageId;
+      this.afterMessageId = afterMessageId;
     }
   }
 
@@ -3486,7 +3543,9 @@ public class TdlibUi extends Handler {
       if (StringUtils.isEmpty(username)) {
         return null;
       }
-      return new PublicChatPreviewLink(username, query);
+      int beforeMessageId = PublicChatPreviewPagination.parseServerMessageId(uri.getQueryParameter("before"));
+      int afterMessageId = PublicChatPreviewPagination.parseServerMessageId(uri.getQueryParameter("after"));
+      return new PublicChatPreviewLink(username, query, beforeMessageId, afterMessageId);
     } catch (Throwable t) {
       Log.i("Unable to parse public chat preview link: %s", t, url);
       return null;
@@ -3731,6 +3790,23 @@ public class TdlibUi extends Handler {
     if (link == null) {
       return false;
     }
+    if (link.accountUserId != 0 && link.accountUserId != tdlib.myUserId()) {
+      TdlibManager manager = TdlibManager.instance();
+      int accountId = manager.accountIdForUserId(link.accountUserId, 0);
+      TdlibAccount account = accountId != -1 ? manager.account(accountId) : null;
+      if (account == null || account.isUnauthorized()) {
+        showOpenMessageUnsupported(link.accountUserId, openParameters);
+        return true;
+      }
+      Tdlib target = account.tdlib();
+      ViewController<?> origin = context.context().navigation().getCurrentStackItem();
+      target.awaitInitialization(() -> target.ui().post(() -> {
+        if (!context.context().navigation().isDestroyed() && context.context().navigation().getCurrentStackItem() == origin && target.myUserId() == link.accountUserId) {
+          target.ui().openOpenMessageLink(new TdlibContext(context.context(), target), rawUrl, openParameters);
+        }
+      }));
+      return true;
+    }
     if (link.userId != 0) {
       long chatId = ChatId.fromUserId(link.userId);
       if (ChatId.isPrivate(chatId)) {
@@ -3747,6 +3823,7 @@ public class TdlibUi extends Handler {
   }
 
   public void openTelegramUrl (final TdlibDelegate context, final String rawUrl, @Nullable UrlOpenParameters openParameters, @Nullable RunnableBool after) {
+    PublicChatPreviewLoader.cancelPending(context);
     if (StringUtils.isEmpty(rawUrl) || tdlib.context().inRecoveryMode()) {
       if (after != null)
         after.runWithBool(false);
@@ -3760,6 +3837,11 @@ public class TdlibUi extends Handler {
     }
     PublicChatPreviewLink publicChatPreviewLink = parsePublicChatPreviewLink(rawUrl);
     if (publicChatPreviewLink != null) {
+      if (publicChatPreviewLink.beforeMessageId != 0 || publicChatPreviewLink.afterMessageId != 0) {
+        PublicChatPreviewLoader.open(context, publicChatPreviewLink.username, publicChatPreviewLink.query,
+          publicChatPreviewLink.beforeMessageId, publicChatPreviewLink.afterMessageId, openParameters, after);
+        return;
+      }
       if (StringUtils.isEmpty(publicChatPreviewLink.query)) {
         openPublicChat(context, publicChatPreviewLink.username, openParameters);
       } else {
@@ -3879,8 +3961,14 @@ public class TdlibUi extends Handler {
         break;
       }
       case TdApi.InternalLinkTypeUserPhoneNumber.CONSTRUCTOR: {
-        final String phoneNumber = ((TdApi.InternalLinkTypeUserPhoneNumber) linkType).phoneNumber;
-        openChatProfile(context, 0, null, new TdApi.SearchUserByPhoneNumber(phoneNumber, false), openParameters);
+        TdApi.InternalLinkTypeUserPhoneNumber phoneLink = (TdApi.InternalLinkTypeUserPhoneNumber) linkType;
+        tdlib.send(new TdApi.SearchUserByPhoneNumber(phoneLink.phoneNumber, false), (user, error) -> post(() -> {
+          if (error != null) {
+            showLinkTooltip(tdlib, R.drawable.baseline_warning_24, TD.toErrorString(error), openParameters);
+          } else if (user != null && !context.context().navigation().isDestroyed()) {
+            openResolvedChatLink(context, new TdApi.CreatePrivateChat(user.id, false), phoneLink.openProfile, phoneLink.draftText, openParameters);
+          }
+        }));
         break;
       }
 
@@ -4349,7 +4437,7 @@ public class TdlibUi extends Handler {
         if (TdConstants.IV_PREVIEW_USERNAME.equals(publicChat.chatUsername) & !StringUtils.isEmpty(originalUrl)) {
           openExternalUrl(context, originalUrl, new UrlOpenParameters(openParameters).forceInstantView(), after);
         } else {
-          openPublicChat(context, publicChat.chatUsername, openParameters);
+          openResolvedChatLink(context, new TdApi.SearchPublicChat(publicChat.chatUsername), publicChat.openProfile, publicChat.draftText, openParameters);
         }
         break;
       }

@@ -110,6 +110,7 @@ public class MediaItem implements MessageSourceProvider, InvalidateContentProvid
   private final BaseActivity context;
   private final Tdlib tdlib;
   private final int type;
+  private long initialSeekPositionMillis;
   private int width, height;
   private TdApi.FormattedText caption;
   private ImageFile targetImage;
@@ -1610,6 +1611,17 @@ public class MediaItem implements MessageSourceProvider, InvalidateContentProvid
     return sourceMessageId;
   }
 
+  public MediaItem setInitialSeekPositionSeconds (int seconds) {
+    initialSeekPositionMillis = seconds > 0 ? TimeUnit.SECONDS.toMillis(seconds) : 0;
+    return this;
+  }
+
+  public long consumeInitialSeekPositionMillis () {
+    long positionMillis = initialSeekPositionMillis;
+    initialSeekPositionMillis = 0;
+    return positionMillis;
+  }
+
   public MediaItem setSourceMessage (TdApi.Message msg) {
     this.msg = msg;
     this.sourceChatId = msg.chatId;
@@ -1941,5 +1953,6 @@ public class MediaItem implements MessageSourceProvider, InvalidateContentProvid
   private void copyOptions (MediaItem from) {
     setShowCaptionAboveMedia(from.showCaptionAboveMedia);
     setHasSpoiler(from.hasSpoiler);
+    initialSeekPositionMillis = from.initialSeekPositionMillis;
   }
 }

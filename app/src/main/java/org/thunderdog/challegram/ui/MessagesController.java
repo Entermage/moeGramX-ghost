@@ -25,6 +25,7 @@ import android.content.res.Configuration;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Rect;
+import android.graphics.Typeface;
 import android.location.Location;
 import android.location.LocationManager;
 import android.media.MediaMetadataRetriever;
@@ -35,8 +36,11 @@ import android.os.SystemClock;
 import android.text.InputType;
 import android.text.SpannableString;
 import android.text.SpannableStringBuilder;
+import android.text.Spanned;
 import android.text.TextUtils;
+import android.text.style.BackgroundColorSpan;
 import android.text.style.ClickableSpan;
+import android.text.style.StyleSpan;
 import android.util.SparseIntArray;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -6577,6 +6581,71 @@ public class MessagesController extends ViewController<MessagesController.Argume
     } else {
       highlightMessage(messageId);
     }
+  }
+
+  /** Call after navigating/highlighting; the manager waits for asynchronous message loading. */
+  public void openMessageLinkTarget (MessageId messageId, TdApi.MessageLinkInfo linkInfo) {
+    if (!isDestroyed() && messageId.getChatId() == getChatId()) {
+      manager.setMessageLinkTarget(messageId, linkInfo);
+      showMessagesListIfNeeded();
+    }
+  }
+
+  public void applyMessageLinkTarget (TGMessage container, MessageId messageId, TdApi.MessageLinkInfo linkInfo) {
+    if (isDestroyed() || !isFocused() || messageId.getChatId() != getChatId()) {
+      return;
+    }
+    TdApi.Message message = container.getMessage(messageId.getMessageId());
+    if (message == null) {
+      return;
+    }
+    if (linkInfo.checklistTaskId != 0 && showLinkedChecklistTask(message, linkInfo.checklistTaskId)) {
+      return;
+    }
+    boolean single = !linkInfo.forAlbum && message.mediaAlbumId != 0;
+    if (linkInfo.mediaTimestamp > 0 || single) {
+      if (!MediaViewController.openFromMessageLink(container, message.id, linkInfo.mediaTimestamp, single)) {
+        UI.showToast(R.string.InternalUrlUnsupported, Toast.LENGTH_SHORT);
+      }
+    }
+  }
+
+  private boolean showLinkedChecklistTask (TdApi.Message message, int taskId) {
+    if (!(message.content instanceof TdApi.MessageChecklist)) {
+      return false;
+    }
+    TdApi.Checklist checklist = ((TdApi.MessageChecklist) message.content).list;
+    CharSequence[] rows = new CharSequence[checklist.tasks.length];
+    int selected = -1;
+    for (int i = 0; i < checklist.tasks.length; i++) {
+      TdApi.ChecklistTask task = checklist.tasks[i];
+      SpannableStringBuilder row = new SpannableStringBuilder(task.completionDate != 0 ? "☑ " : "☐ ");
+      row.append(TD.toCharSequence(task.text));
+      if (task.id == taskId) {
+        selected = i;
+        row.setSpan(new StyleSpan(Typeface.BOLD), 0, row.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        row.setSpan(new BackgroundColorSpan(Theme.getColor(ColorId.textSelectionHighlight)), 0, row.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+      }
+      rows[i] = row;
+    }
+    if (selected < 0) {
+      return false;
+    }
+    // Checklist messages do not yet have a task-row renderer. This read-only list
+    // exposes the linked task and its completion status without editing the checklist.
+    AlertDialog dialog = showAlert(new AlertDialog.Builder(context(), Theme.dialogTheme())
+      .setTitle(TD.toCharSequence(checklist.title))
+      .setItems(rows, null)
+      .setPositiveButton(Lang.getOK(), null));
+    if (dialog != null && dialog.getListView() != null) {
+      final int position = selected;
+      dialog.getListView().post(() -> {
+        if (dialog.isShowing()) {
+          dialog.getListView().setSelectionFromTop(position, Screen.dp(16f));
+        }
+      });
+    }
+    return true;
   }
 
   public void highlightMessage (MessageId messageId) {
