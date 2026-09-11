@@ -29,7 +29,6 @@ import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Parcelable;
 import android.os.SystemClock;
 import android.provider.ContactsContract;
 import android.text.Spannable;
@@ -2085,7 +2084,32 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
       return;
     }
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+    final ArrayList<Uri> sharedUris;
+    try {
+      sharedUris = ExternalShareUtils.collectUris(intent, intentAction);
+    } catch (RuntimeException e) {
+      Log.w("Cannot collect shared files", e);
+      shareTdlib = null;
+      shareIntent = null;
+      shareIntentAction = null;
+      UI.showToast(R.string.ShareContentUnsupported, Toast.LENGTH_SHORT);
+      return;
+    }
+    boolean needsStoragePermission = false;
+    for (Uri uri : sharedUris) {
+      if ("file".equals(uri.getScheme())) {
+        try {
+          String path = ExternalShareUtils.validateSharedFilePath(uri, context().getApplicationInfo().dataDir);
+          if (!U.canReadFile(path)) {
+            needsStoragePermission = true;
+            break;
+          }
+        } catch (java.io.IOException ignored) {
+          // Invalid or private paths are rejected below, without requesting storage access.
+        }
+      }
+    }
+    if (needsStoragePermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
       if (context().checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
         context().requestCustomPermissions(new String[] {Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE}, (code, permissions, grantResults, grantCount) -> {
           if (grantCount == permissions.length) {
@@ -2112,12 +2136,16 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
       UI.post(runnable, 1000l);
       try {
         switch (intentAction) {
+          case Intent.ACTION_VIEW: {
+            shareIntentImplFiles(tdlib, intent, true, false);
+            break;
+          }
           case Intent.ACTION_SEND: {
-            shareIntentImplSingle(tdlib, intent);
+            shareIntentImplFiles(tdlib, intent, false, false);
             break;
           }
           case Intent.ACTION_SEND_MULTIPLE: {
-            shareIntentImplMultiple(tdlib, intent);
+            shareIntentImplFiles(tdlib, intent, false, true);
             break;
           }
         }
@@ -2130,29 +2158,18 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     }).start();
   }
 
-  @SuppressWarnings("deprecation")
-  @Nullable
-  private static Uri getUri (@NonNull Bundle bundle, @NonNull String key) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-      return bundle.getParcelable(key, Uri.class);
-    } else {
-      return (Uri) bundle.get(key);
-    }
-  }
-
-  private void shareIntentImplSingle (Tdlib tdlib, final Intent intent) throws Throwable {
+  private void shareIntentImplFiles (Tdlib tdlib, final Intent intent, boolean asDocument, boolean mergeAlbum) throws Throwable {
     String type = intent.getType();
+    ArrayList<Uri> uris = ExternalShareUtils.collectUris(intent, asDocument ? Intent.ACTION_VIEW : Intent.ACTION_SEND);
     final ArrayList<TdApi.InputMessageContent> out = new ArrayList<>();
 
-    if (!StringUtils.isEmpty(type) && ContactsContract.Contacts.CONTENT_VCARD_TYPE.equals(type)) {
-      Bundle extras = intent.getExtras();
-      if (extras == null) {
-        throw new IllegalArgumentException("extras == null");
+    if (!asDocument && !mergeAlbum && uris.size() == 1 &&
+        ContactsContract.Contacts.CONTENT_VCARD_TYPE.equals(ExternalShareUtils.resolveMimeType(UI.getContext().getContentResolver(), uris.get(0), type))) {
+      Uri uri = uris.get(0);
+      if (U.isInternalUri(uri)) {
+        throw new IllegalArgumentException("Tried to share internal file");
       }
-      Uri uri = getUri(extras, Intent.EXTRA_STREAM);
-      if (uri == null) {
-        throw new IllegalArgumentException("uri == null");
-      }
+      ExternalShareUtils.resolveSharedFilePath(uri, UI.getAppContext().getApplicationInfo().dataDir);
       ContentResolver cr = UI.getContext().getContentResolver();
       try (InputStream stream = cr.openInputStream(uri)) {
         if (stream == null) {
@@ -2234,18 +2251,24 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
       }
     } else {
       // First, obtain text
-      String sendingText = obtainText(intent);
+      String sendingText = asDocument ? null : obtainText(intent);
 
-      // Second, obtain media
-      Parcelable parcelable = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-      Uri uri = U.getUri(parcelable);
-      if (uri != null) {
-        if (U.isInternalUri(uri)) {
-          throw new IllegalArgumentException("Tried to share internal file: " + uri.toString());
+      // Process every item with its own MIME type, regardless of how the sender supplied the URIs.
+      boolean failed = false;
+      for (Uri uri : uris) {
+        try {
+          String mimeType = ExternalShareUtils.resolveMimeType(UI.getContext().getContentResolver(), uri, type);
+          if (addShareUri(tdlib, out, mimeType, uri, sendingText, asDocument)) {
+            sendingText = null;
+          }
+        } catch (Throwable t) {
+          Log.w("Cannot prepare shared file", t);
+          failed = true;
         }
-        if (addShareUri(tdlib, out, type, uri, sendingText)) {
-          sendingText = null;
-        }
+      }
+      // The chat selector has no file-list confirmation: never silently send an incomplete batch.
+      if (failed) {
+        throw new IllegalArgumentException("One or more shared files could not be read");
       }
 
       // If sendingText still unused, then add it to the beginning of send queue
@@ -2253,7 +2276,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
         out.addAll(0, TD.explodeText(new TdApi.InputMessageText(new TdApi.FormattedText(sendingText, null), null, false), tdlib.maxMessageTextLength()));
       }
     }
-    shareContents(tdlib, type, out, false);
+    shareContents(tdlib, type, out, mergeAlbum);
   }
 
   private static String obtainText (Intent intent) {
@@ -2267,31 +2290,6 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     String subject = intent.getStringExtra(Intent.EXTRA_SUBJECT);
     String result = getShareText(subject, text);
     return result != null ? result.trim() : null;
-  }
-
-  private void shareIntentImplMultiple (Tdlib tdlib, Intent intent) {
-    ArrayList<Parcelable> uris = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
-    ArrayList<TdApi.InputMessageContent> out = new ArrayList<>(uris.size());
-    String type = intent.getType();
-
-    // First, obtain text
-    String sendingText = obtainText(intent);
-
-    for (Parcelable parcelable : uris) {
-      Uri uri = U.getUri(parcelable);
-      if (uri == null) {
-        throw new IllegalArgumentException("Unknown parcelable type: " + parcelable);
-      }
-      if (addShareUri(tdlib, out, type, uri, sendingText)) {
-        sendingText = null;
-      }
-    }
-    // If sendingText still unused, then add it to the beginning of send queue
-    if (!StringUtils.isEmpty(sendingText)) {
-      out.addAll(0, TD.explodeText(new TdApi.InputMessageText(new TdApi.FormattedText(sendingText, null), null, false), tdlib.maxMessageTextLength()));
-    }
-
-    shareContents(tdlib, type, out, true);
   }
 
   private static String getShareText (String subject, String text) {
@@ -2316,34 +2314,35 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
    *
    * @return true if provided caption parameter has been used as caption
    */
-  private static boolean addShareUri (Tdlib tdlib, ArrayList<TdApi.InputMessageContent> out, String mimeType, Uri uri, final @Nullable String rawCaption) {
-    if (uri == null) {
-      return false;
+  private static boolean addShareUri (Tdlib tdlib, ArrayList<TdApi.InputMessageContent> out, String mimeType, Uri uri, final @Nullable String rawCaption, boolean asDocument) throws java.io.IOException {
+    if (!ExternalShareUtils.isLocalFileUri(uri) || U.isInternalUri(uri)) {
+      throw new IllegalArgumentException("Unsupported or internal shared URI");
     }
 
-    String filePath = U.tryResolveFilePath(uri);
+    // Content providers remain the authority for bytes and names; local paths must stay outside app data.
+    String filePath = ExternalShareUtils.resolveSharedFilePath(uri, UI.getAppContext().getApplicationInfo().dataDir);
 
     if (StringUtils.isEmpty(filePath)) {
       throw new IllegalArgumentException("filePath cannot be resolved for type " + mimeType + ", uri: " + uri);
     }
 
-    if (mimeType.isEmpty()) {
-      String extension = U.getExtension(filePath);
-      if (extension != null) {
-        mimeType = TGMimeType.mimeTypeForExtension(extension);
-      }
+    if (U.isInternalUri(Uri.parse(filePath))) {
+      throw new IllegalArgumentException("Shared URI resolved to an internal file");
     }
 
-    if (!U.canReadFile(filePath)) {
-      filePath = uri.toString();
-
-      if (!U.canReadContentUri(uri)) {
-        return false;
-      }
+    boolean readable = "content".equals(uri.getScheme()) ? U.canReadContentUri(uri) : U.canReadFile(filePath);
+    if (!readable) {
+      throw new IllegalArgumentException("Shared file is not readable");
     }
 
     final int captionCodePointCount = rawCaption != null ? rawCaption.codePointCount(0, rawCaption.length()) : 0;
     final TdApi.FormattedText messageCaption = captionCodePointCount > 0 && captionCodePointCount <= tdlib.maxCaptionLength() ? new TdApi.FormattedText(rawCaption, null) : null;
+
+    if (asDocument) {
+      TdApi.InputFile file = TD.createInputFile(filePath, mimeType, null, true);
+      out.add(new TdApi.InputMessageDocument(new TdApi.InputDocument(file, null, true), messageCaption));
+      return messageCaption != null;
+    }
 
     if (!StringUtils.isEmpty(mimeType)) {
       if (mimeType.equals("image/webp")) {

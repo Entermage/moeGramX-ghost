@@ -1,0 +1,31 @@
+plugins {
+  id 'java'
+}
+
+repositories {
+  mavenCentral()
+}
+
+dependencies {
+  // Android framework implementation, rather than the SDK's compile-only Stub! classes.
+  implementation 'org.robolectric:android-all:16-robolectric-13921718'
+}
+
+tasks.named('compileJava', JavaCompile) {
+  source file('../../app/src/main/java/org/thunderdog/challegram/ui/ExternalShareUtils.java')
+  options.release = 17
+}
+
+tasks.register('runChecks', JavaExec) {
+  dependsOn tasks.named('classes')
+  classpath = sourceSets.main.runtimeClasspath
+  mainClass = 'org.thunderdog.challegram.ui.ExternalShareAndroidTest'
+  systemProperty 'repoRoot', rootProject.projectDir.toPath().resolve('../..').normalize().toFile().canonicalPath
+  maxHeapSize = '512m'
+}
+
+tasks.named('check') {
+  dependsOn tasks.named('runChecks')
+}
+
+defaultTasks 'runChecks'

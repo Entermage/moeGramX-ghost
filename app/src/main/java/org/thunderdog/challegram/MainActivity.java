@@ -860,6 +860,17 @@ public class MainActivity extends BaseActivity implements GlobalAccountListener,
         Uri data = intent.getData();
         if (data == null || StringUtils.isEmpty(data.getScheme()))
           return false;
+        if ("content".equals(data.getScheme()) || "file".equals(data.getScheme())) {
+          if (navigation.isEmpty()) {
+            initMainController(null, null, null);
+          }
+          // Keep the original Intent, including its URI grants and ClipData.
+          // File opening is a share confirmation flow, never a Telegram URL.
+          consumer = account -> shareIntent(account, action, intent);
+          text = Lang.getString(R.string.ShareAs);
+          actionText = Lang.getString(R.string.Share);
+          break;
+        }
         String url = data.toString();
         if (account.tdlib().ui().needViewInBrowser(url) && Intents.openUriInBrowser(data)) {
           return false;

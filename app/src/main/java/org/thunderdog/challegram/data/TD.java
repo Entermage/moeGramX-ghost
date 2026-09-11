@@ -1469,6 +1469,10 @@ public class TD {
   }
 
   public static TdApi.InputFile createInputFile (String path, @Nullable String type, @Nullable FileInfo out) {
+    return createInputFile(path, type, out, false);
+  }
+
+  public static TdApi.InputFile createInputFile (String path, @Nullable String type, @Nullable FileInfo out, boolean preserveOriginalName) {
     if (path != null) {
       if (path.startsWith("http://") || path.startsWith("https://")) {
         return new TdApi.InputFileRemote(path);
@@ -1503,7 +1507,7 @@ public class TD {
 
             if (!StringUtils.isEmpty(displayName)) {
               fileName = displayName;
-              if (!StringUtils.isEmpty(mimeType)) {
+              if (!preserveOriginalName && !StringUtils.isEmpty(mimeType)) {
                 String originalExtension = U.getExtension(path);
                 if (!BuildConfig.THEME_FILE_EXTENSION.equals(originalExtension)) {
                   String extension = TGMimeType.extensionForMimeType(mimeType);
@@ -1532,7 +1536,7 @@ public class TD {
           fileName = Lang.getString(R.string.File);
         }
 
-        if (!StringUtils.isEmpty(type)) {
+        if (!preserveOriginalName && !StringUtils.isEmpty(type)) {
           String originalExtension = U.getExtension(fileName);
           String originalMimeType = TGMimeType.mimeTypeForExtension(originalExtension);
           String extension = TGMimeType.extensionForMimeType(type);
