@@ -40,6 +40,7 @@ public final class ExternalShareAndroidTest {
     testManifestFilters(filters);
     testUriCollection();
     testMimeSelection();
+    testViewDocumentClassification();
     testSharedFilePaths();
     System.out.println("PASS: " + assertions + " assertions; manifest filters=" + filters.size());
   }
@@ -310,9 +311,13 @@ public final class ExternalShareAndroidTest {
       "a text-only share without a URI must stay empty");
 
     Intent clearedView = new Intent();
+    check(clearedView.getAction() == null, "the controller-facing VIEW fixture must have its action cleared");
     clearedView.putExtra(Intent.EXTRA_STREAM, "invalid but irrelevant for VIEW");
+    clearedView.putExtra(Intent.EXTRA_TEXT, "BEGIN:VCARD\\nFN:Ignored\\nEND:VCARD");
     clearedView.setClipData(clip(Uri.parse("https://example.com/irrelevant")));
     clearedView.setData(first);
+    checkList(ExternalShareUtils.collectUris(clearedView, Intent.ACTION_VIEW), first);
+    clearedView.setAction(""); // MainActivity consumes an Intent by replacing its action with an empty string.
     checkList(ExternalShareUtils.collectUris(clearedView, Intent.ACTION_VIEW), first);
 
     Intent view = new Intent(Intent.ACTION_VIEW);
@@ -386,6 +391,58 @@ public final class ExternalShareAndroidTest {
     checkEquals("image/webp", ExternalShareUtils.resolveMimeType(null, Uri.parse("file:///tmp/image.webp"), ""));
     checkEquals("application/octet-stream", ExternalShareUtils.resolveMimeType(null, noSuffix, "*/*"));
     checkEquals("image/gif", ExternalShareUtils.resolveMimeType(null, Uri.parse("file:///tmp/animation.GIF"), "image/*"));
+  }
+
+  private static void testViewDocumentClassification () {
+    check(!ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, "image/png"),
+      "VIEW image/png must remain media");
+    check(!ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, "image/*"),
+      "VIEW image/* must remain media");
+    check(!ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, "video/mp4"),
+      "VIEW video/mp4 must remain media");
+    check(!ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, "video/*"),
+      "VIEW video/* must remain media");
+    check(!ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, "audio/ogg"),
+      "VIEW audio/ogg must remain media");
+    check(!ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, "audio/*"),
+      "VIEW audio/* must remain media");
+
+    check(ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, null),
+      "VIEW with no resolved MIME must be sent as a document");
+    check(ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, ""),
+      "VIEW with an empty MIME must be sent as a document");
+    check(ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, "*/*"),
+      "VIEW with a generic MIME must be sent as a document");
+    check(ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, "application/octet-stream"),
+      "VIEW application/octet-stream must be sent as a document");
+    check(ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, "application/pdf"),
+      "VIEW PDF must be sent as a document");
+    check(ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, "text/vcard"),
+      "VIEW vCard must stay on the document path");
+    check(ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, "text/x-vcard"),
+      "VIEW Android contact vCard must stay on the document path");
+
+    check(!ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_SEND, "application/pdf"),
+      "SEND routing must remain unchanged");
+    check(!ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_SEND_MULTIPLE, null),
+      "SEND_MULTIPLE routing must remain unchanged");
+
+    String explicitOctet = ExternalShareUtils.resolveMimeType(null,
+      Uri.parse("file:///tmp/photo.png"), "application/octet-stream");
+    checkEquals("application/octet-stream", explicitOctet);
+    check(ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, explicitOctet),
+      "an explicit octet-stream declaration must not become image media from its suffix");
+
+    String inferredImage = ExternalShareUtils.resolveMimeType(null,
+      Uri.parse("file:///tmp/photo.png"), null);
+    checkEquals("image/png", inferredImage);
+    check(!ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, inferredImage),
+      "a VIEW image inferred from its suffix must remain media");
+
+    String extensionlessImage = ExternalShareUtils.resolveMimeType(null,
+      Uri.parse("file:///tmp/no_suffix"), "image/*");
+    check(!ExternalShareUtils.shouldSendAsDocument(Intent.ACTION_VIEW, extensionlessImage),
+      "a VIEW image declared by its viewer must not require a filename suffix");
   }
 
   private static void testSharedFilePaths () throws Exception {

@@ -2136,16 +2136,10 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
       UI.post(runnable, 1000l);
       try {
         switch (intentAction) {
-          case Intent.ACTION_VIEW: {
-            shareIntentImplFiles(tdlib, intent, true, false);
-            break;
-          }
-          case Intent.ACTION_SEND: {
-            shareIntentImplFiles(tdlib, intent, false, false);
-            break;
-          }
+          case Intent.ACTION_VIEW:
+          case Intent.ACTION_SEND:
           case Intent.ACTION_SEND_MULTIPLE: {
-            shareIntentImplFiles(tdlib, intent, false, true);
+            shareIntentImplFiles(tdlib, intent, intentAction);
             break;
           }
         }
@@ -2158,12 +2152,15 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     }).start();
   }
 
-  private void shareIntentImplFiles (Tdlib tdlib, final Intent intent, boolean asDocument, boolean mergeAlbum) throws Throwable {
+  private void shareIntentImplFiles (Tdlib tdlib, final Intent intent, String originalAction) throws Throwable {
+    final boolean fromView = Intent.ACTION_VIEW.equals(originalAction);
+    final boolean mergeAlbum = Intent.ACTION_SEND_MULTIPLE.equals(originalAction);
     String type = intent.getType();
-    ArrayList<Uri> uris = ExternalShareUtils.collectUris(intent, asDocument ? Intent.ACTION_VIEW : Intent.ACTION_SEND);
+    // Entry semantics (data URI only for VIEW) are independent of the content's media type.
+    ArrayList<Uri> uris = ExternalShareUtils.collectUris(intent, originalAction);
     final ArrayList<TdApi.InputMessageContent> out = new ArrayList<>();
 
-    if (!asDocument && !mergeAlbum && uris.size() == 1 &&
+    if (!fromView && !mergeAlbum && uris.size() == 1 &&
         ContactsContract.Contacts.CONTENT_VCARD_TYPE.equals(ExternalShareUtils.resolveMimeType(UI.getContext().getContentResolver(), uris.get(0), type))) {
       Uri uri = uris.get(0);
       if (U.isInternalUri(uri)) {
@@ -2251,13 +2248,14 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
       }
     } else {
       // First, obtain text
-      String sendingText = asDocument ? null : obtainText(intent);
+      String sendingText = fromView ? null : obtainText(intent);
 
       // Process every item with its own MIME type, regardless of how the sender supplied the URIs.
       boolean failed = false;
       for (Uri uri : uris) {
         try {
           String mimeType = ExternalShareUtils.resolveMimeType(UI.getContext().getContentResolver(), uri, type);
+          boolean asDocument = ExternalShareUtils.shouldSendAsDocument(originalAction, mimeType);
           if (addShareUri(tdlib, out, mimeType, uri, sendingText, asDocument)) {
             sendingText = null;
           }

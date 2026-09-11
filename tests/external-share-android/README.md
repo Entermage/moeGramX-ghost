@@ -32,7 +32,11 @@
   命中无类型过滤器，而把空字符串视为可由 `*/*` 命中的已声明类型；
 - 有 MIME 和无 MIME 的本地 `VIEW`，并验证新增过滤器不会接管普通 HTTP 或 `tg:` URL；
 - `EXTRA_STREAM`、`ClipData`、`Intent.data` 的优先级、拒绝和去重规则；
+- 原始 action 已被清空时仍能显式按 `ACTION_VIEW` 仅提取 `Intent.data`，忽略附带的
+  `EXTRA_STREAM`、`EXTRA_TEXT` 和 `ClipData`；
 - 声明、provider、文件名和路径 MIME 候选的选择：具体声明优先；`image/*`、`video/*`、
   `audio/*` 等类别声明只允许同类别证据细化，冲突或通用 provider 类型不能将其降为文档；
   `*/*` 和空声明继续推断，并在没有可靠证据时回退为 `application/octet-stream`；
+- `ACTION_VIEW` 的发送类型分类：具体或类别级图片、视频、音频保持媒体发送，未知、通用、
+  PDF、vCard 和 `application/octet-stream` 走文档发送；`SEND` / `SEND_MULTIPLE` 行为不变；
 - `file:` canonical path、应用私有目录、前缀碰撞、`..` 和符号链接边界。

@@ -155,6 +155,14 @@ final class ExternalShareUtils {
     return sourceType != null ? sourceType : "application/octet-stream";
   }
 
+  // Opening a media file should honor its resolved type, just like sharing it.
+  // Other opened files stay documents, preserving names and avoiding vCard conversion.
+  static boolean shouldSendAsDocument (String originalAction, @Nullable String resolvedMimeType) {
+    String type = normalizeMimeType(resolvedMimeType, true);
+    return Intent.ACTION_VIEW.equals(originalAction) &&
+      (type == null || !(type.startsWith("image/") || type.startsWith("video/") || type.startsWith("audio/")));
+  }
+
   @Nullable
   static String getDisplayName (ContentResolver resolver, Uri uri) {
     if ("content".equalsIgnoreCase(uri.getScheme())) {
