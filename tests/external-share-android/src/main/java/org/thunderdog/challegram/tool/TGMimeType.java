@@ -7,6 +7,7 @@ public final class TGMimeType {
     return switch (extension) {
       case "gif" -> "image/gif";
       case "jpg", "jpeg" -> "image/jpeg";
+      case "ogg" -> "audio/ogg";
       case "pdf" -> "application/pdf";
       case "png" -> "image/png";
       case "txt" -> "text/plain";

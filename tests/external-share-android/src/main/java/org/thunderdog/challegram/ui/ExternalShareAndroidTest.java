@@ -343,6 +343,49 @@ public final class ExternalShareAndroidTest {
     checkEquals("text/plain", ExternalShareUtils.resolveMimeType(null, Uri.parse("file:///tmp/no-extension"),
       "TEXT/PLAIN; charset=utf-8"));
     checkEquals("image/png", ExternalShareUtils.resolveMimeType(null, Uri.parse("file:///tmp/photo.PNG"), null));
+
+    // A source's concrete declaration is authoritative, including an explicit generic binary type.
+    checkEquals("application/octet-stream",
+      ExternalShareUtils.chooseMimeType("application/octet-stream", "image/png", null, null));
+    checkEquals("application/octet-stream",
+      ExternalShareUtils.resolveMimeType(null, Uri.parse("file:///tmp/no_suffix"), "application/octet-stream"));
+
+    // A family declaration must not be downgraded or switched to a conflicting provider family.
+    checkEquals("image/*",
+      ExternalShareUtils.chooseMimeType("image/*", "application/octet-stream", null, null));
+    checkEquals("image/*",
+      ExternalShareUtils.chooseMimeType("image/*", "video/mp4", null, null));
+    checkEquals("video/*",
+      ExternalShareUtils.chooseMimeType("video/*", "application/octet-stream", null, null));
+    checkEquals("audio/*",
+      ExternalShareUtils.chooseMimeType("audio/*", "video/mp4", null, null));
+    checkEquals("application/*",
+      ExternalShareUtils.chooseMimeType("application/*", "application/octet-stream", null, null));
+    checkEquals("application/pdf",
+      ExternalShareUtils.chooseMimeType("application/*", "application/octet-stream", "application/pdf", null));
+
+    // Same-family evidence may refine the wildcard so GIF/WebP and similar behavior is retained.
+    checkEquals("image/png", ExternalShareUtils.chooseMimeType("image/*", "image/png", null, null));
+    checkEquals("image/gif",
+      ExternalShareUtils.chooseMimeType("image/*", "application/octet-stream", "image/gif", null));
+    checkEquals("audio/ogg", ExternalShareUtils.chooseMimeType("audio/*", "audio/ogg", null, null));
+
+    Uri noSuffix = Uri.parse("file:///tmp/no_suffix");
+    checkEquals("image/*", ExternalShareUtils.resolveMimeType(null, noSuffix, "image/*"));
+    checkEquals("image/png", ExternalShareUtils.resolveMimeType(null, Uri.parse("file:///tmp/image.PNG"), "image/*"));
+    checkEquals("video/*", ExternalShareUtils.resolveMimeType(null, noSuffix, "video/*"));
+    checkEquals("audio/ogg", ExternalShareUtils.resolveMimeType(null, Uri.parse("file:///tmp/track.ogg"), "audio/*"));
+    checkEquals("application/*", ExternalShareUtils.resolveMimeType(null, noSuffix, "application/*"));
+    checkEquals("application/pdf",
+      ExternalShareUtils.resolveMimeType(null, Uri.parse("file:///tmp/file.pdf"), "application/*"));
+
+    // A fully generic or empty declaration is inferred normally, then falls back to a document type.
+    checkEquals("image/webp", ExternalShareUtils.chooseMimeType("*/*", "image/webp", null, null));
+    checkEquals("application/octet-stream", ExternalShareUtils.chooseMimeType("*/*", null, null, null));
+    checkEquals("application/octet-stream", ExternalShareUtils.chooseMimeType("", null, null, null));
+    checkEquals("image/webp", ExternalShareUtils.resolveMimeType(null, Uri.parse("file:///tmp/image.webp"), ""));
+    checkEquals("application/octet-stream", ExternalShareUtils.resolveMimeType(null, noSuffix, "*/*"));
+    checkEquals("image/gif", ExternalShareUtils.resolveMimeType(null, Uri.parse("file:///tmp/animation.GIF"), "image/*"));
   }
 
   private static void testSharedFilePaths () throws Exception {

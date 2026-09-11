@@ -2339,26 +2339,36 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     final TdApi.FormattedText messageCaption = captionCodePointCount > 0 && captionCodePointCount <= tdlib.maxCaptionLength() ? new TdApi.FormattedText(rawCaption, null) : null;
 
     if (asDocument) {
-      TdApi.InputFile file = TD.createInputFile(filePath, mimeType, null, true);
-      out.add(new TdApi.InputMessageDocument(new TdApi.InputDocument(file, null, true), messageCaption));
-      return messageCaption != null;
+      return addShareDocument(out, filePath, mimeType, messageCaption);
     }
 
     if (!StringUtils.isEmpty(mimeType)) {
       if (mimeType.equals("image/webp")) {
         BitmapFactory.Options options = ImageReader.getImageWebpSize(filePath);
+        if (!isValidSharedImageSize(options)) {
+          options = ImageReader.getImageSize(filePath);
+        }
+        if (!isValidSharedImageSize(options)) {
+          return addShareDocument(out, filePath, mimeType, messageCaption);
+        }
         out.add(new TdApi.InputMessageSticker(new TdApi.InputSticker(TD.createInputFile(filePath), null, options.outWidth, options.outHeight), null));
         return false;
       }
 
       if (mimeType.equals("image/gif")) {
         BitmapFactory.Options options = ImageReader.getImageSize(filePath);
+        if (!isValidSharedImageSize(options)) {
+          return addShareDocument(out, filePath, mimeType, messageCaption);
+        }
         out.add(new TdApi.InputMessageAnimation(new TdApi.InputAnimation(TD.createInputFile(filePath), null, null, 0, options.outWidth, options.outHeight), messageCaption, false, false));
         return messageCaption != null;
       }
 
       if (mimeType.startsWith("image/")) {
         BitmapFactory.Options opts = ImageReader.getImageSize(filePath);
+        if (!isValidSharedImageSize(opts)) {
+          return addShareDocument(out, filePath, mimeType, messageCaption);
+        }
 
         int rotation = U.getRotation(filePath);
         int inSampleSize = ImageReader.calculateInSampleSize(opts, 1280, 1280);
@@ -2411,10 +2421,22 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     }
 
     TD.FileInfo info = new TD.FileInfo();
+    // Keep the accepted sender type; createInputFile must not override it from the filename.
+    info.mimeType = mimeType;
     TdApi.InputFile file = TD.createInputFile(filePath, mimeType, info);
 
     out.add(TD.toInputMessageContent(filePath, file, info, messageCaption, false, false));
     return messageCaption != null;
+  }
+
+  private static boolean isValidSharedImageSize (@Nullable BitmapFactory.Options options) {
+    return options != null && options.outWidth > 0 && options.outHeight > 0;
+  }
+
+  private static boolean addShareDocument (ArrayList<TdApi.InputMessageContent> out, String filePath, String mimeType, @Nullable TdApi.FormattedText caption) {
+    TdApi.InputFile file = TD.createInputFile(filePath, mimeType, null, true);
+    out.add(new TdApi.InputMessageDocument(new TdApi.InputDocument(file, null, true), caption));
+    return caption != null;
   }
 
   private void shareContents (final Tdlib tdlib, final String type, final ArrayList<TdApi.InputMessageContent> contents, boolean mergeAlbum) {

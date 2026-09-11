@@ -123,23 +123,36 @@ final class ExternalShareUtils {
 
   @Nullable
   private static String concreteMimeType (@Nullable String value) {
+    return normalizeMimeType(value, false);
+  }
+
+  @Nullable
+  private static String normalizeMimeType (@Nullable String value, boolean allowSubtypeWildcard) {
     if (value == null) {
       return null;
     }
     int parameters = value.indexOf(';');
     String type = (parameters >= 0 ? value.substring(0, parameters) : value).trim().toLowerCase(Locale.ROOT);
     int separator = type.indexOf('/');
-    return separator > 0 && separator < type.length() - 1 && type.indexOf('*') == -1 && type.indexOf(' ') == -1 ? type : null;
+    int wildcard = type.indexOf('*');
+    boolean validWildcard = wildcard == -1 || (allowSubtypeWildcard && separator == type.length() - 2 && wildcard == type.length() - 1);
+    return separator > 0 && separator < type.length() - 1 && separator == type.lastIndexOf('/') && validWildcard && type.indexOf(' ') == -1 ? type : null;
   }
 
   static String chooseMimeType (@Nullable String declaredType, @Nullable String providerType, @Nullable String nameType, @Nullable String pathType) {
-    for (String candidate : new String[] {declaredType, providerType, nameType, pathType}) {
+    String sourceType = normalizeMimeType(declaredType, true);
+    if (sourceType != null && !sourceType.endsWith("/*")) {
+      return sourceType;
+    }
+    // A sender's image/* (etc.) is a media category, not an unknown */* type.
+    String sourcePrefix = sourceType != null ? sourceType.substring(0, sourceType.length() - 1) : null;
+    for (String candidate : new String[] {providerType, nameType, pathType}) {
       String type = concreteMimeType(candidate);
-      if (type != null) {
+      if (type != null && (sourcePrefix == null || (!type.equals("application/octet-stream") && type.startsWith(sourcePrefix)))) {
         return type;
       }
     }
-    return "application/octet-stream";
+    return sourceType != null ? sourceType : "application/octet-stream";
   }
 
   @Nullable
@@ -168,9 +181,9 @@ final class ExternalShareUtils {
   }
 
   static String resolveMimeType (ContentResolver resolver, Uri uri, @Nullable String declaredType) {
-    String concreteType = concreteMimeType(declaredType);
-    if (concreteType != null) {
-      return concreteType;
+    String sourceType = normalizeMimeType(declaredType, true);
+    if (sourceType != null && !sourceType.endsWith("/*")) {
+      return sourceType;
     }
     String providerType = null;
     if ("content".equalsIgnoreCase(uri.getScheme())) {
@@ -180,9 +193,10 @@ final class ExternalShareUtils {
         Log.w("Cannot read shared MIME type", e);
       }
     }
-    if (concreteMimeType(providerType) != null) {
-      return chooseMimeType(null, providerType, null, null);
+    String providerConcreteType = concreteMimeType(providerType);
+    if (providerConcreteType != null && (sourceType == null || (!providerConcreteType.equals("application/octet-stream") && providerConcreteType.startsWith(sourceType.substring(0, sourceType.length() - 1))))) {
+      return providerConcreteType;
     }
-    return chooseMimeType(null, null, mimeTypeForName(getDisplayName(resolver, uri)), mimeTypeForName(uri.getLastPathSegment()));
+    return chooseMimeType(sourceType, providerType, mimeTypeForName(getDisplayName(resolver, uri)), mimeTypeForName(uri.getLastPathSegment()));
   }
 }
