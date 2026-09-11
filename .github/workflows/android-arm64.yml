@@ -54,10 +54,12 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ninja-build gperf php-cli nasm yasm libssl-dev pkg-config
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager"
           set +o pipefail
-          yes | sdkmanager --licenses > /dev/null
+          yes | "$sdkmanager" --licenses > /dev/null
           set -o pipefail
-          sdkmanager --install \
+          "$sdkmanager" --install \
             "platforms;$(scripts/read-property.sh version.properties version.sdk_package)" \
             "build-tools;$(scripts/read-property.sh version.properties version.build_tools)" \
             "ndk;$(scripts/read-property.sh version.properties version.ndk_primary)" \
