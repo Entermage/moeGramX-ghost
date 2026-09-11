@@ -1,0 +1,157 @@
+name: Android ARM64
+
+on:
+  push:
+    branches: [moe]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.repository == 'Entermage/moeGramX-ghost' && github.ref == 'refs/heads/moe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      TERM: xterm
+      CI_BUILD_JOBS: '2'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check required build secrets are configured
+        env:
+          HAS_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
+          HAS_TELEGRAM_API: ${{ secrets.TELEGRAM_API_ID != '' && secrets.TELEGRAM_API_HASH != '' }}
+        run: |
+          if [ "$HAS_SIGNING" != true ] || [ "$HAS_TELEGRAM_API" != true ]; then
+            echo '::error::Required signing or Telegram API repository Secrets are missing. No placeholder credentials will be used.'
+            exit 1
+          fi
+
+      - name: Check out pinned source and submodules
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 1
+          submodules: recursive
+          lfs: true
+          persist-credentials: false
+
+      - name: Install Java 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install native tools and pinned Android SDK components
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ninja-build gperf php-cli nasm yasm libssl-dev pkg-config
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          set +o pipefail
+          yes | sdkmanager --licenses > /dev/null
+          set -o pipefail
+          sdkmanager --install \
+            "platforms;$(scripts/read-property.sh version.properties version.sdk_package)" \
+            "build-tools;$(scripts/read-property.sh version.properties version.build_tools)" \
+            "ndk;$(scripts/read-property.sh version.properties version.ndk_primary)" \
+            "cmake;$(scripts/read-property.sh version.properties version.cmake)"
+
+      - name: Identify native dependency revisions
+        id: native-key
+        shell: bash
+        run: |
+          key=$(git submodule status --recursive | sha256sum | cut -d' ' -f1)
+          echo "revisions=$key" >> "$GITHUB_OUTPUT"
+          git -C tdlib lfs pull --include='openssl/arm64-v8a/lib/*.so'
+
+      - name: Restore native outputs
+        id: native-cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            .ci/native-cache
+            app/jni/third_party/libvpx/build/latest/arm64-v8a
+            app/jni/third_party/ffmpeg/build/latest/arm64-v8a
+          key: native-arm64-ubuntu24-${{ steps.native-key.outputs.revisions }}-${{ hashFiles('version.properties', '.gitmodules', 'scripts/**', 'patches/**') }}
+
+      - name: Cache downloaded Gradle dependencies only
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper
+          key: gradle-downloads-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/*.gradle', 'gradle/**/*.toml', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-downloads-${{ runner.os }}-
+
+      - name: Run regression checks
+        shell: bash
+        run: |
+          python3 -m unittest discover -s tests -p test_ci_configure.py -v
+          ./gradlew -p tests/external-share-android runChecks --no-daemon --no-watch-fs --console=plain
+          test_dir=$(mktemp -d "$RUNNER_TEMP/pagination-test-XXXXXX")
+          javac -d "$test_dir" app/src/main/java/org/thunderdog/challegram/telegram/PublicChatPreviewPagination.java tests/PublicChatPreviewPaginationTest.java
+          java -cp "$test_dir" org.thunderdog.challegram.telegram.PublicChatPreviewPaginationTest
+
+      - name: Build native libraries including Ghost Mode TDLib
+        run: bash scripts/ci-prepare-native.sh
+
+      - name: Prepare private release configuration
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: python3 scripts/ci-configure.py
+
+      - name: Build signed release APK
+        run: >-
+          ./gradlew assembleLatestArm64Release --no-daemon --no-watch-fs --console=plain
+          --max-workers=2 -Dorg.gradle.parallel=false
+          '-Dorg.gradle.jvmargs=-Xmx4G -Dfile.encoding=UTF-8'
+
+      - name: Verify signature, package and architecture
+        id: apk
+        shell: bash
+        run: |
+          mapfile -t apks < <(find app/build/outputs/apk/latestArm64/release -maxdepth 1 -name '*.apk')
+          test "${#apks[@]}" -eq 1
+          apk="${apks[0]}"
+          build_tools="$ANDROID_SDK_ROOT/build-tools/$(scripts/read-property.sh version.properties version.build_tools)"
+          "$build_tools/apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apk-signature.txt"
+          grep -F '51ee4633ca325b823a413f31905169dd5bccd72959406d7f9554ce032f6be3e6' "$RUNNER_TEMP/apk-signature.txt"
+          "$build_tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/apk-badging.txt"
+          grep -F "package: name='com.ayx.mgx'" "$RUNNER_TEMP/apk-badging.txt"
+          grep -Fx "native-code: 'arm64-v8a'" "$RUNNER_TEMP/apk-badging.txt"
+          if grep -q '^application-debuggable' "$RUNNER_TEMP/apk-badging.txt"; then exit 1; fi
+          echo "path=$apk" >> "$GITHUB_OUTPUT"
+          echo "### moegramX ARM64" >> "$GITHUB_STEP_SUMMARY"
+          echo "Source: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          sha256sum "$apk" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Signed release build. Device behavior has not been tested by this workflow.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove private configuration
+        if: always() && hashFiles('scripts/ci-configure.py') != ''
+        run: python3 scripts/ci-configure.py --cleanup
+
+      - name: Upload APK (no ZIP wrapper)
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          path: ${{ steps.apk.outputs.path }}
+          archive: false
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Add download link
+        env:
+          APK_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: echo "[Download APK (GitHub login required)]($APK_URL)" >> "$GITHUB_STEP_SUMMARY"

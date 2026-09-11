@@ -8,6 +8,8 @@ build
 .cxx
 .externalNativeBuild
 obj
+__pycache__/
+/.ci/
 
 *.apk
 *.iml

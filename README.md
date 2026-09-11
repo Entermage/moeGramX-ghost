@@ -5,6 +5,8 @@
   <p>A personal Telegram X/TDLib client fork with local privacy and filtering features.</p>
 </div>
 
+[CI APKs](https://github.com/Entermage/moeGramX-ghost/actions/workflows/android-arm64.yml) (GitHub login required; kept for 30 days) · [Releases](https://github.com/Entermage/moeGramX-ghost/releases)
+
 ## Features
 
 - Ghost Mode with separate read controls for private chats, groups, and channels

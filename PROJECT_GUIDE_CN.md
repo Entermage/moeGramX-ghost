@@ -38,6 +38,9 @@ flowchart LR
 - `extension/`：按构建配置选用的扩展实现。
 - `buildSrc/`：Gradle 插件、代码生成和构建任务。
 - `scripts/setup.sh`：交互式生成本地构建配置。
+- `.github/workflows/android-arm64.yml`：GitHub Actions 的 ARM64 正式签名构建与 APK 下载产物。
+- `scripts/ci-prepare-native.sh`：CI 中准备媒体依赖并应用 Ghost Mode 补丁重建 TDLib。
+- `scripts/ci-configure.py`：从 CI Secrets 生成临时签名和构建配置，结束后清理。
 
 ## 关键执行流程
 
@@ -123,7 +126,17 @@ arm64 release APK 输出到 `app/build/outputs/apk/latestArm64/release/`。编�
 
 `./gradlew -p tests/external-share-android runChecks` 在独立 JVM 工程中读取当前 Manifest，调用 Android 16 框架的 `IntentFilter.match`，并直接编译生产 `ExternalShareUtils` 检查 URI 提取、MIME 优先级、打开文件的媒体/文档路由和路径边界。首次运行下载 `android-all` 测试依赖，不加入 APK；少量应用工具依赖使用测试替身。它不验证真实 ContentProvider 授权、分享界面操作、TDLib 上传或收件结果，不能代替手机端到端测试。
 
-本项目的交付约定：每次完成修改并进行可用的验证后，将本次源码提交推送到 `publish` 远端的 `moe` 分支（`Entermage/moeGramX-ghost`），并把对应 ARM64 Release APK 上传到 GitHub Release，向用户提供 Release 页面和 APK 下载直链。仅给本地文件路径不算完成可下载交付；不向 `origin` 上游提交 PR。Release 使用递增的 `ghost.N` 标签，标题与 APK 名称保持简洁，发布说明按用户约定留空；没有连接设备时明确说明未实机验证，不把编译或签名校验称作端到端测试。
+### GitHub Actions 构建与交付
+
+日常修改提交推送到 `publish` 远端的 `moe` 分支（`Entermage/moeGramX-ghost`），通过 `Android ARM64` 工作流提供下载，不为每次测试创建 Release。工作流响应该分支的代码推送，也可在 Actions 页面手动运行；仅 Markdown 文档变化不会自动构建。不接受 PR 触发，不向 `origin` 上游提交 PR。
+
+CI 使用 Ubuntu x64 交叉编译 ARM64，安装 JDK 21 和 `version.properties` 指定的 Android SDK、NDK、CMake。它递归检出固定子模块、取得 ARM64 OpenSSL 的 Git LFS 文件，运行外部分享、公开频道分页与 CI 配置回归测试；随后以 `latest` / `arm64-v8a` 构建 libvpx、FFmpeg，并将 `patches/tdlib-ghost-mode.patch` 应用到原生 TDLib 源码后重建 `libtdjni.so`。不会把子模块携带的上游原版 TDLib 库直接作为本分支产物。原生缓存按脚本、补丁、版本配置和子模块版本隔离，Gradle 只缓存下载依赖，不缓存签名文件或本地构建配置。
+
+工作流需要仓库 Actions Secrets：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`，以及 `TELEGRAM_API_ID`、`TELEGRAM_API_HASH`。签名步骤才向配置脚本提供这些值，脚本以私有文件权限在 runner 临时目录创建 keystore 和签名配置，并生成被 Git 忽略的 `local.properties`；构建结束无论成功失败均尝试清理。缺少必需 Secrets 时停止，不使用占位登录凭据或自动换成 debug 签名。不要输出 Secrets、上传签名目录，或把不可信代码加入可以读取这些 Secrets 的工作流。
+
+CI 构建 `assembleLatestArm64Release`，维持包名 `com.ayx.mgx`、应用名称 `moegramX` 和已有正式证书。上传前检查正式证书指纹、ARM64 ABI、非 debuggable 标志与 APK SHA-256。产物位于对应 Actions 运行页面的 Artifacts，直接保存 APK、不额外套 ZIP，保留 30 天；下载需要登录有仓库读取权限的 GitHub 账号，过期后可重新运行。运行摘要提供对应源码提交、文件校验和与下载链接。
+
+只有用户要求发布稳定版本时才另建 GitHub Release，继续使用递增 `ghost.N` 标签、简洁标题和 APK 名称、空发布说明。交付必须提供可下载链接；没有设备时明确说明未实机验证。CI 成功、回归检查或签名验证都不等于手机端登录、推送、分享和 UI 的端到端测试。
 
 ## 日志与错误处理
 
