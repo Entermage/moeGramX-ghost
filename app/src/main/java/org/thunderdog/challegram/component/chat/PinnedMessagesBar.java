@@ -61,6 +61,7 @@ import me.vkryl.core.ColorUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.Destroyable;
+import moe.kirao.mgx.MoexMessageFilter;
 import tgx.td.MessageId;
 
 public class PinnedMessagesBar extends ViewGroup implements Destroyable, MessageListManager.ChangeListener, View.OnClickListener {
@@ -447,9 +448,11 @@ public class PinnedMessagesBar extends ViewGroup implements Destroyable, Message
             } else {
               highlightMessageId = new MessageId(message.chatId, message.id);
             }
-            previewView.setPreviewChatId(null, highlightMessageId.getChatId(), null, highlightMessageId, null);
+            previewView.setPreviewMessageOverride(highlightMessageId);
+          } else {
+            previewView.setPreviewMessageOverride(null);
           }
-          if (messageListener != null) {
+          if (messageListener != null && !previewView.isMessageFiltered()) {
             messageListener.onMessageDisplayed(PinnedMessagesBar.this, previewView, message);
           }
         } else {
@@ -587,7 +590,9 @@ public class PinnedMessagesBar extends ViewGroup implements Destroyable, Message
         if (entry.isLinkPreview()) {
           messageListener.onSelectLinkPreviewUrl(this, entry.linkPreviewContext, entry.linkPreviewUrl);
         } else if (entry.isMessage()) {
-          messageListener.onMessageClick(this, entry.message, entry.quote);
+          if (!MoexMessageFilter.shouldHideInChat(entry.tdlib, entry.message, entry.tdlib.isChannel(entry.message.chatId))) {
+            messageListener.onMessageClick(this, entry.message, entry.quote);
+          }
         } else {
           // TODO
         }

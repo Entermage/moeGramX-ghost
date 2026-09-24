@@ -29,6 +29,7 @@ import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.attach.MediaToReplacePickerManager;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.data.ContentPreview;
+import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.helper.LinkPreview;
 import org.thunderdog.challegram.loader.ComplexReceiver;
 import org.thunderdog.challegram.receiver.RefreshRateLimiter;
@@ -72,10 +73,13 @@ import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.Destroyable;
 import me.vkryl.core.lambda.RunnableData;
+import moe.kirao.mgx.MoexConfig;
+import moe.kirao.mgx.MoexMessageFilter;
+import tgx.td.ChatId;
 import tgx.td.MessageId;
 import tgx.td.Td;
 
-public class MessagePreviewView extends BaseView implements AttachDelegate, Destroyable, ChatListener, MessageListener, TdlibCache.UserDataChangeListener, TGLegacyManager.EmojiLoadListener, TdlibUi.MessageProvider, RunnableData<LinkPreview> {
+public class MessagePreviewView extends BaseView implements AttachDelegate, Destroyable, ChatListener, MessageListener, TdlibCache.UserDataChangeListener, TGLegacyManager.EmojiLoadListener, TdlibUi.MessageProvider, RunnableData<LinkPreview>, MoexConfig.SettingsChangeListener {
   private static class TextEntry extends ListAnimator.MeasurableEntry<Text> implements Destroyable {
     public final Drawable drawable;
     public ComplexReceiver receiver;
@@ -129,6 +133,7 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
     setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, SettingHolder.measureHeightForType(ListItem.TYPE_MESSAGE_PREVIEW)));
     RippleSupport.setTransparentSelector(this);
     TGLegacyManager.instance().addEmojiListener(this);
+    MoexConfig.instance().addSettingsListener(this);
   }
 
   private final ViewProvider viewProvider = new SingleViewProvider(this);
@@ -225,6 +230,47 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
 
   private @Nullable DisplayData data;
   private boolean useAvatarFallback;
+  private boolean messageFiltered;
+  private @Nullable MessageId previewMessageOverride;
+  private boolean messagePreviewDisabled;
+
+  public void setMessagePreviewDisabled (boolean disabled) {
+    messagePreviewDisabled = disabled;
+    updatePreviewChat();
+  }
+
+  public void setPreviewMessageOverride (@Nullable MessageId messageId) {
+    previewMessageOverride = messageId;
+    updatePreviewChat();
+  }
+
+  private void updatePreviewChat () {
+    if (data != null && !messagePreviewDisabled && !isMessageFiltered() && !BitwiseUtils.hasFlag(data.options, Options.DISABLE_MESSAGE_PREVIEW)) {
+      MessageId target = previewMessageOverride != null ? previewMessageOverride : new MessageId(data.message);
+      setPreviewChatId(null, target.getChatId(), null, target, previewMessageOverride != null ? null : data.filter);
+    } else {
+      clearPreviewChat();
+    }
+  }
+
+  public boolean isMessageFiltered () {
+    // A composing URL preview uses a synthetic message, not received content.
+    return data != null && data.linkPreview == null &&
+      MoexMessageFilter.shouldHideInChat(tdlib, data.message, tdlib.isChannel(data.message.chatId));
+  }
+
+  private void refreshMessageFilter () {
+    if (data != null && messageFiltered != isMessageFiltered()) {
+      buildPreview();
+    }
+  }
+
+  @Override
+  public void onSettingsChanged (String key, Object newSettings, Object oldSettings) {
+    if (MoexConfig.isMessageFilterSetting(key, tdlib.id())) {
+      tdlib.runOnUiThread(this::refreshMessageFilter);
+    }
+  }
 
   @Retention(RetentionPolicy.SOURCE)
   @IntDef(value = {
@@ -302,6 +348,9 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
       if (this.data.setForcedTitle(data.forcedTitle)) {
         updateTitleText();
       }
+      if (messageFiltered != isMessageFiltered()) {
+        buildPreview();
+      }
       return;
     }
     if (this.data != null) {
@@ -314,6 +363,7 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
       this.data.performDestroy();
     }
     this.data = data;
+    this.previewMessageOverride = null;
     if (data != null) {
       if (!BitwiseUtils.hasFlag(this.data.options, Options.NO_UPDATES)) {
         subscribeToUpdates(data.message);
@@ -322,12 +372,8 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
         data.linkPreview.addReference(this);
       }
       buildPreview();
-      if (!BitwiseUtils.hasFlag(data.options, Options.DISABLE_MESSAGE_PREVIEW)) {
-        setPreviewChatId(null, data.message.chatId, null, new MessageId(data.message), data.filter);
-      } else {
-        clearPreviewChat();
-      }
     } else {
+      this.messageFiltered = false;
       this.contentPreview = null;
       this.mediaPreview.replace(null, false);
       this.mediaPreview.measure(false);
@@ -373,10 +419,14 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
       throw new IllegalStateException();
     }
 
-    final ContentPreview forcedContentPreview = data.forcedLocalPickedFile != null ?
+    messageFiltered = isMessageFiltered();
+    final ContentPreview forcedContentPreview = !messageFiltered && data.forcedLocalPickedFile != null ?
       data.forcedLocalPickedFile.buildContentPreview() : null;
 
-    if (forcedContentPreview != null) {
+    if (messageFiltered) {
+      // Do not retain an album refresher, quote, links or custom emoji from hidden content.
+      this.contentPreview = new ContentPreview("", false);
+    } else if (forcedContentPreview != null) {
       this.contentPreview = forcedContentPreview;
     } else if (!Td.isEmpty(data.quote)) {
       this.contentPreview = new ContentPreview(data.quote.text, false);
@@ -386,7 +436,7 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
     if (contentPreview.hasRefresher() && !(BitwiseUtils.hasFlag(data.options, Options.IGNORE_ALBUM_REFRESHERS) && contentPreview.isMediaGroup())) {
       contentPreview.refreshContent((chatId, messageId, newPreview, oldPreview) -> {
         tdlib.runOnUiThread(() -> {
-          if (this.contentPreview == oldPreview) {
+          if (this.contentPreview == oldPreview && !isMessageFiltered()) {
             this.contentPreview = newPreview;
             updateContentText();
             buildMediaPreview(true);
@@ -396,6 +446,7 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
     }
     buildText(false);
     buildMediaPreview(false);
+    updatePreviewChat();
     invalidate();
   }
 
@@ -472,7 +523,10 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
     MediaPreview preview;
     boolean showSmallMedia = false;
 
-    if (data != null && data.forcedLocalPickedFile != null) {
+    if (messageFiltered) {
+      preview = null;
+      animated = false; // No fade-out frame containing the previous thumbnail.
+    } else if (data != null && data.forcedLocalPickedFile != null) {
       preview = data.forcedLocalPickedFile.buildMediaPreview(tdlib, Screen.dp(IMAGE_HEIGHT), Screen.dp(3f));
     } else if (data != null) {
       preview = MediaPreview.valueOf(tdlib, data.message, contentPreview, Screen.dp(IMAGE_HEIGHT), Screen.dp(3f));
@@ -512,6 +566,9 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
   @Nullable
   private String getTitle () {
     if (this.data != null) {
+      if (messageFiltered) {
+        return Lang.getString(R.string.FilteredMessage);
+      }
       if (!StringUtils.isEmpty(this.data.forcedTitle)) {
         return this.data.forcedTitle;
       }
@@ -527,10 +584,10 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
       throw new IllegalStateException();
     }
     String title = getTitle();
-    TdlibAccentColor accentColor = data.accentColor();
+    TdlibAccentColor accentColor = messageFiltered ? null : data.accentColor();
 
     Drawable drawable;
-    if (!Td.isEmpty(data.quote)) {
+    if (!messageFiltered && !Td.isEmpty(data.quote)) {
       @ColorId int colorId = ColorId.messageAuthor;
       if (accentColor != null) {
         long complexColor = accentColor.getNameComplexColor();
@@ -745,6 +802,7 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
       }
       case TdApi.MessageSenderUser.CONSTRUCTOR: {
         tdlib.cache().addUserDataListener(((TdApi.MessageSenderUser) message.senderId).userId, this);
+        tdlib.listeners().subscribeToChatUpdates(ChatId.fromUserId(((TdApi.MessageSenderUser) message.senderId).userId), this);
         break;
       }
     }
@@ -759,6 +817,7 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
       }
       case TdApi.MessageSenderUser.CONSTRUCTOR: {
         tdlib.cache().removeUserDataListener(((TdApi.MessageSenderUser) message.senderId).userId, this);
+        tdlib.listeners().unsubscribeFromChatUpdates(ChatId.fromUserId(((TdApi.MessageSenderUser) message.senderId).userId), this);
         break;
       }
     }
@@ -778,6 +837,15 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
     runOnUiThreadOptional(data -> {
       if (data.relatedToChat(chatId)) {
         updateTitleText();
+      }
+    });
+  }
+
+  @Override
+  public void onChatBlockListChanged (long chatId, @Nullable TdApi.BlockList blockList) {
+    runOnUiThreadOptional(data -> {
+      if (ChatId.isUserChat(chatId) && data.relatedToUser(ChatId.toUserId(chatId))) {
+        refreshMessageFilter();
       }
     });
   }
@@ -834,6 +902,9 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
   @Override
   public void attach () {
     this.isAttached = true;
+    if (messageFiltered != isMessageFiltered()) {
+      refreshMessageFilter();
+    }
     for (ListAnimator.Entry<MediaEntry> entry : mediaPreview) {
       entry.item.receiver.attach();
     }
@@ -848,7 +919,7 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
   public void detach () {
     this.isAttached = false;
     for (ListAnimator.Entry<MediaEntry> entry : mediaPreview) {
-      entry.item.receiver.attach();
+      entry.item.receiver.detach();
     }
     for (ListAnimator.Entry<TextEntry> entry : contentText) {
       if (entry.item.receiver != null) {
@@ -864,6 +935,7 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
   @Override
   public void performDestroy () {
     clear();
+    MoexConfig.instance().removeSettingsListener(this);
     TGLegacyManager.instance().removeEmojiListener(this);
   }
 
@@ -874,19 +946,19 @@ public class MessagePreviewView extends BaseView implements AttachDelegate, Dest
 
   @Override
   public boolean isMediaGroup () {
-    Tdlib.Album album = contentPreview != null ? contentPreview.getAlbum() : null;
+    Tdlib.Album album = !isMessageFiltered() && contentPreview != null ? contentPreview.getAlbum() : null;
     return album != null;
   }
 
   @Override
   public List<TdApi.Message> getVisibleMediaGroup () {
-    Tdlib.Album album = contentPreview != null ? contentPreview.getAlbum() : null;
+    Tdlib.Album album = !isMessageFiltered() && contentPreview != null ? contentPreview.getAlbum() : null;
     return album != null ? album.messages : null;
   }
 
   @Override
   public TdApi.Message getVisibleMessage () {
-    if (data != null && data.message.chatId != 0) {
+    if (data != null && data.message.chatId != 0 && !isMessageFiltered()) {
       return data.message;
     }
     return null;

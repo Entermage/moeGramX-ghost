@@ -117,7 +117,12 @@ public abstract class ListManager<T> implements Destroyable, Iterable<T>, TdlibP
       @Override
       public void onResult (TdApi.Object object) {
         if (object.getConstructor() == TdApi.Error.CONSTRUCTOR) {
-          UI.showError(object);
+          runOnUiThread(() -> {
+            isLoading = false;
+            UI.showError(object);
+          });
+          // Do not call after: loadAll uses it to request the next page, and an
+          // error must not trigger an automatic retry loop. Explicit retry is OK.
           return;
         }
         Response<T> data = processResponse(object, this, count, reverse);
