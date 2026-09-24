@@ -138,9 +138,9 @@ arm64 release APK 输出到 `app/build/outputs/apk/latestArm64/release/`。编�
 
 ### WSL 隔离模拟器
 
-本机使用 `Ubuntu-26.04` 的 Android SDK（`/home/lunarclock/Android/Sdk`），通过 WSLg 显示 Android Emulator 窗口。AVD 名为 `moegramx_api35`，使用 Pixel 5 配置和 `system-images;android-35;google_apis;x86_64`。已安装的镜像声明支持 `x86_64,arm64-v8a`，通过 `libndk_translation.so` 运行同一份 ARM64 正式签名 APK，无需另外生成 x86 APK。运行用户须能读写 `/dev/kvm`；加入 `kvm` 组属于持久权限变更，只能在获得用户同意后执行。
+本机使用 `Ubuntu-26.04` 的 Android SDK（`/home/lunarclock/Android/Sdk`），模拟器作为 WSL 无窗口进程运行，由 Windows 便携版 scrcpy 显示和操作。Windows 只承担查看器角色，SDK、模拟器和构建仍在 WSL。AVD 名为 `moegramx_api35`，使用 Pixel 5 配置和 `system-images;android-35;google_apis;x86_64`。已安装的镜像声明支持 `x86_64,arm64-v8a`，通过 `libndk_translation.so` 运行同一份 ARM64 正式签名 APK，无需另外生成 x86 APK。运行用户须能读写 `/dev/kvm`；加入 `kvm` 组属于持久权限变更，只能在获得用户同意后执行。
 
-为与其他项目的实体手机调试隔离，WSL ADB server 使用 `5038`，模拟器 console/adbd 使用 `5770/5771`，gRPC 使用带 JWT 的本地 `8556`。启动命令在 WSL Bash 中执行；最后一条保持运行，不要关闭承载它的终端：
+为与其他项目的实体手机调试隔离，WSL ADB server 使用 `5038`，模拟器 console/adbd 使用 `5770/5771`，gRPC 使用带 JWT 的本地 `8556`。下列命令在 WSL Bash 中启动用户级临时 systemd 服务，不依赖命令终端持续打开；服务已运行时不要重复启动：
 
 ```bash
 export ANDROID_SDK_ROOT=/home/lunarclock/Android/Sdk
@@ -148,17 +148,22 @@ export ANDROID_ADB_SERVER_PORT=5038
 export ADB_SERVER_SOCKET=tcp:localhost:5038
 export ADB_MDNS_AUTO_CONNECT=0
 export ADB_LOCAL_TRANSPORT_MAX_PORT=0
-export QT_QPA_PLATFORM=xcb
-export QT_X11_NO_MITSHM=1
 "$ANDROID_SDK_ROOT/platform-tools/adb" -P 5038 --one-device moegramx-emulator-only start-server
-"$ANDROID_SDK_ROOT/emulator/emulator" -avd moegramx_api35 \
+systemd-run --user --unit=moegramx-emulator --collect --property=Type=exec \
+  --setenv=ANDROID_SDK_ROOT="$ANDROID_SDK_ROOT" \
+  --setenv=ANDROID_ADB_SERVER_PORT=5038 \
+  --setenv=ADB_SERVER_SOCKET=tcp:localhost:5038 \
+  --setenv=ADB_MDNS_AUTO_CONNECT=0 --setenv=ADB_LOCAL_TRANSPORT_MAX_PORT=0 \
+  "$ANDROID_SDK_ROOT/emulator/emulator" -avd moegramx_api35 \
   -ports 5770,5771 -grpc 8556 -grpc-use-jwt -accel on \
   -gpu swangle -feature -Vulkan -memory 4096 -cores 4 \
-  -no-audio -no-metrics -no-snapshot -no-boot-anim \
+  -no-window -no-audio -no-metrics -no-snapshot -no-boot-anim \
   -camera-back none -camera-front none
 ```
 
-`--one-device` 限制该独立 server 仅考虑指定 USB serial（这里使用不对应实体手机的占位 serial），关闭自动发现后再手动连接模拟器。所有后续设备命令均使用 Linux SDK 内的 `adb`，同时带上 `-P 5038 -s 127.0.0.1:5771`，不能省略到默认 ADB，也不重启 Windows 的 ADB server：
+可用 `systemctl --user status moegramx-emulator` 查看状态、`journalctl --user -u moegramx-emulator` 查看宿主日志、`systemctl --user stop moegramx-emulator` 停止模拟器。不要为处理显示问题重启整个 WSL，以免中断其他项目。
+
+`--one-device` 限制该独立 server 仅考虑指定 USB serial（这里使用不对应实体手机的占位 serial），关闭自动发现后再手动连接模拟器。安装、日志和自动化设备命令均使用 Linux SDK 内的 `adb`，同时带上 `-P 5038 -s 127.0.0.1:5771`，不能省略到默认 ADB，也不重启 Windows 的 ADB server：
 
 ```bash
 /home/lunarclock/Android/Sdk/platform-tools/adb -P 5038 connect 127.0.0.1:5771
@@ -169,7 +174,23 @@ export QT_X11_NO_MITSHM=1
   -n com.ayx.mgx/org.thunderdog.challegram.MainActivity
 ```
 
-APK 文件名应与当前构建输出一致；覆盖安装时明确添加 `-r`，不得为测试清空已有登录数据。当前 WSL 环境使用 `swangle` 并禁用 Vulkan；默认图形配置曾导致模拟器宿主的 `RenderThread` 崩溃，应与客户端 Android 崩溃区分。`-no-snapshot` 禁用快照，不删除 AVD 用户数据。账号必须由用户在模拟器内自行登录，不复制实体手机会话，也不在脚本、日志或仓库保存验证码和密码。安装、欢迎页和登录页正常仅代表启动检查通过；论坛合并历史、书签、未读导航和 Shadow Ban 仍需登录后用真实聊天操作验证。模拟器不能代替真机性能、厂商后台策略与 FCM 唤醒测试。
+Windows 查看器使用 [官方 scrcpy](https://github.com/Genymobile/scrcpy) 便携包（本机为 v4.1），不修改系统 PATH。在解压目录的 PowerShell 中设置仅当前进程生效的环境并启动：
+
+```powershell
+$env:ADB = Join-Path (Get-Location) 'adb.exe'
+$env:ANDROID_USER_HOME = Join-Path (Get-Location) 'emulator-adb-home'
+New-Item -ItemType Directory -Force -Path $env:ANDROID_USER_HOME | Out-Null
+$env:ADB_SERVER_SOCKET = 'tcp:127.0.0.1:5038'
+$env:ANDROID_ADB_SERVER_PORT = '5038'
+.\scrcpy.exe --serial=127.0.0.1:5771 --tunnel-host=127.0.0.1 `
+  --tunnel-port=27783 --port=27783 --force-adb-forward `
+  --no-audio --no-clipboard-autosync --max-size=1600 --max-fps=30 `
+  --window-title=moegramX-WSL-Emulator --window-width=460 --window-height=920
+```
+
+scrcpy 附带的 Windows ADB 客户端只连接上述 WSL `5038` server，不连接实体手机或默认 `5037` server。WSL 的 localhost 转发须可用；关闭查看器不会停止模拟器。当前 WSLg 曾出现共享内存打开失败、窗口有标题但不可见的问题，因此不依赖 WSLg 显示。
+
+APK 文件名应与当前构建输出一致；覆盖安装时明确添加 `-r`，不得为测试清空已有登录数据。当前 WSL 环境使用 `swangle` 并禁用 Vulkan；默认图形配置曾导致模拟器宿主的 `RenderThread` 崩溃，应与客户端 Android 崩溃区分。`-no-snapshot` 禁用快照，不删除 AVD 用户数据。账号必须由用户在模拟器内自行登录，不复制实体手机会话，也不在脚本、日志或仓库保存验证码和密码。安装、欢迎页和登录页正常仅代表启动检查通过；论坛合并历史、书签、未读导航和 Shadow Ban 仍需登录后用真实聊天操作验证。测试前记录本地开关和屏蔽列表，只调整必要项并在结束后恢复；阅读位置可能随实际浏览推进，不把它当作可回滚设置。截图和设备日志仅保存在本地，避免把账号或聊天内容提交到仓库。模拟器不能代替真机性能、厂商后台策略与 FCM 唤醒测试。
 
 ### GitHub Actions 构建与交付
 
