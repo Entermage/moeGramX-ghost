@@ -134,7 +134,42 @@ arm64 release APK 输出到 `app/build/outputs/apk/latestArm64/release/`。编�
 
 `./gradlew -p tests/external-share-android runChecks` 在独立 JVM 工程中读取当前 Manifest，调用 Android 16 框架的 `IntentFilter.match`，并直接编译生产 `ExternalShareUtils` 检查 URI 提取、MIME 优先级、打开文件的媒体/文档路由和路径边界。首次运行下载 `android-all` 测试依赖，不加入 APK；少量应用工具依赖使用测试替身。它不验证真实 ContentProvider 授权、分享界面操作、TDLib 上传或收件结果，不能代替手机端到端测试。
 
-`tests/VisibleUnreadAnchorTest.java` 直接运行生产分页策略，覆盖连续隐藏消息、短页、重复游标、稀疏 64 位消息 ID、相册成员和页数上限。`python3 -m unittest discover -s tests -p test_chat_navigation.py -v` 提取生产书签保存和默认定位方法，在 JVM 数据/布局替身下验证位置与偏移，并检查入口及取消逻辑的接线。两者不验证真实 TDLib 历史请求或 RecyclerView 渲染。用户占用手机时只运行这些回归检查和 CI 构建，不执行 ADB、安装或设备测试。
+`tests/VisibleUnreadAnchorTest.java` 直接运行生产分页策略，覆盖连续隐藏消息、短页、重复游标、稀疏 64 位消息 ID、相册成员和页数上限。`python3 -m unittest discover -s tests -p test_chat_navigation.py -v` 提取生产书签保存和默认定位方法，在 JVM 数据/布局替身下验证位置与偏移，并检查入口及取消逻辑的接线。两者不验证真实 TDLib 历史请求或 RecyclerView 渲染。用户占用手机时，不连接、安装或操作实体设备；可运行这些回归检查、CI 构建及下述独立模拟器测试。
+
+### WSL 隔离模拟器
+
+本机使用 `Ubuntu-26.04` 的 Android SDK（`/home/lunarclock/Android/Sdk`），通过 WSLg 显示 Android Emulator 窗口。AVD 名为 `moegramx_api35`，使用 Pixel 5 配置和 `system-images;android-35;google_apis;x86_64`。已安装的镜像声明支持 `x86_64,arm64-v8a`，通过 `libndk_translation.so` 运行同一份 ARM64 正式签名 APK，无需另外生成 x86 APK。运行用户须能读写 `/dev/kvm`；加入 `kvm` 组属于持久权限变更，只能在获得用户同意后执行。
+
+为与其他项目的实体手机调试隔离，WSL ADB server 使用 `5038`，模拟器 console/adbd 使用 `5770/5771`，gRPC 使用带 JWT 的本地 `8556`。启动命令在 WSL Bash 中执行；最后一条保持运行，不要关闭承载它的终端：
+
+```bash
+export ANDROID_SDK_ROOT=/home/lunarclock/Android/Sdk
+export ANDROID_ADB_SERVER_PORT=5038
+export ADB_SERVER_SOCKET=tcp:localhost:5038
+export ADB_MDNS_AUTO_CONNECT=0
+export ADB_LOCAL_TRANSPORT_MAX_PORT=0
+export QT_QPA_PLATFORM=xcb
+export QT_X11_NO_MITSHM=1
+"$ANDROID_SDK_ROOT/platform-tools/adb" -P 5038 --one-device moegramx-emulator-only start-server
+"$ANDROID_SDK_ROOT/emulator/emulator" -avd moegramx_api35 \
+  -ports 5770,5771 -grpc 8556 -grpc-use-jwt -accel on \
+  -gpu swangle -feature -Vulkan -memory 4096 -cores 4 \
+  -no-audio -no-metrics -no-snapshot -no-boot-anim \
+  -camera-back none -camera-front none
+```
+
+`--one-device` 限制该独立 server 仅考虑指定 USB serial（这里使用不对应实体手机的占位 serial），关闭自动发现后再手动连接模拟器。所有后续设备命令均使用 Linux SDK 内的 `adb`，同时带上 `-P 5038 -s 127.0.0.1:5771`，不能省略到默认 ADB，也不重启 Windows 的 ADB server：
+
+```bash
+/home/lunarclock/Android/Sdk/platform-tools/adb -P 5038 connect 127.0.0.1:5771
+/home/lunarclock/Android/Sdk/platform-tools/adb -P 5038 -s 127.0.0.1:5771 get-state
+/home/lunarclock/Android/Sdk/platform-tools/adb -P 5038 -s 127.0.0.1:5771 install --no-streaming \
+  app/build/outputs/apk/latestArm64/release/moegramX-0.29.0.1799-arm64-v8a.apk
+/home/lunarclock/Android/Sdk/platform-tools/adb -P 5038 -s 127.0.0.1:5771 shell am start -W \
+  -n com.ayx.mgx/org.thunderdog.challegram.MainActivity
+```
+
+APK 文件名应与当前构建输出一致；覆盖安装时明确添加 `-r`，不得为测试清空已有登录数据。当前 WSL 环境使用 `swangle` 并禁用 Vulkan；默认图形配置曾导致模拟器宿主的 `RenderThread` 崩溃，应与客户端 Android 崩溃区分。`-no-snapshot` 禁用快照，不删除 AVD 用户数据。账号必须由用户在模拟器内自行登录，不复制实体手机会话，也不在脚本、日志或仓库保存验证码和密码。安装、欢迎页和登录页正常仅代表启动检查通过；论坛合并历史、书签、未读导航和 Shadow Ban 仍需登录后用真实聊天操作验证。模拟器不能代替真机性能、厂商后台策略与 FCM 唤醒测试。
 
 ### GitHub Actions 构建与交付
 
