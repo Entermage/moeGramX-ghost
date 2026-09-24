@@ -2178,8 +2178,9 @@ public class TdlibUi extends Handler {
       highlightMode = params.highlightMode;
       highlightMessageId = params.highlightMessageId;
     } else {
-      highlightMode = MessagesManager.getAnchorHighlightMode(tdlib.id(), chat, messageThread);
-      highlightMessageId = MessagesManager.getAnchorMessageId(tdlib.id(), chat, messageThread, highlightMode);
+      MessagesManager.DefaultAnchor anchor = MessagesManager.resolveDefaultAnchor(tdlib.id(), chat, messageThread);
+      highlightMode = anchor.highlightMode;
+      highlightMessageId = anchor.messageId;
     }
 
     final boolean isSelfChat = tdlib.isSelfChat(chat.id);

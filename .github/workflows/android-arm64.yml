@@ -100,6 +100,9 @@ jobs:
           test_dir=$(mktemp -d "$RUNNER_TEMP/pagination-test-XXXXXX")
           javac -d "$test_dir" app/src/main/java/org/thunderdog/challegram/telegram/PublicChatPreviewPagination.java tests/PublicChatPreviewPaginationTest.java
           java -cp "$test_dir" org.thunderdog.challegram.telegram.PublicChatPreviewPaginationTest
+          javac -d "$test_dir" app/src/main/java/org/thunderdog/challegram/component/chat/VisibleUnreadAnchor.java tests/VisibleUnreadAnchorTest.java
+          java -cp "$test_dir" org.thunderdog.challegram.component.chat.VisibleUnreadAnchorTest
+          python3 -m unittest discover -s tests -p test_chat_navigation.py -v
 
       - name: Build native libraries including Ghost Mode TDLib
         run: bash scripts/ci-prepare-native.sh

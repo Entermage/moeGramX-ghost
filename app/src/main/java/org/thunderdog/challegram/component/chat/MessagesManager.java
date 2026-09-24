@@ -130,6 +130,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
       public void onScrollStateChanged (RecyclerView recyclerView, int newState) {
         if (newState == RecyclerView.SCROLL_STATE_DRAGGING) {
           clearMessageLinkTarget();
+          loader.cancelUnreadNavigation();
           controller.collapsePinnedMessagesBar(true);
           if (Settings.instance().needHideChatKeyboardOnScroll()) {
             controller.hideAllKeyboards();
@@ -857,6 +858,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   public void scrollToStart (boolean force) {
+    loader.cancelUnreadNavigation();
     if (inSpecialMode()) {
       stopScroll();
       scrollToBottom(false);
@@ -1126,6 +1128,14 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   // Displays
 
   public void onNetworkRequestSent () {
+    onChatAwaitFinish();
+  }
+
+  public void onUnreadAnchorUnavailable () {
+    // Keep any existing messages. An exhausted lookup is not an empty chat.
+    if (adapter.getMessageCount() == 0) {
+      adapter.notifyDataSetChanged();
+    }
     onChatAwaitFinish();
   }
 
@@ -2549,6 +2559,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
   private void onBlur () {
     clearMessageLinkTarget();
+    loader.cancelUnreadNavigation();
     saveScrollPosition();
   }
 
@@ -2601,34 +2612,22 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     TGMessage message = adapter.getMessage(firstVisibleItemPosition);
 
     if (firstVisibleItemPosition != RecyclerView.NO_POSITION && MessagesHolder.isMessageType(adapter.getItemViewType(firstVisibleItemPosition))) {
-      boolean isBottomSponsored = adapter.getBottomMessage() != null && adapter.getBottomMessage().isSponsoredMessage() && adapter.getMessageCount() > 1;
-
-      ThreadInfo threadInfo = loader.getMessageThread();
+      if (message != null && message.isSponsoredMessage()) {
+        message = adapter.getBottomActiveMessage();
+        if (message == null) return;
+        firstVisibleItemPosition = adapter.indexOfMessageContainer(message.toMessageId());
+      }
       if (message != null && message.getChatId() != 0) {
         scrollMessageChatId = message.getChatId();
         scrollMessageId = message.getBiggestId();
         scrollMessageOtherIds = message.getOtherMessageIds(scrollMessageId);
         scrollChatId = message.getChatId();
-        if (threadInfo != null) {
-          readFully = scrollChatId == loader.getChatId() && threadInfo.getLastMessageId() == scrollMessageId;
-        } else {
-          TdApi.Chat chat = tdlib.chat(scrollChatId);
-          readFully = chat != null && chat.lastMessage != null && chat.lastMessage.id == scrollMessageId;
-        }
+        // The raw tail may be hidden. Keep the visible bookmark even at the end;
+        // readFully only affects which anchor to prefer after new messages arrive.
+        readFully = scrollChatId == loader.getChatId() && !loader.canLoadBottom() && isAtVeryBottom();
         View view = manager.findViewByPosition(firstVisibleItemPosition);
         if (view != null && view.getParent() != null) {
           scrollOffsetInPixels = calculateOffsetInPixels(view, message.getExtraPadding());
-        }
-        if (readFully && scrollOffsetInPixels == 0) {
-          scrollMessageId = scrollMessageChatId = 0;
-          scrollMessageOtherIds = null;
-        } else if (isBottomSponsored) {
-          if (message.isSponsoredMessage()) {
-            // the bottom VISIBLE message is sponsored - no need to save that data
-            scrollMessageId = scrollMessageChatId = scrollOffsetInPixels = 0;
-            scrollMessageOtherIds = null;
-            readFully = true;
-          }
         }
       }
 
@@ -2673,6 +2672,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   private void onFocus () {
+    loader.resumeUnreadNavigation();
     viewMessages(false);
     saveScrollPosition();
     checkSponsoredMessages();
@@ -2708,7 +2708,8 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
       }
     }
     if (!isEventLog()) {
-      view.setText(Lang.getString(isLoaded ? R.string.NoMessages : R.string.LoadingMessages));
+      view.setText(Lang.getString(loader.isUnreadAnchorUnavailable() ? R.string.MessageNotFound :
+        isLoaded ? R.string.NoMessages : R.string.LoadingMessages));
       return;
     }
 
@@ -3207,6 +3208,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
       return;
     }
     clearMessageLinkTarget();
+    loader.cancelUnreadNavigation();
 
     this.highlightMessageId = messageId;
     this.highlightMode = highlightMode;
@@ -3216,7 +3218,9 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
       checkScrollToBottomButton();
     }
     int index = adapter.indexOfMessageContainer(messageId);
-    if (index == -1) {
+    if (index == -1 || highlightMode == HIGHLIGHT_MODE_UNREAD || highlightMode == HIGHLIGHT_MODE_UNREAD_NEXT) {
+      // A cached raw read boundary is not the visible unread target. Resolve it
+      // through the same bounded loader path used when opening the chat.
       resetByMessage(messageId, highlightMode);
     } else {
       if ((highlightMode == HIGHLIGHT_MODE_UNREAD_NEXT || highlightMode == HIGHLIGHT_MODE_NORMAL_NEXT) && index > 0) {
@@ -3379,60 +3383,44 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
             !chat.lastMessage.isOutgoing;
   }
 
-  public static int getAnchorHighlightMode (int accountId, TdApi.Chat chat, @Nullable ThreadInfo threadInfo) {
-    return getAnchorHighlightMode(accountId, chat, threadInfo, true);
+  public static final class DefaultAnchor {
+    public final @Nullable MessageId messageId;
+    public final int highlightMode;
+
+    private DefaultAnchor (@Nullable MessageId messageId, int highlightMode) {
+      this.messageId = messageId;
+      this.highlightMode = highlightMode;
+    }
   }
 
-  public static int getAnchorHighlightMode (int accountId, TdApi.Chat chat,
-                                            @Nullable ThreadInfo threadInfo, boolean allowUnread) {
+  public static DefaultAnchor resolveDefaultAnchor (int accountId, TdApi.Chat chat, @Nullable ThreadInfo threadInfo) {
     if (chat == null) {
-      return HIGHLIGHT_MODE_NONE;
+      return new DefaultAnchor(null, HIGHLIGHT_MODE_NONE);
     }
-    boolean canGoUnread = allowUnread && canGoUnread(chat, threadInfo);
-    Settings.SavedMessageId messageId = Settings.instance().getScrollMessageId(accountId, chat.id,
+    Settings.SavedMessageId saved = Settings.instance().getScrollMessageId(accountId, chat.id,
       threadInfo != null ? threadInfo.getMessageTopicId() : null
     );
-    boolean preferUnreadFirst = messageId == null || messageId.readFully;
-    if (preferUnreadFirst) {
-      if (canGoUnread)
-        return HIGHLIGHT_MODE_UNREAD;
-      if (messageId != null && messageId.id.getMessageId() != 0)
-        return HIGHLIGHT_MODE_POSITION_RESTORE;
-    } else {
-      if (messageId != null && messageId.id.getMessageId() != 0)
-        return HIGHLIGHT_MODE_POSITION_RESTORE;
-      if (canGoUnread)
-        return HIGHLIGHT_MODE_UNREAD;
+    boolean hasSavedPosition = saved != null && saved.id.getMessageId() != 0;
+    if (hasSavedPosition && !saved.readFully) {
+      return new DefaultAnchor(saved.id, HIGHLIGHT_MODE_POSITION_RESTORE);
     }
-    if (threadInfo != null && allowUnread) {
-      return HIGHLIGHT_MODE_UNREAD;
+    if (canGoUnread(chat, threadInfo)) {
+      return new DefaultAnchor(resolveUnreadAnchor(chat, threadInfo), HIGHLIGHT_MODE_UNREAD);
     }
-    return HIGHLIGHT_MODE_NONE;
+    if (hasSavedPosition) {
+      return new DefaultAnchor(saved.id, HIGHLIGHT_MODE_POSITION_RESTORE);
+    }
+    return threadInfo != null ? new DefaultAnchor(resolveUnreadAnchor(chat, threadInfo), HIGHLIGHT_MODE_UNREAD) :
+      new DefaultAnchor(null, HIGHLIGHT_MODE_NONE);
   }
 
-  public static MessageId getAnchorMessageId (int accountId, TdApi.Chat chat, @Nullable ThreadInfo threadInfo, int anchorMode) {
-    switch (anchorMode) {
-      case HIGHLIGHT_MODE_POSITION_RESTORE: {
-        Settings.SavedMessageId messageId = Settings.instance().getScrollMessageId(
-          accountId, chat.id, threadInfo != null ? threadInfo.getMessageTopicId() : null
-        );
-        return messageId != null && messageId.id.getMessageId() != 0 ? messageId.id : null;
-      }
-      case HIGHLIGHT_MODE_UNREAD:
-      case HIGHLIGHT_MODE_UNREAD_NEXT: {
-        if (threadInfo != null) {
-          return new MessageId(threadInfo.getChatId(), threadInfo.getLastReadInboxMessageId() == 0 ? MessageId.MIN_VALID_ID : threadInfo.getLastReadInboxMessageId());
-        } else if (chat.lastReadOutboxMessageId == MessageId.MAX_VALID_ID || ChatId.isMultiChat(chat.id)) {
-          return new MessageId(chat.id, chat.lastReadInboxMessageId);
-        } else {
-          return new MessageId(chat.id, Math.max(chat.lastReadOutboxMessageId, chat.lastReadInboxMessageId));
-        }
-      }
-      case HIGHLIGHT_MODE_NORMAL:
-      case HIGHLIGHT_MODE_NORMAL_NEXT:
-      default: {
-        return null;
-      }
+  public static MessageId resolveUnreadAnchor (TdApi.Chat chat, @Nullable ThreadInfo threadInfo) {
+    if (threadInfo != null) {
+      return new MessageId(threadInfo.getChatId(), threadInfo.getLastReadInboxMessageId() == 0 ? MessageId.MIN_VALID_ID : threadInfo.getLastReadInboxMessageId());
+    } else if (chat.lastReadOutboxMessageId == MessageId.MAX_VALID_ID || ChatId.isMultiChat(chat.id)) {
+      return new MessageId(chat.id, chat.lastReadInboxMessageId);
+    } else {
+      return new MessageId(chat.id, Math.max(chat.lastReadOutboxMessageId, chat.lastReadInboxMessageId));
     }
   }
 

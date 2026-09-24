@@ -49,6 +49,7 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.List;
+import java.util.TreeMap;
 
 import moe.kirao.mgx.MoexMessageFilter;
 
@@ -98,6 +99,15 @@ public class MessagesLoader implements Client.ResultHandler {
   private int loadingMode;
   private int filteredPageContinuationCount;
 
+  // A raw read cursor is a search boundary, not necessarily a visible message.
+  private @Nullable VisibleUnreadAnchor visibleUnreadAnchor;
+  private final TreeMap<Long, TdApi.Message> unreadAnchorMessages = new TreeMap<>();
+  private boolean unreadNavigationPending, resolvedUnreadTarget, unreadNavigationStopped;
+  private boolean unreadAnchorUnavailable;
+  private int unreadNavigationScrollActions;
+  private boolean unreadPreviousCanLoadTop, unreadPreviousCanLoadBottom, resumeUnreadOnFocus;
+  private long unreadNavigationBoundary;
+
   private boolean isLoadingSponsoredMessage;
 
   // private TGMessage edgeMessage;
@@ -127,7 +137,7 @@ public class MessagesLoader implements Client.ResultHandler {
   private Tdlib.CancellableResultHandler<TdApi.SponsoredMessages> sponsoredResultHandler;
   private final MessagesSearchManagerMiddleware searchManagerMiddleware;
 
-  private long contextId;
+  private volatile long contextId;
 
   private boolean canShowSponsoredMessage (long chatId) {
     return tdlib.isChannel(chatId) && !manager.controller().isInForceTouchMode() && !manager.controller().inPreviewMode() && !manager.controller().areScheduledOnly() && !manager.controller().arePinnedMessages();
@@ -271,19 +281,34 @@ public class MessagesLoader implements Client.ResultHandler {
 
         if (object.getConstructor() == TdApi.Error.CONSTRUCTOR) {
           Log.w(Log.TAG_MESSAGES_LOADER, "Received error: %s", TD.toErrorString(object));
+          TdApi.Message[] unreadFallback = null;
           synchronized (lock) {
             if (contextId != currentContextId || lastHandler != this) {
               return;
             }
             lastHandler = null;
             isLoading = false;
+            mergeMode = MERGE_MODE_NONE;
+            mergeChunk = null;
+            filteredPageContinuationCount = 0;
+            if (unreadNavigationPending) {
+              TdApi.Message[] fallback = finishVisibleUnreadPage(false);
+              if (fallback.length > 0 && !unreadAnchorUnavailable) {
+                unreadFallback = fallback;
+                isLoading = true;
+              } else {
+                unreadNavigationPending = false;
+                unreadAnchorMessages.clear();
+              }
+            }
           }
-          mergeMode = MERGE_MODE_NONE;
-          mergeChunk = null;
-          filteredPageContinuationCount = 0;
+          if (unreadFallback != null) {
+            processMessages(currentContextId, unreadFallback, -1, null, 0, true, null);
+          }
           UI.post(() -> {
             if (contextId != currentContextId) return;
             manager.onNetworkRequestSent();
+            if (unreadAnchorUnavailable) manager.onUnreadAnchorUnavailable();
             UI.showError(object);
           });
           return;
@@ -346,6 +371,17 @@ public class MessagesLoader implements Client.ResultHandler {
 
         boolean needMoreTop = allowMoreTop;
         boolean needMoreBottom = allowMoreBottom;
+        if (visibleUnreadAnchor != null && object.getConstructor() == TdApi.Messages.CONSTRUCTOR &&
+            mergeMode == MERGE_MODE_NONE) {
+          messages = prepareVisibleUnreadPage(currentContextId, messages);
+          if (messages == null) {
+            return;
+          }
+          if (unreadNavigationStopped) {
+            // No additional album/history requests after exhaustion or a failed search.
+            needMoreTop = needMoreBottom = false;
+          }
+        }
         TdApi.Message[] mergingChunk = mergeChunk;
         int mergingMode = mergeMode;
 
@@ -570,6 +606,14 @@ public class MessagesLoader implements Client.ResultHandler {
   }
 
   public void reuse () {
+    synchronized (lock) {
+      contextId = contextId == Long.MAX_VALUE ? 1 : contextId + 1;
+      visibleUnreadAnchor = null;
+      unreadAnchorMessages.clear();
+      unreadNavigationPending = resolvedUnreadTarget = unreadNavigationStopped = false;
+      unreadAnchorUnavailable = false;
+      resumeUnreadOnFocus = false;
+    }
     scrollMessageId = null;
     scrollHighlightMode = 0;
 
@@ -585,11 +629,6 @@ public class MessagesLoader implements Client.ResultHandler {
 
     canLoadTop = false;
     canLoadBottom = false;
-
-    if (contextId == Long.MAX_VALUE) {
-      contextId = 0;
-    }
-    contextId++;
 
     mergeMode = MERGE_MODE_NONE;
     mergeChunk = null;
@@ -1102,13 +1141,148 @@ public class MessagesLoader implements Client.ResultHandler {
   }
 
   public void loadFromMessage (MessageId messageId, final int highlightMode, boolean force) {
+    boolean previousCanLoadTop = canLoadTop;
+    boolean previousCanLoadBottom = canLoadBottom;
     reuse();
 
-    canLoadTop = canLoadBottom = force;
+    // A repeat navigation keeps the existing list until a usable page arrives.
+    canLoadTop = force || previousCanLoadTop;
+    canLoadBottom = force || previousCanLoadBottom;
     scrollMessageId = messageId;
     scrollHighlightMode = highlightMode;
 
+    if ((highlightMode == MessagesManager.HIGHLIGHT_MODE_UNREAD ||
+         highlightMode == MessagesManager.HIGHLIGHT_MODE_UNREAD_NEXT) &&
+        specialMode == SPECIAL_MODE_NONE && searchFilter == null &&
+        !manager.controller().inPreviewMode() && !manager.controller().isInForceTouchMode() &&
+        (messageId.getChatId() == 0 || messageId.getChatId() == getChatId())) {
+      visibleUnreadAnchor = new VisibleUnreadAnchor(messageId.getMessageId());
+      unreadNavigationPending = true;
+      unreadNavigationScrollActions = manager.getUserScrollActionsCount();
+      unreadNavigationBoundary = messageId.getMessageId();
+      unreadPreviousCanLoadTop = previousCanLoadTop;
+      unreadPreviousCanLoadBottom = previousCanLoadBottom;
+    }
+
     load(messageId, CHUNK_SEARCH_OFFSET, CHUNK_SIZE_SEARCH, force ? MODE_INITIAL : MODE_REPEAT_INITIAL, false, true, true);
+  }
+
+  public boolean isUnreadAnchorUnavailable () {
+    return unreadAnchorUnavailable;
+  }
+
+  public void cancelUnreadNavigation () {
+    synchronized (lock) {
+      if (!unreadNavigationPending) return;
+      contextId++;
+      resumeUnreadOnFocus = manager.getAdapter().getMessageCount() == 0;
+      visibleUnreadAnchor = null;
+      unreadAnchorMessages.clear();
+      unreadNavigationPending = resolvedUnreadTarget = unreadNavigationStopped = false;
+      lastHandler = null;
+      isLoading = false;
+      mergeMode = MERGE_MODE_NONE;
+      mergeChunk = null;
+      canLoadTop = unreadPreviousCanLoadTop;
+      canLoadBottom = unreadPreviousCanLoadBottom;
+    }
+  }
+
+  public void resumeUnreadNavigation () {
+    if (resumeUnreadOnFocus) {
+      loadFromMessage(new MessageId(getChatId(), unreadNavigationBoundary), MessagesManager.HIGHLIGHT_MODE_UNREAD, true);
+    }
+  }
+
+  private @Nullable TdApi.Message[] prepareVisibleUnreadPage (long currentContextId, TdApi.Message[] messages) {
+    synchronized (lock) {
+      if (contextId != currentContextId || visibleUnreadAnchor == null) return null;
+      return prepareVisibleUnreadPageLocked(currentContextId, messages);
+    }
+  }
+
+  private @Nullable TdApi.Message[] prepareVisibleUnreadPageLocked (long currentContextId, TdApi.Message[] messages) {
+    if (manager.getUserScrollActionsCount() != unreadNavigationScrollActions) {
+      cancelUnreadNavigation();
+      return null;
+    }
+    VisibleUnreadAnchor navigation = visibleUnreadAnchor;
+    long[] ids = new long[messages.length];
+    boolean[] visibleIncoming = new boolean[messages.length];
+    for (int i = 0; i < messages.length; i++) {
+      TdApi.Message message = messages[i];
+      if (message == null || message.chatId != getChatId()) continue;
+      ids[i] = message.sendingState == null ? message.id : 0;
+      visibleIncoming[i] = !message.isOutgoing && message.sendingState == null &&
+        !MoexMessageFilter.shouldHideInChat(tdlib, message, isChannel());
+      unreadAnchorMessages.put(message.id, message);
+    }
+    long lastMessageId = messageThread != null ? messageThread.getLastMessageId() :
+      chat != null && chat.lastMessage != null ? chat.lastMessage.id : 0;
+    VisibleUnreadAnchor.Result result = navigation.acceptPage(ids, visibleIncoming, lastMessageId);
+    if (result == VisibleUnreadAnchor.Result.CONTINUE) {
+      final int mode = loadingMode;
+      synchronized (lock) {
+        lastHandler = null;
+      }
+      Log.i(Log.TAG_MESSAGES_LOADER, "Finding visible unread, page:%d", navigation.pages());
+      tdlib.ui().postDelayed(() -> {
+        if (contextId != currentContextId || visibleUnreadAnchor != navigation || !unreadNavigationPending) return;
+        if (manager.getUserScrollActionsCount() != unreadNavigationScrollActions) {
+          cancelUnreadNavigation();
+          return;
+        }
+        synchronized (lock) {
+          isLoading = false;
+        }
+        load(new MessageId(getChatId(), navigation.cursor()), -(VisibleUnreadAnchor.PAGE_LIMIT - 1),
+          VisibleUnreadAnchor.PAGE_LIMIT, mode, false, true, true);
+      }, navigation.delayMillis());
+      return null;
+    }
+    TdApi.Message[] resultMessages = finishVisibleUnreadPage(result == VisibleUnreadAnchor.Result.FOUND);
+    if (unreadAnchorUnavailable) {
+      synchronized (lock) {
+        lastHandler = null;
+        isLoading = false;
+      }
+      unreadNavigationPending = false;
+      unreadAnchorMessages.clear();
+      UI.post(() -> {
+        if (contextId != currentContextId) return;
+        manager.onUnreadAnchorUnavailable();
+        UI.showToast(R.string.MessageNotFound, Toast.LENGTH_SHORT);
+      });
+      return null;
+    }
+    return resultMessages;
+  }
+
+  private TdApi.Message[] finishVisibleUnreadPage (boolean found) {
+    synchronized (lock) {
+      return finishVisibleUnreadPageLocked(found);
+    }
+  }
+
+  private TdApi.Message[] finishVisibleUnreadPageLocked (boolean found) {
+    long target = found && visibleUnreadAnchor != null ? visibleUnreadAnchor.targetMessageId() : 0;
+    if (target == 0 && resolvedUnreadTarget && scrollMessageId != null) {
+      target = scrollMessageId.getMessageId(); // Keep a found target if local album completion fails.
+    }
+    if (target == 0) {
+      for (TdApi.Message message : unreadAnchorMessages.descendingMap().values()) {
+        if (!MoexMessageFilter.shouldHideInChat(tdlib, message, isChannel())) {
+          target = message.id;
+          break;
+        }
+      }
+    }
+    unreadNavigationStopped = !found;
+    unreadAnchorUnavailable = target == 0;
+    resolvedUnreadTarget = target != 0;
+    if (target != 0) scrollMessageId = new MessageId(getChatId(), target);
+    visibleUnreadAnchor = null;
+    return unreadAnchorMessages.descendingMap().values().toArray(new TdApi.Message[0]);
   }
 
   public boolean isLoading () {
@@ -1233,6 +1407,9 @@ public class MessagesLoader implements Client.ResultHandler {
     if (isLoading || getChatId() == 0 || lastHandler != null) {
       return false;
     }
+    if (unreadNavigationStopped && manager.getUserScrollActionsCount() == unreadNavigationScrollActions) {
+      return false; // No automatic retry/prefetch after a bounded search or 429. User scrolling can resume.
+    }
     if (fromTop) {
       final MessageId startTop = getStartTop();
       if (canLoadTop() && startTop != null) {
@@ -1348,11 +1525,15 @@ public class MessagesLoader implements Client.ResultHandler {
   private void processMessages (final long currentContextId, TdApi.Message[] messages, int knownTotalMessageCount,
                                 String nextSearchOffset, long nextSearchFromMessageId,
                                 boolean needFindUnread, @Nullable List<List<TdApi.Message>> missingAlbums) {
+    if (contextId != currentContextId) return;
     if (Log.isEnabled(Log.TAG_MESSAGES_LOADER)) {
       Log.v(Log.TAG_MESSAGES_LOADER, "Processing %d messages...", messages.length);
     }
 
     final ArrayList<TGMessage> items = new ArrayList<>(messages.length);
+    final boolean unreadNavigationResult = unreadNavigationPending;
+    final boolean stopUnreadPrefetch = unreadNavigationResult && unreadNavigationStopped;
+    final boolean hasResolvedUnreadTarget = unreadNavigationResult && resolvedUnreadTarget;
 
     final long chatId, lastReadOutboxMessageId, lastReadInboxMessageId;
     final boolean hasUnreadMessages;
@@ -1543,7 +1724,13 @@ public class MessagesLoader implements Client.ResultHandler {
       }
 
       if (hasUnreadMessages) {
-        if (lookForInbox) {
+        if (hasResolvedUnreadTarget && !stopUnreadPrefetch) {
+          if (containsScrollingMessage && !cur.isOutgoing()) {
+            unreadFound = true;
+            cur.setShowUnreadBadge(true);
+            unreadBadged = cur;
+          }
+        } else if (lookForInbox) {
           if (!cur.isOutgoing()) {
             lookForInbox = false;
             cur.setShowUnreadBadge(true);
@@ -1646,7 +1833,7 @@ public class MessagesLoader implements Client.ResultHandler {
         }
         case MessagesManager.HIGHLIGHT_MODE_UNREAD:
         case MessagesManager.HIGHLIGHT_MODE_UNREAD_NEXT: {
-          if (scrollItemIndex > 0) {
+          if (!hasResolvedUnreadTarget && scrollItemIndex > 0) {
             scrollItemIndex--;
           }
           scrollItem = items.get(scrollItemIndex);
@@ -1668,7 +1855,7 @@ public class MessagesLoader implements Client.ResultHandler {
     boolean continuationSupported = loadingSupportsFilteredContinuation &&
       specialMode == SPECIAL_MODE_NONE && searchFilter == null;
     boolean canContinueFilteredPage = continuationSupported && !loadingLocal &&
-      filteredOnlyPage && rawCursorAdvanced && !reachedRequestedRawEdge;
+      !unreadNavigationResult && filteredOnlyPage && rawCursorAdvanced && !reachedRequestedRawEdge;
 
     if (canContinueFilteredPage) {
       final long continuationContextId = currentContextId;
@@ -1791,7 +1978,7 @@ public class MessagesLoader implements Client.ResultHandler {
 
     final int scrollPosition = scrollItemIndex == -1 ? 0 : scrollItemIndex;
     final MessageId scrollMessageId;
-    if (unreadBadged != null && !isLoadingFromThreadStart(this.scrollMessageId)) {
+    if (!hasResolvedUnreadTarget && unreadBadged != null && !isLoadingFromThreadStart(this.scrollMessageId)) {
       scrollMessageId = new MessageId(unreadBadged.getChatId(), unreadBadged.getSmallestId());
     } else {
       scrollMessageId = this.scrollMessageId;
@@ -1802,6 +1989,10 @@ public class MessagesLoader implements Client.ResultHandler {
 
     UI.post(() -> {
       if (contextId != currentContextId || getChatId() != chatId) {
+        return;
+      }
+      if (unreadNavigationResult && manager.getUserScrollActionsCount() != unreadNavigationScrollActions) {
+        cancelUnreadNavigation();
         return;
       }
 
@@ -1831,6 +2022,12 @@ public class MessagesLoader implements Client.ResultHandler {
       final int chunkSize = scrollItemIndexFinal == -1 ? CHUNK_SIZE_SMALL : CHUNK_SIZE_SEARCH;
       boolean willTryAgain = (loadingMode == MODE_INITIAL || loadingMode == MODE_REPEAT_INITIAL) && items.size() < chunkSize && items.size() > 0;
       manager.displayMessages(items, loadingMode, scrollPosition, scrollItemView, scrollMessageId, scrollHighlightMode, willTryAgain && loadingLocal, canLoadTop);
+      if (unreadNavigationResult) {
+        synchronized (lock) {
+          unreadNavigationPending = resolvedUnreadTarget = false;
+          unreadAnchorMessages.clear();
+        }
+      }
 
       synchronized (lock) {
         isLoading = false;
@@ -1838,7 +2035,7 @@ public class MessagesLoader implements Client.ResultHandler {
 
       boolean ignoreEndCheck = false;
 
-      if (loadingMode == MODE_INITIAL || loadingMode == MODE_REPEAT_INITIAL) {
+      if (!stopUnreadPrefetch && (loadingMode == MODE_INITIAL || loadingMode == MODE_REPEAT_INITIAL)) {
         int count = items.size();
         if (count > 0 && count < chunkSize) {
           if (Log.isEnabled(Log.TAG_MESSAGES_LOADER)) {
@@ -1858,7 +2055,7 @@ public class MessagesLoader implements Client.ResultHandler {
       if (!canLoadBottom && !ignoreEndCheck) {
         manager.onBottomEndChecked();
       }
-      manager.ensureContentHeight();
+      if (!stopUnreadPrefetch) manager.ensureContentHeight();
     });
   }
 

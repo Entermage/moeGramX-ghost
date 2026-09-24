@@ -296,7 +296,6 @@ import tgx.td.TdConstants;
 import tgx.td.data.MessageWithProperties;
 import tgx.td.ui.TdUi;
 import moe.kirao.mgx.MoexConfig;
-import moe.kirao.mgx.MoexMessageFilter;
 import moe.kirao.mgx.MoexShadowUnreadManager;
 import moe.kirao.mgx.ui.MessageDetailsController;
 import moe.kirao.mgx.utils.SystemUtils;
@@ -2460,28 +2459,6 @@ public class MessagesController extends ViewController<MessagesController.Argume
     return false;
   }
 
-  private static boolean canUseRawUnreadAnchor (Tdlib tdlib, TdApi.Chat chat,
-                                                @Nullable ThreadInfo messageThread) {
-    if (chat == null) return true;
-    if (MoexMessageFilter.mayHideRegexInChat(tdlib.isChannelChat(chat))) {
-      return false;
-    }
-    if (messageThread != null) {
-      return !MoexShadowUnreadManager.hasKnownHiddenUsers(tdlib);
-    }
-
-    int hiddenUnreadCount = MoexShadowUnreadManager.getKnownHiddenUnreadCount(tdlib, chat);
-    if (hiddenUnreadCount > 0) {
-      return false;
-    }
-    if (hiddenUnreadCount == MoexShadowUnreadManager.UNKNOWN_HIDDEN_UNREAD_COUNT &&
-        (MoexShadowUnreadManager.hasKnownHiddenUsers(tdlib) ||
-          chat.lastMessage != null && MoexMessageFilter.isShadowBanned(tdlib, chat.lastMessage))) {
-      return false;
-    }
-    return true;
-  }
-
   public static class Arguments {
     private final int constructor;
 
@@ -2517,10 +2494,9 @@ public class MessagesController extends ViewController<MessagesController.Argume
       this.chat = chat;
       this.messageThread = messageThread;
       this.messageTopicId = messageTopicId;
-      this.highlightMode = MessagesManager.getAnchorHighlightMode(
-        tdlib.id(), chat, messageThread,
-        canUseRawUnreadAnchor(tdlib, chat, messageThread));
-      this.highlightMessageId = MessagesManager.getAnchorMessageId(tdlib.id(), chat, messageThread, highlightMode);
+      MessagesManager.DefaultAnchor anchor = MessagesManager.resolveDefaultAnchor(tdlib.id(), chat, messageThread);
+      this.highlightMode = anchor.highlightMode;
+      this.highlightMessageId = anchor.messageId;
       this.searchFilter = filter;
 
       this.inPreviewMode = false;
@@ -3090,18 +3066,15 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   private void scrollToUnreadOrStartMessage () {
-    boolean canUseUnreadAnchor = canUseRawUnreadAnchor(tdlib, chat, messageThread);
-    int anchorMode = MessagesManager.getAnchorHighlightMode(
-      tdlib.id(), chat, messageThread, canUseUnreadAnchor);
+    MessagesManager.DefaultAnchor anchor = MessagesManager.resolveDefaultAnchor(tdlib.id(), chat, messageThread);
     if (!manager.hasReturnMessage()) {
-      if (canUseUnreadAnchor && !inPreviewMode && !isInForceTouchMode() &&
-          anchorMode == MessagesManager.HIGHLIGHT_MODE_UNREAD) {
-        MessageId messageId = MessagesManager.getAnchorMessageId(tdlib.id(), chat, messageThread, anchorMode);
-        manager.highlightMessage(messageId, MessagesManager.HIGHLIGHT_MODE_UNREAD_NEXT, null, true);
+      if (!inPreviewMode && !isInForceTouchMode() &&
+          anchor.highlightMode == MessagesManager.HIGHLIGHT_MODE_UNREAD) {
+        manager.highlightMessage(anchor.messageId, MessagesManager.HIGHLIGHT_MODE_UNREAD_NEXT, null, true);
         return;
       }
-      if (canUseUnreadAnchor && chat != null && MessagesManager.canGoUnread(chat, messageThread)) {
-        MessageId messageId = MessagesManager.getAnchorMessageId(tdlib.id(), chat, messageThread, MessagesManager.HIGHLIGHT_MODE_UNREAD);
+      if (!inPreviewMode && !isInForceTouchMode() && chat != null && MessagesManager.canGoUnread(chat, messageThread)) {
+        MessageId messageId = MessagesManager.resolveUnreadAnchor(chat, messageThread);
         int firstUnreadIndex = manager.indexOfFirstUnreadMessage();
         TGMessage bottom = manager.findBottomMessage();
         MessageId bottomMessageId = bottom != null ? bottom.toMessageId() : null;
