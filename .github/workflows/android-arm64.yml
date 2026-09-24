@@ -103,6 +103,7 @@ jobs:
           javac -d "$test_dir" app/src/main/java/org/thunderdog/challegram/component/chat/VisibleUnreadAnchor.java tests/VisibleUnreadAnchorTest.java
           java -cp "$test_dir" org.thunderdog.challegram.component.chat.VisibleUnreadAnchorTest
           python3 -m unittest discover -s tests -p test_chat_navigation.py -v
+          python3 -m unittest discover -s tests -p test_preview_filter.py -v
 
       - name: Build native libraries including Ghost Mode TDLib
         run: bash scripts/ci-prepare-native.sh

@@ -108,12 +108,8 @@ public class ReplyBarView extends FrameLayoutFix implements View.OnClickListener
       @Override
       public void onCreateMessagePreview (PinnedMessagesBar view, MessagePreviewView previewView) {
         ViewUtils.setBackground(previewView, null);
+        previewView.setMessagePreviewDisabled(true);
         // previewView.setLinePadding(4f);
-      }
-
-      @Override
-      public void onMessageDisplayed (PinnedMessagesBar view, MessagePreviewView previewView, TdApi.Message message) {
-        previewView.clearPreviewChat();
       }
 
       @Override

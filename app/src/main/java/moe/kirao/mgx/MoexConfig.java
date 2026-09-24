@@ -254,29 +254,43 @@ public class MoexConfig {
   }
 
   public void setFilterEnabled (boolean enabled) {
+    boolean oldValue = filterEnabled;
     filterEnabled = enabled;
     putBoolean(KEY_FILTER_ENABLED, enabled);
     MoexMessageFilter.onConfigChanged();
+    notifyClientListeners(KEY_FILTER_ENABLED, enabled, oldValue);
   }
 
   public void setFilterInChats (boolean enabled) {
+    boolean oldValue = filterInChats;
     filterInChats = enabled;
     putBoolean(KEY_FILTER_IN_CHATS, enabled);
+    notifyClientListeners(KEY_FILTER_IN_CHATS, enabled, oldValue);
   }
 
   public void setFilterCaseInsensitive (boolean enabled) {
+    boolean oldValue = filterCaseInsensitive;
     filterCaseInsensitive = enabled;
     putBoolean(KEY_FILTER_CASE_INSENSITIVE, enabled);
     MoexMessageFilter.onConfigChanged();
+    notifyClientListeners(KEY_FILTER_CASE_INSENSITIVE, enabled, oldValue);
   }
 
   public void setFilterPatterns (@NonNull String patterns) {
+    String oldValue = getString(KEY_FILTER_PATTERNS, "");
     putString(KEY_FILTER_PATTERNS, patterns);
     MoexMessageFilter.onConfigChanged();
+    notifyClientListeners(KEY_FILTER_PATTERNS, patterns, oldValue);
   }
 
   private static String shadowBannedUsersKey (int accountId) {
     return KEY_SHADOW_BANNED_USERS_PREFIX + accountId;
+  }
+
+  public static boolean isMessageFilterSetting (String key, int accountId) {
+    return KEY_FILTER_ENABLED.equals(key) || KEY_FILTER_IN_CHATS.equals(key) ||
+      KEY_FILTER_CASE_INSENSITIVE.equals(key) || KEY_FILTER_PATTERNS.equals(key) ||
+      shadowBannedUsersKey(accountId).equals(key);
   }
 
   public synchronized boolean isShadowBanned (int accountId, long userId) {
@@ -312,6 +326,7 @@ public class MoexConfig {
     }
     putLongArray(key, newUserIds);
     MoexShadowUnreadManager.invalidateAccount(accountId);
+    notifyClientListeners(key, newUserIds, oldUserIds);
   }
 
   public synchronized long[] getShadowBannedUsers (int accountId) {
@@ -320,8 +335,12 @@ public class MoexConfig {
   }
 
   public synchronized void setShadowBannedUsers (int accountId, long[] userIds) {
-    putLongArray(shadowBannedUsersKey(accountId), userIds != null ? userIds : new long[0]);
+    String key = shadowBannedUsersKey(accountId);
+    long[] oldUserIds = getShadowBannedUsers(accountId);
+    long[] newUserIds = userIds != null ? userIds : new long[0];
+    putLongArray(key, newUserIds);
     MoexShadowUnreadManager.invalidateAccount(accountId);
+    notifyClientListeners(key, newUserIds, oldUserIds);
   }
 
   public boolean containsKey (String key) {

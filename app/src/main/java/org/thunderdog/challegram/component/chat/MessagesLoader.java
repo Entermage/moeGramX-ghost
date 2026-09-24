@@ -1848,9 +1848,7 @@ public class MessagesLoader implements Client.ResultHandler {
       newestRawMessage : oldestRawMessage;
     long previousRawCursor = lastFromMessageId != null ? lastFromMessageId.getMessageId() : 0;
     boolean rawCursorAdvanced = continuationRawMessage != null &&
-      (continueTowardBottom ?
-        previousRawCursor != 0 && continuationRawMessage.id > previousRawCursor :
-        previousRawCursor == 0 || continuationRawMessage.id < previousRawCursor);
+      canContinueFilteredHistory(loadingMode, lastOffset, previousRawCursor, continuationRawMessage.id);
     boolean reachedRequestedRawEdge = continueTowardBottom && reachedChatHistoryEnd;
     boolean continuationSupported = loadingSupportsFilteredContinuation &&
       specialMode == SPECIAL_MODE_NONE && searchFilter == null;
@@ -2057,6 +2055,18 @@ public class MessagesLoader implements Client.ResultHandler {
       }
       if (!stopUnreadPrefetch) manager.ensureContentHeight();
     });
+  }
+
+  static boolean canContinueFilteredHistory (int mode, int offset, long previousId, long nextId) {
+    if (nextId == 0) return false;
+    if (mode == MODE_MORE_BOTTOM) {
+      return previousId != 0 && nextId > previousId;
+    }
+    // A centered history request may return only its cached anchor (or newer
+    // messages). If all are hidden, switch to the older window once. Subsequent
+    // offset=0 pages must move strictly backwards, so repeated cursors still stop.
+    return previousId == 0 || nextId < previousId ||
+      offset < 0 && (mode == MODE_INITIAL || mode == MODE_REPEAT_INITIAL);
   }
 
   private void fetchAlbum (List<TdApi.Message> album) {

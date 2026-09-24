@@ -28,6 +28,40 @@ def block(path, signature):
 
 
 class ChatNavigationTest(unittest.TestCase):
+    def test_filtered_centered_anchor_recovery(self):
+        method = block(LOADER, "static boolean canContinueFilteredHistory (")
+        harness = r'''
+public class FilteredAnchorHarness {
+  static final int MODE_INITIAL=0,MODE_MORE_TOP=1,MODE_MORE_BOTTOM=2,MODE_REPEAT_INITIAL=3;
+  __METHOD__
+  static int checks;
+  static void check(boolean v,String m) { checks++; if(!v) throw new AssertionError(m); }
+  public static void main(String[] args) {
+    long anchor=371445L<<20;
+    check(canContinueFilteredHistory(MODE_INITIAL,-19,anchor,anchor),"initial cached filtered anchor needs an older window");
+    check(canContinueFilteredHistory(MODE_REPEAT_INITIAL,-19,anchor,anchor),"repeat navigation has same recovery");
+    check(canContinueFilteredHistory(MODE_INITIAL,-19,anchor,anchor+7),"centered page may contain only newer hidden messages");
+    check(!canContinueFilteredHistory(MODE_INITIAL,0,anchor,anchor),"same cursor after normalization must stop");
+    check(!canContinueFilteredHistory(MODE_REPEAT_INITIAL,0,anchor,anchor+7),"offset-zero response must move backwards");
+    check(!canContinueFilteredHistory(MODE_MORE_TOP,-19,anchor,anchor),"ordinary top paging cannot retry same cursor");
+    check(canContinueFilteredHistory(MODE_MORE_TOP,0,anchor,anchor-10),"sparse older IDs advance");
+    check(!canContinueFilteredHistory(MODE_MORE_BOTTOM,-99,anchor,anchor),"bottom paging cannot repeat anchor");
+    check(canContinueFilteredHistory(MODE_MORE_BOTTOM,-99,anchor,anchor+10),"sparse newer IDs advance");
+    check(!canContinueFilteredHistory(MODE_MORE_BOTTOM,-99,0,anchor),"bottom requires concrete anchor");
+    check(!canContinueFilteredHistory(MODE_INITIAL,-19,anchor,0),"no raw message is not recoverable by retry");
+    System.out.println("Filtered history anchor: "+checks+" production-method checks passed");
+  }
+}
+'''.replace("__METHOD__", method)
+        with tempfile.TemporaryDirectory(prefix="filtered-anchor-test-") as directory:
+            java = Path(directory) / "FilteredAnchorHarness.java"
+            java.write_text(harness, encoding="utf-8")
+            subprocess.run(["javac", "-d", directory, str(java)], check=True)
+            subprocess.run(["java", "-cp", directory, "FilteredAnchorHarness"], check=True)
+        process = block(LOADER, "private void processMessages (")
+        self.assertIn("canContinueFilteredHistory(loadingMode, lastOffset, previousRawCursor, continuationRawMessage.id)", process)
+        self.assertIn("continueTowardBottom ? FILTERED_PAGE_BOTTOM_OFFSET : 0", process)
+
     def test_production_bookmarks_and_default_anchor(self):
         methods = "\n".join(block(MANAGER, signature) for signature in (
             "public static boolean canGoUnread (",
