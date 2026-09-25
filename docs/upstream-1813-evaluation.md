@@ -7,13 +7,15 @@
 - A：[HLS codec 选择修复](https://github.com/TGX-Android/Telegram-X/commit/d1c2fb18bb6538453b683ee444873c04ebd67f76)。规范化 h264/h265/av1/vp8/vp9 codec，补充 sample MIME，保留已有 profile 标识。
 - B：[登录页崩溃保护](https://github.com/TGX-Android/Telegram-X/commit/34f9cbdb8278d3fee048826de3216452fd82c3fb)。保护未初始化/空号码输入，限制失去焦点后的测试登录请求；不是 FCM 修复。
 - 复查修复：[日常源码 `43a6ada0`](https://github.com/Entermage/moeGramX-ghost/commit/43a6ada01b25344f42d7d21bc03034a7d6ea529b)，保持原包名、正式证书和 ARM64。修复手动已读全局放行竞态、连接替换后的跨 Client 请求、HLS 别名/MIME 不一致及码率为零/溢出。
-- [本轮 CI 与下载入口](https://github.com/Entermage/moeGramX-ghost/actions/runs/36098528026)。构建状态以页面为准；成功后的 APK 产物需登录 GitHub 下载，保留 30 天。
+- [本轮 CI 与下载入口](https://github.com/Entermage/moeGramX-ghost/actions/runs/36098528026)：回归、完整 ARM64 编译、签名检查及上传均已通过。APK 产物需登录 GitHub 下载，保留 30 天。
 
 本轮本地验证：重建 Ghost TDLib 和正式 APK；21 项 Python 回归重复通过，真实 Media3 MIME/Android Uri 下的 HLS 检查 85 项、外部分享 121 项、分页策略 54 项、可见未读策略 314 项通过。新增测试先复现失败再验证修复，覆盖错误会话/消息、单次令牌、旧连接回调、请求失败清理、编码别名和码率边界。
 
 在已登录 WSL 模拟器中确认：聊天列表、`meiwool/371445` 精确定位、论坛群跳到底部、消息主菜单和 More 分工、Read until 点击返回、公开视频进度推进至 3 秒，以及三次冷启动；crash buffer 为空。Ghost 三类开关保持开启，未发送聊天消息或表情、未退出账号、未接触实体手机。为通过系统弹窗暂时拒绝的模拟器通知权限已恢复到原先未授权/未选择状态。
 
-本地稳定 APK SHA-256：`20925aff0f9779d93bf8b26834a1f1fe2f7cdf4308dc1f60e7851201bee21c35`。测试使用的是本地文件，不能据此声称已安装验证 GitHub runner 产物。点击返回不等于云端回执已由第二账号确认；普通视频播放也不等于覆盖真实 HLS 多编码/硬件解码组合。
+本地稳定 APK SHA-256：`20925aff0f9779d93bf8b26834a1f1fe2f7cdf4308dc1f60e7851201bee21c35`。随后已下载并实际安装 GitHub runner 产物，CI APK 和模拟器已安装 `base.apk` 的 SHA-256 均为 `68b58bf41d896052fc5774b6010b0cd45f84662345e4513c8a56c66739568e2c`；确认正式证书、v2/v3、非 debuggable、仅 ARM64，以及原生库包含新会话/消息令牌而不含旧全局放行标记。
+
+CI 下载包单独复测了论坛消息精确定位、Read until 点击返回、主菜单/More 分工和表情栏、从首条新消息继续跳到最新消息、公开视频播放至 3 秒及三次冷启动，最终聊天列表正常加载，crash buffer 为空。未修改屏蔽列表、未发送消息或表情，也未接触实体手机。点击返回不等于云端回执已由第二账号确认；普通视频播放也不等于覆盖真实 HLS 多编码/硬件解码组合。
 
 ## TDLib、通话库和构建链：试验通过，尚未日常合入
 
