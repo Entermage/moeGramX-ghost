@@ -149,6 +149,7 @@ import moe.kirao.mgx.MoexShadowUnreadManager;
 
 public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, DateChangeListener {
   private static final String MOEX_SHADOW_LOCAL_READ_OPTION = "x_moex_shadow_local_read";
+  private static final String MOEX_GHOST_READ_ONCE_OPTION = "x_moex_ghost_read_once";
   @Override
   public final int accountId () {
     return id();
@@ -287,6 +288,8 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       tdlib.updateParameters(client);
       client.send(new TdApi.SetOption("x_moex_ghost_read_allow_once",
         new TdApi.OptionValueBoolean(false)), tdlib.okHandler());
+      client.send(new TdApi.SetOption(MOEX_GHOST_READ_ONCE_OPTION,
+        new TdApi.OptionValueEmpty()), tdlib.okHandler());
       client.send(new TdApi.SetOption(MOEX_SHADOW_LOCAL_READ_OPTION,
         new TdApi.OptionValueEmpty()), tdlib.okHandler());
       tdlib.applyGhostModeOptions(client);
@@ -6779,9 +6782,12 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   }
 
   public void readMessageOnServer (long chatId, long messageId) {
-    enqueueGhostReadOperation(() ->
-      client().send(new TdApi.SetOption("x_moex_ghost_read_allow_once",
-        new TdApi.OptionValueBoolean(true)), optionResult -> {
+    enqueueGhostReadOperation(() -> {
+      // Bind the one-shot permission to this target and this client, including cleanup.
+      // Other automatic reads must never consume permission for a manual Read until.
+      Client operationClient = client();
+      operationClient.send(new TdApi.SetOption(MOEX_GHOST_READ_ONCE_OPTION,
+        new TdApi.OptionValueString(chatId + ":" + messageId)), optionResult -> {
         if (optionResult.getConstructor() == TdApi.Error.CONSTRUCTOR) {
           try {
             messageHandler().onResult(optionResult);
@@ -6790,10 +6796,10 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
           }
           return;
         }
-        client().send(new TdApi.ViewMessages(chatId, new long[] {messageId},
+        operationClient.send(new TdApi.ViewMessages(chatId, new long[] {messageId},
           new TdApi.MessageSourceChatHistory(), true), result ->
-          client().send(new TdApi.SetOption("x_moex_ghost_read_allow_once",
-            new TdApi.OptionValueBoolean(false)), resetResult -> {
+          operationClient.send(new TdApi.SetOption(MOEX_GHOST_READ_ONCE_OPTION,
+            new TdApi.OptionValueEmpty()), resetResult -> {
             try {
               okHandler().onResult(resetResult);
               messageHandler().onResult(result);
@@ -6801,7 +6807,8 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
               finishGhostReadOperation();
             }
           }));
-      }));
+      });
+    });
   }
 
   public void setOnline (boolean isOnline) {

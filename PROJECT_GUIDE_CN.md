@@ -58,9 +58,11 @@ flowchart LR
 
 ### HLS 视频播放
 
-`HlsVideo` 将 Telegram 的 `h264`、`h265`、`av1`、`vp8`、`vp9` 编码名称转换为播放器识别的 RFC 6381 标识，已有带 profile 的标识保持原样。HLS 播放列表和 `U` 中的分片提取器使用同一转换，提取器同时设置对应的 sample MIME。候选流按 Android 版本及可用的 VP9 扩展判断；这不保证设备具备所有 profile、分辨率或硬件解码能力。
+`HlsVideo` 将 Telegram 的 `h264`、`h265/hevc`、`av1`、`vp8`、`vp9` 编码名称转换为播放器识别的 RFC 6381 标识。已知编码名忽略首尾空白和大小写，只转换名称，不改动 profile/level 字段的大小写。播放列表、`U` 中的分片提取器、sample MIME 和 Android 版本判断共用该转换。未知文件大小或无效时长采用默认估计码率；有效估计限制为 Media3 可解析的正整数，避免零值或溢出。候选流按 Android 版本及可用的 VP9 扩展判断；这不保证设备具备所有 profile、分辨率或硬件解码能力。
 
 ### Ghost Mode、过滤与 Shadow Ban
+
+手动 `Read until` 与配置写入、自动本地已读共用操作队列。Java 将 `x_moex_ghost_read_once` 设置为精确的 `chatId:messageId`，原生只在匹配的单条、强制、聊天历史请求中消费一次许可；其他聊天、普通自动已读、评论线程及话题已读不能借用许可。设置令牌、发起请求、清理令牌始终使用同一个 TDLib Client，账号重启不能把旧操作转移到新连接。新客户端启动时清理遗留令牌。这不是逐条独立已读：原有 TDLib 发送流程仍可能将云端位置推进到更靠后的当前本地已读位置，而不是严格停在点选消息。
 
 `SettingsMoexController` 修改 `MoexConfig` 中的开关和名单。Ghost Mode 在已读、在线状态及输入动作发送路径上决定是否把操作提交给 TDLib；频道、群组和私聊的已读保护分别配置。TDLib 仍拦截普通聊天历史的云端已读位置，但会定向提交已查看消息的未读提及和未读反应内容回执，使 `@` 与表情互动提示不会在后续同步时恢复或累积；这类内容回执不推进聊天的云端已读位置。Ghost 配置写入与 Shadow Ban 自动本地已读请求在 Java 层串行执行，并等待相关 `SetOption` 完成，避免切换开关时使用到错误的聊天类型配置。
 
@@ -141,7 +143,7 @@ Google 构建通过 `FirebaseListenerService` 接收 FCM，再唤醒账号和 TD
 
 ```bash
 ABIS=arm64-v8a scripts/setup.sh
-git -C tdlib/source/td apply --unidiff-zero ../../../patches/tdlib-ghost-mode.patch
+git -C tdlib/source/td apply ../../../patches/tdlib-ghost-mode.patch
 # 使用 tdlib/source/ 中的脚本重建并安装 libtdjni.so
 ./gradlew assembleLatestArm64Release
 ```
@@ -154,9 +156,11 @@ arm64 release APK 输出到 `app/build/outputs/apk/latestArm64/release/`。编�
 
 `python3 -m unittest discover -s tests -p test_preview_filter.py -v` 编译生产 `MoexMessageFilter`、`ListManager`，并提取生产预览和配置方法，在 TDLib/UI 替身下验证通知、屏蔽/取消屏蔽、正则开关、账号隔离、异步回调、缩略图、预览目标和请求失败后的手动重试。另检查监听与置顶点击的接线。它不执行 Android 渲染或真实网络错误，相关显示及导航仍需模拟器验证。
 
-`./gradlew -p tests/upstream-runtime runChecks` 编译生产 `HlsVideo.kt`，用确定性 Android/TDLib/Media3 替身覆盖编码转换、带 profile 标识、版本边界、VP9 扩展兜底和播放列表。`python3 -m unittest discover -s tests -p test_upstream_ab.py -v` 测试生产登录校验方法的空控件/空文本边界，并检查播放器和登录回调接线。两者不验证真实视频解码、Telegram HLS 网络流或完整登录流程。
+`./gradlew -p tests/upstream-runtime runChecks` 编译生产 `HlsVideo.kt`，使用当前项目版本的真实 Media3 MIME 解析器和 Android Uri，覆盖编码别名、profile 字段、API 边界、VP9 扩展兜底和码率边界；SDK 版本、TDLib 数据及原生解码器可用性仍使用测试替身。`python3 -m unittest discover -s tests -p test_upstream_ab.py -v` 测试生产登录校验方法的空控件/空文本边界，并检查播放器和登录回调接线。两者不验证真实视频解码、Telegram HLS 网络流或完整登录流程。
 
 ### WSL 隔离模拟器
+
+`python3 -m unittest discover -s tests -p test_ghost_read.py -v` 在干净的固定版本 TDLib 源码上应用补丁，再编译实际原生策略及 Java 请求方法，覆盖错误目标、令牌重复使用、账号连接替换、请求失败和队列释放；它不连接 Telegram 服务，不能替代双账号云端回执验证。
 
 本机使用 `Ubuntu-26.04` 的 Android SDK（`/home/lunarclock/Android/Sdk`），模拟器作为 WSL 无窗口进程运行，由 Windows 便携版 scrcpy 显示和操作。Windows 只承担查看器角色，SDK、模拟器和构建仍在 WSL。AVD 名为 `moegramx_api35`，使用 Pixel 5 配置和 `system-images;android-35;google_apis;x86_64`。已安装的镜像声明支持 `x86_64,arm64-v8a`，通过 `libndk_translation.so` 运行同一份 ARM64 正式签名 APK，无需另外生成 x86 APK。运行用户须能读写 `/dev/kvm`；加入 `kvm` 组属于持久权限变更，只能在获得用户同意后执行。
 

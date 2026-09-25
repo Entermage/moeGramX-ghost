@@ -52,5 +52,24 @@ fun main() {
   expect(!onlyAv1.hasSupportedCodecs(), "no supported variants")
   expect(runCatching { onlyAv1.multivariantPlaylistData(true) }.isFailure, "reject unsupported variants")
   expect(HlsVideo(TdApi.Video(TdApi.File(1), 0), arrayOf(videos[0])).multivariantPlaylistData(true).contains("BANDWIDTH=1000000"), "zero duration")
-  println("HLS production checks passed: $checks (JVM doubles, not media decoding)")
+  for (codec in listOf("hevc", "HEVC", " H265 ")) {
+    expect(HlsVideo.toRfc6381CodecString(codec) == "hvc1", "HEVC alias $codec")
+    expect(HlsVideo.toSampleMimeType(codec) == "video/hevc", "real Media3 HEVC MIME $codec")
+    Build.VERSION.SDK_INT = 20
+    expect(!HlsVideo.isCodecSupported(codec, true), "HEVC API gate $codec")
+  }
+  for ((input, output) in mapOf("H264.640028" to "avc1.640028",
+    "h265.1.6.L93.B0" to "hvc1.1.6.L93.B0", "AV1.0.08M.08" to "av01.0.08M.08",
+    " VP9.00.10.08 " to "vp09.00.10.08", "AVC1.640028" to "avc1.640028")) {
+    expect(HlsVideo.toRfc6381CodecString(input) == output, "profile alias $input")
+    expect(HlsVideo.toSampleMimeType(input) != null, "real Media3 profile MIME $input")
+  }
+  for ((size, expected) in listOf(0L to 1000000, -1L to 1000000, 1L to 1,
+    5_000_000_000L to Int.MAX_VALUE, Long.MAX_VALUE to Int.MAX_VALUE)) {
+    val variant = videos[0].copy(video = TdApi.File(200, size))
+    Build.VERSION.SDK_INT = 35
+    val data = HlsVideo(TdApi.Video(TdApi.File(1), 10), arrayOf(variant)).multivariantPlaylistData(true)
+    expect(data.contains("BANDWIDTH=$expected,"), "nonzero bounded bandwidth for $size")
+  }
+  println("HLS production checks passed: $checks (real Media3 MIME/Android Uri, not media decoding)")
 }
