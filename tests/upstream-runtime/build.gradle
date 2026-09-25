@@ -1,0 +1,16 @@
+plugins { id 'org.jetbrains.kotlin.jvm' version '2.4.10' }
+repositories { mavenCentral() }
+kotlin { jvmToolchain(21) }
+// Compile production HLS code against deterministic platform/TDLib fixtures.
+// This checks codec selection, not Android media decoding.
+tasks.named('compileKotlin') {
+  source file('../../app/src/main/kotlin/tgx/td/data/HlsVideo.kt')
+}
+tasks.register('runChecks', JavaExec) {
+  dependsOn tasks.named('classes')
+  classpath = sourceSets.main.runtimeClasspath
+  mainClass = 'HlsRuntimeTestKt'
+  maxHeapSize = '256m'
+}
+tasks.named('check') { dependsOn tasks.named('runChecks') }
+defaultTasks 'runChecks'

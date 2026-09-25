@@ -54,6 +54,12 @@ flowchart LR
 
 登录状态不是 Cookie 或 Web Session。账号授权密钥和消息缓存由 TDLib 保存在应用私有数据中；覆盖安装只有在包名和签名满足 Android 更新规则且未清除应用数据时才会保留这些数据。
 
+登录页校验电话号码前先检查区号和号码控件是否存在，缺少控件或文本时视为无效输入，不触发空指针。测试模式的授权就绪回调还要求页面处于焦点中，避免对后台登录页发起测试请求；这不是 FCM 推送修复。
+
+### HLS 视频播放
+
+`HlsVideo` 将 Telegram 的 `h264`、`h265`、`av1`、`vp8`、`vp9` 编码名称转换为播放器识别的 RFC 6381 标识，已有带 profile 的标识保持原样。HLS 播放列表和 `U` 中的分片提取器使用同一转换，提取器同时设置对应的 sample MIME。候选流按 Android 版本及可用的 VP9 扩展判断；这不保证设备具备所有 profile、分辨率或硬件解码能力。
+
 ### Ghost Mode、过滤与 Shadow Ban
 
 `SettingsMoexController` 修改 `MoexConfig` 中的开关和名单。Ghost Mode 在已读、在线状态及输入动作发送路径上决定是否把操作提交给 TDLib；频道、群组和私聊的已读保护分别配置。TDLib 仍拦截普通聊天历史的云端已读位置，但会定向提交已查看消息的未读提及和未读反应内容回执，使 `@` 与表情互动提示不会在后续同步时恢复或累积；这类内容回执不推进聊天的云端已读位置。Ghost 配置写入与 Shadow Ban 自动本地已读请求在 Java 层串行执行，并等待相关 `SetOption` 完成，避免切换开关时使用到错误的聊天类型配置。
@@ -145,6 +151,8 @@ arm64 release APK 输出到 `app/build/outputs/apk/latestArm64/release/`。编�
 `tests/VisibleUnreadAnchorTest.java` 直接运行生产分页策略，覆盖连续隐藏消息、短页、重复游标、稀疏 64 位消息 ID、相册成员和页数上限。`python3 -m unittest discover -s tests -p test_chat_navigation.py -v` 提取生产书签保存和默认定位方法，在 JVM 数据/布局替身下验证位置与偏移，并检查入口及取消逻辑的接线。两者不验证真实 TDLib 历史请求或 RecyclerView 渲染。用户占用手机时，不连接、安装或操作实体设备；可运行这些回归检查、CI 构建及下述独立模拟器测试。
 
 `python3 -m unittest discover -s tests -p test_preview_filter.py -v` 编译生产 `MoexMessageFilter`、`ListManager`，并提取生产预览和配置方法，在 TDLib/UI 替身下验证通知、屏蔽/取消屏蔽、正则开关、账号隔离、异步回调、缩略图、预览目标和请求失败后的手动重试。另检查监听与置顶点击的接线。它不执行 Android 渲染或真实网络错误，相关显示及导航仍需模拟器验证。
+
+`./gradlew -p tests/upstream-runtime runChecks` 编译生产 `HlsVideo.kt`，用确定性 Android/TDLib/Media3 替身覆盖编码转换、带 profile 标识、版本边界、VP9 扩展兜底和播放列表。`python3 -m unittest discover -s tests -p test_upstream_ab.py -v` 测试生产登录校验方法的空控件/空文本边界，并检查播放器和登录回调接线。两者不验证真实视频解码、Telegram HLS 网络流或完整登录流程。
 
 ### WSL 隔离模拟器
 
