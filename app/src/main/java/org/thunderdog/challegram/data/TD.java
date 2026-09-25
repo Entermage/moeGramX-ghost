@@ -110,6 +110,7 @@ import java.util.Calendar;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -212,6 +213,7 @@ public class TD {
         false,
         false,
         false,
+        false,
         false
       );
     }
@@ -236,6 +238,8 @@ public class TD {
         rights.canManageTags;
       case RightId.MANAGE_OR_CREATE_TOPICS ->
         rights.canManageTopics;
+      case RightId.SEND_WELCOME_MESSAGES ->
+        rights.canSendWelcomeMessages;
       case RightId.MANAGE_DIRECT_MESSAGES ->
         rights.canManageDirectMessages;
       case RightId.POST_STORIES ->
@@ -303,6 +307,7 @@ public class TD {
         false,
         false,
         false,
+        false,
         false
       );
     }
@@ -353,6 +358,7 @@ public class TD {
       case RightId.DELETE_STORIES:
       case RightId.MANAGE_DIRECT_MESSAGES:
       case RightId.REMAIN_ANONYMOUS:
+      case RightId.SEND_WELCOME_MESSAGES:
         break;
     }
     throw new IllegalArgumentException(Lang.getResourceEntryName(rightId));
@@ -1937,19 +1943,19 @@ public class TD {
             break;
           }
         } else {
-          return in.substring(i, i + size).toUpperCase();
+          return in.substring(i, i + size).toUpperCase(Locale.ROOT);
         }
       }
       i += size;
     }
 
     if (allowTwo && b != null) {
-      return b.toString().toUpperCase();
+      return b.toString().toUpperCase(Locale.ROOT);
     }
 
     if (force) {
       int codePoint = in.codePointAt(0);
-      return in.substring(0, Character.charCount(codePoint)).toUpperCase();
+      return in.substring(0, Character.charCount(codePoint)).toUpperCase(Locale.ROOT);
     }
     return null;
   }
@@ -3753,7 +3759,7 @@ public class TD {
         // TODO rich message
         break;
       default:
-        Td.assertMessageContent_a80283cf();
+        Td.assertMessageContent_af730a78();
         break;
     }
     return false;
@@ -5588,7 +5594,7 @@ public class TD {
       case TdApi.MessagePaidMedia.CONSTRUCTOR:
         return true;
       default:
-        Td.assertMessageContent_a80283cf();
+        Td.assertMessageContent_af730a78();
         break;
     }
     return false;
@@ -6268,7 +6274,7 @@ public class TD {
           retriever = U.openRetriever(file.getFilePath());
           if (!sendAsAnimation) {
             String hasAudioStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO);
-            if (StringUtils.isEmpty(hasAudioStr) || !StringUtils.equalsOrBothEmpty(hasAudioStr.toLowerCase(), "yes")) {
+            if (StringUtils.isEmpty(hasAudioStr) || !StringUtils.equalsOrBothEmpty(hasAudioStr.toLowerCase(Locale.ROOT), "yes")) {
               sendAsAnimation = true;
             }
           }

@@ -71,7 +71,8 @@ jobs:
         run: |
           key=$(git submodule status --recursive | sha256sum | cut -d' ' -f1)
           echo "revisions=$key" >> "$GITHUB_OUTPUT"
-          git -C tdlib lfs pull --include='openssl/arm64-v8a/lib/*.so'
+          ndk_version=$(scripts/read-property.sh version.properties version.ndk_primary)
+          git -C tdlib lfs pull --include="openssl/$ndk_version/arm64-v8a/lib/*.so"
 
       - name: Restore native outputs
         id: native-cache
@@ -79,8 +80,6 @@ jobs:
         with:
           path: |
             .ci/native-cache
-            app/jni/third_party/libvpx/build/latest/arm64-v8a
-            app/jni/third_party/ffmpeg/build/latest/arm64-v8a
           key: native-arm64-ubuntu24-${{ steps.native-key.outputs.revisions }}-${{ hashFiles('version.properties', '.gitmodules', 'scripts/**', 'patches/**') }}
 
       - name: Cache downloaded Gradle dependencies only

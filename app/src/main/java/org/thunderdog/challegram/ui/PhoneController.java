@@ -680,7 +680,7 @@ public class PhoneController extends EditBaseController<Void> implements Setting
       if (inCountryMode) {
         setIsCountryDefault(false);
       }
-      searchCountry(text.trim().toLowerCase());
+      searchCountry(text.trim());
     } else if (inputId == R.id.login_code) {
       String prevValue = selectedCallingCode;
       if (prevValue != null && StringUtils.equalsOrBothEmpty(prevValue, text)) {
@@ -1036,7 +1036,7 @@ public class PhoneController extends EditBaseController<Void> implements Setting
           }
         }, 360l);
       }
-      searchCountry(inCountryMode ? countryView.getText().toString().trim().toLowerCase() : null);
+      searchCountry(inCountryMode ? countryView.getText().toString().trim() : null);
     }
   }
 
@@ -1429,6 +1429,9 @@ public class PhoneController extends EditBaseController<Void> implements Setting
         }
         if (UI.inTestMode()) {
           makeTestRequest();
+        }
+        if (Config.ENABLE_BASELINE_PROFILE_HOOKS) {
+          tdlib.awaitConnection(() -> runOnUiThreadOptional(this::addStartupMarker));
         }
         break;
       }

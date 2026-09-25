@@ -1,5 +1,11 @@
 # moeGramX Ghost 项目说明
 
+## 当前实验工作树的边界
+
+`codex/upgrade-1813` 是依赖升级验证分支，不是已交付的 `moe` 日常分支。它以 moeGramX 的 `79e4d5d2` / TGX `9312ace3` 完整上游代码作为兼容性试编基线，因此暂时包含上游通知 tag、联系人同步服务、备份限制和 Baseline Profile 等关联改动。这里只验证 TDLib、通话库和构建链的升级可行性；这些额外功能没有被用户选为日常合入项，不能直接把整个实验合并发布。日常分支单独交付 HLS codec 与登录页保护两项修复。
+
+本工作树使用 TDLib wrapper `a032dcf1`（源码 `d1085f9c`）、Gradle 9.7.1、JDK 21、NDK `27.3.13750724`、SDK `android-37.2`。ARM64 使用 `c++_shared`；TDLib 和 OpenSSL 路径均增加 NDK 版本层。`patches/tdlib-ghost-mode.patch` 改为保留 3 行上下文的补丁，按函数重新移植到新 TDLib，不能把旧零上下文补丁直接套在新版本上。
+
 ## 项目用途
 
 本项目是基于 moeGramX、Telegram X 和 TDLib 的 Android Telegram 客户端分支。除上游聊天、媒体、通话和多账号能力外，当前分支加入了 Ghost Mode、Read until、消息过滤、Shadow Ban，以及对 Telegram 公开频道搜索链接的应用内处理。
@@ -39,7 +45,7 @@ flowchart LR
 - `buildSrc/`：Gradle 插件、代码生成和构建任务。
 - `scripts/setup.sh`：交互式生成本地构建配置。
 - `.github/workflows/android-arm64.yml`：GitHub Actions 的 ARM64 正式签名构建与 APK 下载产物。
-- `scripts/ci-prepare-native.sh`：CI 中准备媒体依赖并应用 Ghost Mode 补丁重建 TDLib。
+- `scripts/ci-prepare-native.sh`：CI 中应用带上下文的 Ghost Mode 补丁并重建 TDLib；VPX、FFmpeg、Opus 和 AndroidX Media 的准备改由 Gradle 任务处理。
 - `scripts/ci-configure.py`：从 CI Secrets 生成临时签名和构建配置，结束后清理。
 
 ## 关键执行流程
@@ -53,6 +59,8 @@ flowchart LR
 5. 消息发送、已读位置、输入状态和搜索请求均通过 TDLib Java API 异步执行。
 
 登录状态不是 Cookie 或 Web Session。账号授权密钥和消息缓存由 TDLib 保存在应用私有数据中；覆盖安装只有在包名和签名满足 Android 更新规则且未清除应用数据时才会保留这些数据。
+
+`PhoneController` 在校验号码时检查尚未创建的输入控件和空文本；授权成功后的测试账号请求只允许在该控制器仍有焦点时触发。HLS 播放路径通过 `HlsVideo` 统一把 h264/h265/av1/vp8/vp9 标识规范化为 RFC 6381 codec，并在播放格式中设置对应 sample MIME；保留已包含 profile 的 codec 字符串，最终可播放性仍受设备解码器限制。
 
 ### Ghost Mode、过滤与 Shadow Ban
 
@@ -123,7 +131,7 @@ Google 构建通过 `FirebaseListenerService` 接收 FCM，再唤醒账号和 TD
 
 ## 构建配置与敏感信息
 
-`properties.gradle.kts` 和 setup 生成的本地配置决定 application ID、版本、Telegram `api_id/api_hash`、扩展和构建风味。`app/google-services.json` 必须与实际 application ID 对应。正式 APK 的签名配置应放在仓库外部，并由本地 properties 文件引用。
+Gradle 的 `AppConfigurationPlugin` / `AppConfigurationSource` 读取 `version.properties`、`local.properties` 及 `local.properties.sample`，决定 application ID、版本、Telegram `api_id/api_hash`、扩展和构建风味。`app/google-services.json` 必须与实际 application ID 对应。正式 APK 的签名配置应放在仓库外部，并由本地 properties 文件引用。
 
 不得提交 keystore、签名密码、私有 Telegram 凭据或不应公开的 Firebase 配置。更换包名、签名或 Firebase 项目会影响覆盖安装、App Links、登录数据继承和推送注册。
 
@@ -133,8 +141,12 @@ Google 构建通过 `FirebaseListenerService` 接收 FCM，再唤醒账号和 TD
 
 ```bash
 ABIS=arm64-v8a scripts/setup.sh
-git -C tdlib/source/td apply --unidiff-zero ../../../patches/tdlib-ghost-mode.patch
-# 使用 tdlib/source/ 中的脚本重建并安装 libtdjni.so
+git -C tdlib/source/td apply --check ../../../patches/tdlib-ghost-mode.patch
+git -C tdlib/source/td apply ../../../patches/tdlib-ghost-mode.patch
+# 从 tdlib/source/td/example/android 生成宿主代码，再交叉编译 ARM64 libtdjni.so。
+# 使用 NDK 27、c++_shared、ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON。
+# OpenSSL: tdlib/openssl/27.3.13750724/arm64-v8a
+# 安装到 tdlib/src/main/libs/27.3.13750724/arm64-v8a/libtdjni.so 后再打包。
 ./gradlew assembleLatestArm64Release
 ```
 
@@ -206,7 +218,9 @@ APK 文件名应与当前构建输出一致；覆盖安装时明确添加 `-r`�
 
 日常修改提交推送到 `publish` 远端的 `moe` 分支（`Entermage/moeGramX-ghost`），通过 `Android ARM64` 工作流提供下载，不为每次测试创建 Release。工作流响应该分支的代码推送，也可在 Actions 页面手动运行；仅 Markdown 文档变化不会自动构建。不接受 PR 触发，不向 `origin` 上游提交 PR。
 
-CI 使用 Ubuntu x64 交叉编译 ARM64，安装 JDK 21，并通过 `ANDROID_HOME` 下的绝对路径调用 `sdkmanager`，不依赖 runner 的 `PATH` 包含 Android 命令；SDK、NDK、CMake 版本由 `version.properties` 指定。它递归检出固定子模块、取得 ARM64 OpenSSL 的 Git LFS 文件，运行外部分享、公开频道分页、聊天定位与 CI 配置回归测试；随后以 `latest` / `arm64-v8a` 构建 libvpx、FFmpeg，并将 `patches/tdlib-ghost-mode.patch` 应用到原生 TDLib 源码后重建 `libtdjni.so`。不会把子模块携带的上游原版 TDLib 库直接作为本分支产物。原生缓存按脚本、补丁、版本配置和子模块版本隔离，Gradle 只缓存下载依赖，不缓存签名文件或本地构建配置。
+CI 使用 Ubuntu x64 交叉编译 ARM64，安装 JDK 21，并通过 `ANDROID_HOME` 下的绝对路径调用 `sdkmanager`，不依赖 runner 的 `PATH` 包含 Android 命令；SDK、NDK、CMake 版本由 `version.properties` 指定。它递归检出固定子模块、取得 `openssl/<NDK>/arm64-v8a` 的 Git LFS 文件，运行外部分享、公开频道分页、聊天定位与 CI 配置回归测试，然后将带上下文的 `patches/tdlib-ghost-mode.patch` 应用到原生 TDLib 并重建 `libtdjni.so`。补丁与源码差异必须完全匹配，不接受额外修改，也不会使用子模块附带的未打补丁库。Gradle 原生任务负责构建 libvpx、FFmpeg 及准备 Opus、AndroidX Media，CI 不再调用旧媒体 shell 构建脚本。Ghost TDLib 缓存按脚本、补丁、版本和子模块版本隔离，Gradle 只缓存下载依赖。实验工作树的 CI 适配尚未在 GitHub runner 验证，工作流仍仅对日常 `moe` 分支开放。
+
+上游 `baseline-profile` 仅在 `-PgenerateBaselineProfile=true` 时参与生成，但预生成 profile 可随普通构建打包。它的 `SnapshotApplier` 和启动基准会执行 `pm clear`，不可在用户已登录的 AVD 上直接运行；本分支的 Ghost/过滤路径还未单独录制和测量，不能宣称启动收益。通知兼容代码使用账号与消息类别 tag 配合 ID，避免厂商通知覆盖问题；它不改变 FCM 送达条件，升级时旧无 tag 通知的迁移、多账号取消和前台服务并存仍需专门验证。
 
 工作流需要仓库 Actions Secrets：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`，以及 `TELEGRAM_API_ID`、`TELEGRAM_API_HASH`。签名步骤才向配置脚本提供这些值，脚本以私有文件权限在 runner 临时目录创建 keystore 和签名配置，并生成被 Git 忽略的 `local.properties`；构建结束无论成功失败均尝试清理。缺少必需 Secrets 时停止，不使用占位登录凭据或自动换成 debug 签名。不要输出 Secrets、上传签名目录，或把不可信代码加入可以读取这些 Secrets 的工作流。
 
