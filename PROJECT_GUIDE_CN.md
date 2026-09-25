@@ -135,6 +135,8 @@ Google 构建通过 `FirebaseListenerService` 接收 FCM，再唤醒账号和 TD
 
 ## 本地构建与验证
 
+日常分支的构建仍以当前 `version.properties` 为准。TDLib/通话库/Gradle 的 1813 升级仅在隔离分支 `codex/upgrade-1813` 试验，不属于日常 APK；范围、测试证据及未验证项见 `docs/upstream-1813-evaluation.md`。不能直接合回完整试验基线，因为其中还包含用户仅要求评估的上游功能。
+
 推荐在 WSL/Linux 中使用 OpenJDK 21，并完整初始化 Git 子模块和 Git LFS：
 
 ```bash
