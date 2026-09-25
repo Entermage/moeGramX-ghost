@@ -35,13 +35,13 @@ td_patch="$repo_root/patches/tdlib-ghost-mode.patch"
 [[ -f "$td_source/example/android/CMakeLists.txt" && -s "$td_patch" ]] || die 'TDLib source or Ghost patch is missing.'
 git -C "$td_source" diff --cached --quiet || die 'TDLib has unexpected staged changes.'
 if git -C "$td_source" diff --quiet; then
-  git -C "$td_source" apply --check --unidiff-zero "$td_patch" || die 'Ghost patch does not apply to this TDLib revision.'
-  git -C "$td_source" apply --unidiff-zero "$td_patch"
+  git -C "$td_source" apply --check "$td_patch" || die 'Ghost patch does not apply to this TDLib revision.'
+  git -C "$td_source" apply "$td_patch"
 fi
 # Reverse applicability alone is insufficient: reject any additional tracked edits.
-cmp -s "$td_patch" <(git -C "$td_source" diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ --unified=0) ||
+cmp -s "$td_patch" <(git -C "$td_source" diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ --unified=3) ||
   die 'TDLib changes must exactly match patches/tdlib-ghost-mode.patch.'
-git -C "$td_source" apply --reverse --check --unidiff-zero "$td_patch" || die 'Ghost patch verification failed.'
+git -C "$td_source" apply --reverse --check "$td_patch" || die 'Ghost patch verification failed.'
 
 verify_openssl() {
   local path="$1" pointer expected_hash expected_size actual_hash
@@ -104,7 +104,7 @@ verify_tdjni() {
   local library="$1" option
   [[ -s "$library" ]] || return 1
   readelf -h "$library" | grep -q 'Machine:.*AArch64' || return 1
-  for option in x_moex_ghost_read_private x_moex_ghost_read_groups x_moex_ghost_read_channels x_moex_ghost_read_allow_once x_moex_ghost_online x_moex_ghost_actions x_moex_shadow_local_read; do
+  for option in x_moex_ghost_read_private x_moex_ghost_read_groups x_moex_ghost_read_channels x_moex_ghost_read_once x_moex_ghost_online x_moex_ghost_actions x_moex_shadow_local_read; do
     grep -aqF "$option" "$library" || return 1
   done
 }

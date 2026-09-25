@@ -80,13 +80,21 @@ data class HlsVideo(
     @JvmStatic fun extractStreamId(uri: Uri): Long =
       parseLong(uri.schemeSpecificPart)
 
-    @JvmStatic fun toRfc6381CodecString(codec: String?) = when (codec) {
-      "h264" -> "avc1"
-      "h265" -> "hvc1"
-      "av1" -> "av01"
-      "vp8" -> "vp08"
-      "vp9" -> "vp09"
-      else -> codec
+    @JvmStatic fun toRfc6381CodecString(codec: String?): String? {
+      val value = codec?.trim() ?: return null
+      val name = value.substringBefore(".")
+      val normalized = when (name.lowercase()) {
+        "h264", "avc1" -> "avc1"
+        "h265", "hevc", "hvc1" -> "hvc1"
+        "av1", "av01" -> "av01"
+        "vp8", "vp08" -> "vp08"
+        "vp9", "vp09" -> "vp09"
+        "avc3" -> "avc3"
+        "hev1" -> "hev1"
+        else -> return codec
+      }
+      // Normalize only the name, preserving case-sensitive profile/level fields.
+      return normalized + value.substring(name.length)
     }
 
     @JvmStatic fun toSampleMimeType(codec: String?): String? =
@@ -95,18 +103,18 @@ data class HlsVideo(
     @JvmStatic fun isCodecSupported(
       codec: String,
       failOnUnknownCodec: Boolean
-    ) = when (codec.substringBefore(".")) {
+    ) = when (toRfc6381CodecString(codec)?.substringBefore(".")) {
       // https://developer.android.com/media/platform/supported-formats
       // AV1: Android 10
-      "av1", "av01" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+      "av01" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
       // h.264: Main profile guaranteed since Android M (6.0), baseline since Android Honeycomb (3.0)
-      "h264", "avc1", "avc3" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB
+      "avc1", "avc3" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB
       // h.265: Android L (5.0)
-      "h265", "hevc", "hvc1", "hev1" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
+      "hvc1", "hev1" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
       // VP9: Android KitKat (4.4)
-      "vp9", "vp09" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT || VpxLibrary.isAvailable()
+      "vp09" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT || VpxLibrary.isAvailable()
       // VP8: Streamable only in Android 4.0 and above
-      "vp8", "vp08" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH
+      "vp08" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH
       else -> if (failOnUnknownCodec) {
         error("Unexpected codec: $codec")
       } else {
@@ -119,8 +127,10 @@ data class HlsVideo(
   }
 
   fun AlternativeVideo.appendTo(b: StringBuilder) {
-    val bandwidth: Int = if (this@HlsVideo.video.duration != 0) {
-      (video.size.toDouble() / this@HlsVideo.video.duration.toDouble()).toInt() * 8
+    val bandwidth: Int = if (this@HlsVideo.video.duration > 0 && video.size > 0) {
+      // Media3 parses BANDWIDTH as a positive Int. Avoid truncation to zero and Int overflow.
+      (video.size.toDouble() * 8 / this@HlsVideo.video.duration)
+        .coerceIn(1.0, Int.MAX_VALUE.toDouble()).toInt()
     } else {
       1000000
     }

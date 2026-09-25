@@ -1,8 +1,22 @@
 plugins { id 'org.jetbrains.kotlin.jvm' version '2.4.10' }
-repositories { mavenCentral() }
+repositories { google(); mavenCentral() }
 kotlin { jvmToolchain(21) }
-// Compile production HLS code against deterministic platform/TDLib fixtures.
-// This checks codec selection, not Android media decoding.
+// Use the project's real Media3 MIME parser and Android Uri implementation.
+// SDK level, native decoder availability and TDLib data still use test doubles.
+configurations { mediaAar }
+def mediaVersion = file('../../gradle/libs.versions.toml').readLines()
+  .find { it.startsWith('androidx-media-latest =') }.split('"')[1]
+def unpackMedia = tasks.register('unpackMedia', Sync) {
+  from { zipTree(configurations.mediaAar.singleFile) }
+  include 'classes.jar'
+  into layout.buildDirectory.dir('media3-common')
+}
+dependencies {
+  mediaAar "androidx.media3:media3-common:${mediaVersion}@aar"
+  implementation files(layout.buildDirectory.file('media3-common/classes.jar')).builtBy(unpackMedia)
+  implementation 'org.robolectric:android-all:16-robolectric-13921718'
+  implementation 'com.google.guava:guava:33.4.0-jre'
+}
 tasks.named('compileKotlin') {
   source file('../../app/src/main/kotlin/tgx/td/data/HlsVideo.kt')
 }

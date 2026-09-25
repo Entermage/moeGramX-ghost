@@ -104,6 +104,7 @@ jobs:
           java -cp "$test_dir" org.thunderdog.challegram.component.chat.VisibleUnreadAnchorTest
           python3 -m unittest discover -s tests -p test_chat_navigation.py -v
           python3 -m unittest discover -s tests -p test_preview_filter.py -v
+          python3 -m unittest discover -s tests -p test_ghost_read.py -v
           python3 -m unittest discover -s tests -p test_upstream_ab.py -v
           ./gradlew -p tests/upstream-runtime runChecks --no-daemon --no-watch-fs --console=plain
 
