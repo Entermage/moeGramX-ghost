@@ -216,6 +216,10 @@ scrcpy 附带的 Windows ADB 客户端只连接上述 WSL `5038` server，不连
 
 APK 文件名应与当前构建输出一致；覆盖安装时明确添加 `-r`，不得为测试清空已有登录数据。当前 WSL 环境使用 `swangle` 并禁用 Vulkan；默认图形配置曾导致模拟器宿主的 `RenderThread` 崩溃，应与客户端 Android 崩溃区分。`-no-snapshot` 禁用快照，不删除 AVD 用户数据。账号必须由用户在模拟器内自行登录，不复制实体手机会话，也不在脚本、日志或仓库保存验证码和密码。安装、欢迎页和登录页正常仅代表启动检查通过；论坛合并历史、书签、未读导航和 Shadow Ban 仍需登录后用真实聊天操作验证。测试前记录本地开关和屏蔽列表，只调整必要项并在结束后恢复；阅读位置可能随实际浏览推进，不把它当作可回滚设置。截图和设备日志仅保存在本地，避免把账号或聊天内容提交到仓库。模拟器不能代替真机性能、厂商后台策略与 FCM 唤醒测试。
 
+另有独立空白 16KB 测试 AVD `moegramx_pages16k`，镜像为 `system-images;android-35;google_apis_ps16k;x86_64`，实测 `getconf PAGE_SIZE` 为 `16384`，同样通过 ARM64 翻译运行正式 APK。复用上述启动方式时，服务名改为 `moegramx-16k-emulator`、AVD 改为 `moegramx_pages16k`、console/adbd 改为 `5772/5773`、gRPC 改为 `8557`；ADB server 仍为隔离的 `5038`，所有设备命令指定 `-s 127.0.0.1:5773`。该 AVD 不复制已有会话，测试后停止服务、保留数据；不能将其结果等同于原生 ARM64 真机表现。系统镜像自身的 Play 服务或搜索应用崩溃应根据日志的 `Cmdline` 与客户端崩溃区分。
+
+本地忽略目录 `.ci/verify-device/` 内的临时 instrumentation 可借助对应构建的 R8 mapping 检查未修改的 release APK。它使用现有正式证书仅为允许本地测试附加，不是应用功能或发布产物；测试后卸载 `dev.moegramx.runtimeprobe`，不得把该诊断 APK、mapping、账号日志或签名配置上传。媒体样本通过本地数据源输入实际 APK 播放器和 `mtproto:` HLS 提取分支，检查解码帧与播放结束；这不覆盖 Telegram 下载传输、多码率切换或全部硬件解码器。推送状态检查只输出状态、计数和时间，不输出 token；计数增加、进程被唤起及通知栏展示是三个不同验证目标，应分别报告证据。双账号云端回执和真实通话需要用户提供受控对端，不能随意向联系人发送测试内容。
+
 ### GitHub Actions 构建与交付
 
 日常修改提交推送到 `publish` 远端的 `moe` 分支（`Entermage/moeGramX-ghost`），通过 `Android ARM64` 工作流提供下载，不为每次测试创建 Release。工作流响应该分支的代码推送，也可在 Actions 页面手动运行；仅 Markdown 文档变化不会自动构建。不接受 PR 触发，不向 `origin` 上游提交 PR。
