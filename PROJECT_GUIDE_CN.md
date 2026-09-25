@@ -158,9 +158,9 @@ arm64 release APK 输出到 `app/build/outputs/apk/latestArm64/release/`。编�
 
 `./gradlew -p tests/upstream-runtime runChecks` 编译生产 `HlsVideo.kt`，使用当前项目版本的真实 Media3 MIME 解析器和 Android Uri，覆盖编码别名、profile 字段、API 边界、VP9 扩展兜底和码率边界；SDK 版本、TDLib 数据及原生解码器可用性仍使用测试替身。`python3 -m unittest discover -s tests -p test_upstream_ab.py -v` 测试生产登录校验方法的空控件/空文本边界，并检查播放器和登录回调接线。两者不验证真实视频解码、Telegram HLS 网络流或完整登录流程。
 
-### WSL 隔离模拟器
-
 `python3 -m unittest discover -s tests -p test_ghost_read.py -v` 在干净的固定版本 TDLib 源码上应用补丁，再编译实际原生策略及 Java 请求方法，覆盖错误目标、令牌重复使用、账号连接替换、请求失败和队列释放；它不连接 Telegram 服务，不能替代双账号云端回执验证。
+
+### WSL 隔离模拟器
 
 本机使用 `Ubuntu-26.04` 的 Android SDK（`/home/lunarclock/Android/Sdk`），模拟器作为 WSL 无窗口进程运行，由 Windows 便携版 scrcpy 显示和操作。Windows 只承担查看器角色，SDK、模拟器和构建仍在 WSL。AVD 名为 `moegramx_api35`，使用 Pixel 5 配置和 `system-images;android-35;google_apis;x86_64`。已安装的镜像声明支持 `x86_64,arm64-v8a`，通过 `libndk_translation.so` 运行同一份 ARM64 正式签名 APK，无需另外生成 x86 APK。运行用户须能读写 `/dev/kvm`；加入 `kvm` 组属于持久权限变更，只能在获得用户同意后执行。
 
