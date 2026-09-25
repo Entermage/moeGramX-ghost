@@ -268,6 +268,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -1568,13 +1569,13 @@ public class MessagesController extends ViewController<MessagesController.Argume
       ProfileController.fillMediaControllers(mediaControllers, context(), tdlib());
       List<ViewPagerTopView.Item> items = new ArrayList<ViewPagerTopView.Item>(mediaControllers.size() + 1);
       items.add(new ViewPagerTopView.Item(
-        Lang.getString(R.string.TabMessages).toUpperCase(),
+        Lang.uppercase(Lang.getString(R.string.TabMessages)),
         R.drawable.baseline_chat_bubble_24,
         null
       ));
       for (SharedBaseController<?> c : mediaControllers) {
         items.add(new ViewPagerTopView.Item(
-          c.getName().toString().toUpperCase(),
+          Lang.uppercase(c.getName().toString()),
           c.getIcon(),
           null
         ));
@@ -6175,7 +6176,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
   private int actionMode;
 
   public void showActionButton (int resource, int mode) {
-    showActionButton(Lang.getString(resource).toUpperCase(), mode, true);
+    showActionButton(Lang.uppercase(Lang.getString(resource)), mode, true);
   }
 
   public void showActionButton (String string, int mode) {
@@ -6199,7 +6200,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
 
   public void showActionDeleteChatButton () {
     if (ChatId.isBasicGroup(getChatId()) && chat.lastMessage != null && chat.lastMessage.content.getConstructor() == TdApi.MessageChatUpgradeTo.CONSTRUCTOR) {
-      showActionButton(Lang.getString(R.string.OpenSupergroup).toUpperCase(), ACTION_OPEN_SUPERGROUP);
+      showActionButton(Lang.uppercase(Lang.getString(R.string.OpenSupergroup)), ACTION_OPEN_SUPERGROUP);
     } else {
       showActionButton(R.string.DeleteChat, ACTION_DELETE_CHAT);
     }
@@ -7222,7 +7223,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
           return !Td.equalsTo(oldText, newText);
         }
         default: {
-          Td.assertMessageContent_a80283cf();
+          Td.assertMessageContent_af730a78();
           break;
         }
       }
@@ -7638,7 +7639,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
         break;
       }
       default: {
-        Td.assertMessageContent_a80283cf();
+        Td.assertMessageContent_af730a78();
         throw Td.unsupported(editContext.message.content);
       }
     }
@@ -10625,7 +10626,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
               retriever = U.openRetriever(file.getFilePath());
               if (!sendAsAnimation) {
                 String hasAudioStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO);
-                if (StringUtils.isEmpty(hasAudioStr) || !StringUtils.equalsOrBothEmpty(hasAudioStr.toLowerCase(), "yes")) {
+                if (StringUtils.isEmpty(hasAudioStr) || !StringUtils.equalsOrBothEmpty(hasAudioStr.toLowerCase(Locale.ROOT), "yes")) {
                   sendAsAnimation = true;
                 }
               }

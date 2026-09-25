@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Prepare only latest/arm64-v8a in an ephemeral GitHub Actions checkout.
+# Prepare patched TDLib for latest/arm64-v8a in an ephemeral GitHub Actions checkout.
+# The upgraded Gradle tasks build and patch VPX, FFmpeg, Opus and AndroidX Media.
 # Never run the full setup/reset scripts, or reuse an unpatched TDLib binary.
 set -eo pipefail
 
@@ -35,13 +36,13 @@ td_patch="$repo_root/patches/tdlib-ghost-mode.patch"
 [[ -f "$td_source/example/android/CMakeLists.txt" && -s "$td_patch" ]] || die 'TDLib source or Ghost patch is missing.'
 git -C "$td_source" diff --cached --quiet || die 'TDLib has unexpected staged changes.'
 if git -C "$td_source" diff --quiet; then
-  git -C "$td_source" apply --check --unidiff-zero "$td_patch" || die 'Ghost patch does not apply to this TDLib revision.'
-  git -C "$td_source" apply --unidiff-zero "$td_patch"
+  git -C "$td_source" apply --check "$td_patch" || die 'Ghost patch does not apply to this TDLib revision.'
+  git -C "$td_source" apply "$td_patch"
 fi
 # Reverse applicability alone is insufficient: reject any additional tracked edits.
-cmp -s "$td_patch" <(git -C "$td_source" diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ --unified=0) ||
+cmp -s "$td_patch" <(git -C "$td_source" diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ --unified=3) ||
   die 'TDLib changes must exactly match patches/tdlib-ghost-mode.patch.'
-git -C "$td_source" apply --reverse --check --unidiff-zero "$td_patch" || die 'Ghost patch verification failed.'
+git -C "$td_source" apply --reverse --check "$td_patch" || die 'Ghost patch verification failed.'
 
 verify_openssl() {
   local path="$1" pointer expected_hash expected_size actual_hash
@@ -53,9 +54,10 @@ verify_openssl() {
   actual_hash=$(sha256sum "tdlib/$path")
   [[ "${actual_hash%% *}" == "$expected_hash" ]] || die "OpenSSL LFS checksum mismatch: $path"
 }
-verify_openssl openssl/arm64-v8a/lib/libcryptox.so
-verify_openssl openssl/arm64-v8a/lib/libsslx.so
-[[ -f tdlib/openssl/arm64-v8a/lib/libcrypto.so && -f tdlib/openssl/arm64-v8a/lib/libssl.so ]] || die 'OpenSSL linker symlinks are missing.'
+openssl_root="$repo_root/tdlib/openssl/$ANDROID_NDK_VERSION_PRIMARY/arm64-v8a"
+verify_openssl "openssl/$ANDROID_NDK_VERSION_PRIMARY/arm64-v8a/lib/libcryptox.so"
+verify_openssl "openssl/$ANDROID_NDK_VERSION_PRIMARY/arm64-v8a/lib/libsslx.so"
+[[ -f "$openssl_root/lib/libcrypto.so" && -f "$openssl_root/lib/libssl.so" ]] || die 'OpenSSL linker symlinks are missing.'
 
 # Cache only final libraries/headers. Toolchain, scripts and every submodule commit
 # are part of the fingerprint; never accept an older binary merely because it exists.
@@ -64,41 +66,11 @@ cache="$repo_root/.ci/native-cache"
 mkdir -p "$cache"
 input_hash=$({
   git ls-files -z -- version.properties .gitmodules scripts patches | xargs -0 sha256sum
-  printf '%s\n' "$submodule_state" 'latest arm64-v8a TD-android-23 RelWithDebInfo c++_static'
+  printf '%s\n' "$submodule_state" 'latest arm64-v8a TD-android-23 RelWithDebInfo c++_shared flexible-page-sizes'
   cmake --version
   sha256sum "$ndk/source.properties"
 } | sha256sum)
 input_hash=${input_hash%% *}
-
-bash scripts/private/patch-opus-impl.sh
-[[ -s app/jni/third_party/opus/celt/arm/celt_pitch_xcorr_arm_gnu.s && -s app/jni/third_party/opus/celt/arm/armopts_gnu.s ]] || die 'Opus assembly preparation failed.'
-bash scripts/private/patch-androidx-media-impl.sh
-
-vpx_output=app/jni/third_party/libvpx/build/latest/arm64-v8a
-ffmpeg_output=app/jni/third_party/ffmpeg/build/latest/arm64-v8a
-ffmpeg_config=app/jni/third_party/ffmpeg/config.h
-media_cache_valid() {
-  [[ -f "$cache/media-input.sha256" && "$(< "$cache/media-input.sha256")" == "$input_hash" && -s "$cache/media-output.sha256" ]] || return 1
-  [[ -s "$vpx_output/lib/libvpx.a" && -s "$vpx_output/include/vpx/vpx_decoder.h" && -s "$ffmpeg_output/include/libavcodec/avcodec.h" && -s "$cache/ffmpeg-config.h" ]] || return 1
-  local library
-  for library in swresample avformat swscale avcodec avfilter avutil; do
-    [[ -s "$ffmpeg_output/lib/lib$library.a" ]] || return 1
-  done
-  sha256sum --check --status "$cache/media-output.sha256"
-}
-if media_cache_valid; then
-  printf 'native CI: using verified VPX/FFmpeg cache\n'
-  install -m 644 "$cache/ffmpeg-config.h" "$ffmpeg_config"
-else
-  bash scripts/private/build-vpx-impl.sh
-  bash scripts/private/build-ffmpeg-impl.sh
-  [[ -s "$ffmpeg_config" ]] || die 'FFmpeg did not generate config.h.'
-  install -m 644 "$ffmpeg_config" "$cache/ffmpeg-config.h"
-  find "$vpx_output" "$ffmpeg_output" -type f -print0 | sort -z | xargs -0 sha256sum > "$cache/media-output.sha256"
-  sha256sum .ci/native-cache/ffmpeg-config.h >> "$cache/media-output.sha256"
-  printf '%s\n' "$input_hash" > "$cache/media-input.sha256"
-  media_cache_valid || die 'VPX/FFmpeg output verification failed.'
-fi
 
 verify_tdjni() {
   local library="$1" option
@@ -123,14 +95,15 @@ else
   cmake --build "$td_build/host" --target prepare_cross_compiling --parallel "$CPU_COUNT"
   cmake -S "$td_source/example/android" -B "$td_build/arm64" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake" \
-    -DOPENSSL_ROOT_DIR="$repo_root/tdlib/openssl/arm64-v8a" \
+    -DOPENSSL_ROOT_DIR="$openssl_root" \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DANDROID_ABI=arm64-v8a \
-    -DANDROID_STL=c++_static -DANDROID_PLATFORM=android-23 -DTD_ENABLE_JNI=ON
+    -DANDROID_STL=c++_shared -DANDROID_PLATFORM=android-23 \
+    -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON -DTD_ENABLE_JNI=ON
   cmake --build "$td_build/arm64" --target tdjni --parallel "$CPU_COUNT"
   verify_tdjni "$td_build/arm64/libtdjni.so" || die 'Built TDLib is not an ARM64 Ghost library.'
   install -m 644 "$td_build/arm64/libtdjni.so" "$cache/libtdjni.so"
   sha256sum .ci/native-cache/libtdjni.so > "$cache/td-output.sha256"
   printf '%s\n' "$input_hash" > "$cache/td-input.sha256"
 fi
-install -m 644 "$cache/libtdjni.so" tdlib/src/main/libs/arm64-v8a/libtdjni.so
+install -m 644 "$cache/libtdjni.so" "tdlib/src/main/libs/$ANDROID_NDK_VERSION_PRIMARY/arm64-v8a/libtdjni.so"
 printf 'native CI: latest/arm64-v8a libraries are ready\n'
