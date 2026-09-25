@@ -1,0 +1,27 @@
+// Read only toolchain values; never dump the project's private build properties.
+gradle.beforeProject { p ->
+  p.pluginManager.withPlugin('tgx-module') {
+    if (p.path == ':app') {
+      def initialNdk = p.extensions.getByName('android').ndkVersion
+      def versions = new Properties()
+      p.rootProject.file('version.properties').withInputStream { versions.load(it) }
+      def legacy = p.providers.gradleProperty('useLegacyNdk').getOrElse('false').toBoolean()
+      def expected = versions.getProperty(legacy ? 'version.ndk_legacy' : 'version.ndk_primary')
+      p.tasks.register('auditNativeToolchain') {
+        doLast {
+          def finalNdk = p.extensions.getByName('android').ndkVersion
+          println "NDK expected=$expected initial=$initialNdk final=$finalNdk"
+          if (initialNdk != expected) throw new GradleException('Module plugin selected the opposite NDK')
+          if (finalNdk != expected) throw new GradleException('App toolchain changed unexpectedly')
+          if (!legacy) {
+            ['buildLibvpxLatestArm64', 'buildFfmpegLatestArm64'].each { name ->
+              def value = p.tasks.getByName(name).ndkVersion.get()
+              println "$name NDK=$value"
+              if (value != expected) throw new GradleException("$name used the wrong NDK")
+            }
+          }
+        }
+      }
+    }
+  }
+}

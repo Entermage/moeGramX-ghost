@@ -1,5 +1,5 @@
 diff --git a/td/telegram/ForumTopicManager.cpp b/td/telegram/ForumTopicManager.cpp
-index 25b1ca9..7234516 100644
+index 25b1ca9..30bfc9b 100644
 --- a/td/telegram/ForumTopicManager.cpp
 +++ b/td/telegram/ForumTopicManager.cpp
 @@ -27,6 +27,7 @@
@@ -10,14 +10,12 @@ index 25b1ca9..7234516 100644
  #include "td/telegram/Td.h"
  #include "td/telegram/TdDb.h"
  #include "td/telegram/telegram_api.h"
-@@ -605,7 +606,11 @@ void ForumTopicManager::read_forum_topic_messages(DialogId dialog_id, ForumTopic
+@@ -605,7 +606,9 @@ void ForumTopicManager::read_forum_topic_messages(DialogId dialog_id, ForumTopic
      auto max_message_id = last_read_inbox_message_id.get_prev_server_message_id();
      LOG(INFO) << "Send read topic history request in topic of " << forum_topic_id << " in " << dialog_id << " up to "
                << max_message_id;
 -    td_->create_handler<ReadForumTopicQuery>()->send(dialog_id, forum_topic_id, max_message_id);
-+    if (!td_->option_manager_->get_option_boolean("x_moex_ghost_read_groups") ||
-+        td_->option_manager_->get_option_boolean("x_moex_ghost_read_allow_once")) {
-+      td_->option_manager_->set_option_boolean("x_moex_ghost_read_allow_once", false);
++    if (!td_->option_manager_->get_option_boolean("x_moex_ghost_read_groups")) {
 +      td_->create_handler<ReadForumTopicQuery>()->send(dialog_id, forum_topic_id, max_message_id);
 +    }
    }
@@ -157,10 +155,29 @@ index e05f763..c299d87 100644
    static uint64 save_unpin_all_dialog_messages_on_server_log_event(DialogId dialog_id);
  
 diff --git a/td/telegram/MessagesManager.cpp b/td/telegram/MessagesManager.cpp
-index 0669e9c..1710f95 100644
+index 0669e9c..e083f49 100644
 --- a/td/telegram/MessagesManager.cpp
 +++ b/td/telegram/MessagesManager.cpp
-@@ -16926,8 +16926,9 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
+@@ -16650,6 +16650,18 @@ Status MessagesManager::close_dialog(DialogId dialog_id) {
+   return Status::OK();
+ }
+ 
++static bool consume_moex_ghost_read_once(Td *td, int64 chat_id, int64 message_id) {
++  if (chat_id == 0 || message_id <= 0) {
++    return false;
++  }
++  auto token = td->option_manager_->get_option_string("x_moex_ghost_read_once");
++  if (token != (PSTRING() << chat_id << ':' << message_id)) {
++    return false;
++  }
++  td->option_manager_->set_option_empty("x_moex_ghost_read_once");
++  return true;
++}
++
+ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> message_ids, MessageSource source,
+                                       bool force_read) {
+   CHECK(!td_->auth_manager_->is_bot());
+@@ -16926,8 +16938,9 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
      }
    }
    if (!read_content_message_ids.empty()) {
@@ -171,7 +188,7 @@ index 0669e9c..1710f95 100644
    }
    if (!read_reaction_message_ids.empty()) {
      td_->message_query_manager_->read_message_reactions_on_server(dialog_id, std::move(read_reaction_message_ids));
-@@ -16961,10 +16962,68 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
+@@ -16961,10 +16974,68 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
      send_screenshot_taken_notification_message(d);
    }
  
@@ -224,15 +241,15 @@ index 0669e9c..1710f95 100644
    }
  
 +  // Ghost mode marks messages as read locally. A later force-read request would normally be
-+  // ignored because the local read position no longer advances, so explicitly send the selected
-+  // server message ID when the UI requested a one-shot "Read until" operation.
++  // ignored because the local read position no longer advances. Only the matching manual request
++  // may bypass Ghost mode; pending permission must not unlock other chats, topics or saved history.
++  // The existing server-read pipeline may advance to the current local read position.
 +  if (force_read && source == MessageSource::DialogHistory && max_message_id.is_valid() &&
-+      td_->option_manager_->get_option_boolean("x_moex_ghost_read_allow_once")) {
++      message_ids.size() == 1 && message_ids[0] == max_message_id &&
++      consume_moex_ghost_read_once(td_, get_chat_id_object(dialog_id, "moex manual read"), max_message_id.get())) {
 +    auto server_message_id = max_message_id.get_prev_server_message_id();
 +    if (server_message_id.is_valid()) {
-+      read_history_on_server(d, server_message_id);
-+    } else {
-+      td_->option_manager_->set_option_boolean("x_moex_ghost_read_allow_once", false);
++      read_history_on_server(d, server_message_id, true);
 +    }
 +    return Status::OK();
 +  }
@@ -240,17 +257,11 @@ index 0669e9c..1710f95 100644
    if (source == MessageSource::MessageThreadHistory) {
      if (!top_thread_message_id.is_valid() || !max_message_id.is_valid()) {
        return Status::OK();
-@@ -17035,6 +17094,32 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
+@@ -17035,6 +17106,26 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
    return Status::OK();
  }
  
-+static bool is_moex_ghost_read_blocked(Td *td, DialogId dialog_id, bool consume_allow_once) {
-+  if (td->option_manager_->get_option_boolean("x_moex_ghost_read_allow_once")) {
-+    if (consume_allow_once) {
-+      td->option_manager_->set_option_boolean("x_moex_ghost_read_allow_once", false);
-+    }
-+    return false;
-+  }
++static bool is_moex_ghost_read_blocked(Td *td, DialogId dialog_id) {
 +  switch (dialog_id.get_type()) {
 +    case DialogType::User:
 +    case DialogType::SecretChat:
@@ -273,12 +284,12 @@ index 0669e9c..1710f95 100644
  void MessagesManager::read_dialog_inbox(Dialog *d, MessageId max_message_id) {
    if (max_message_id == MessageId()) {
      return;
-@@ -17060,13 +17145,14 @@ void MessagesManager::read_dialog_inbox(Dialog *d, MessageId max_message_id) {
+@@ -17060,13 +17151,14 @@ void MessagesManager::read_dialog_inbox(Dialog *d, MessageId max_message_id) {
      }
    }
  
 -  if (read_history_on_server_message_id.is_valid()) {
-+  const bool ghost_read = is_moex_ghost_read_blocked(td_, d->dialog_id, false);
++  const bool ghost_read = is_moex_ghost_read_blocked(td_, d->dialog_id);
 +  if (read_history_on_server_message_id.is_valid() && !ghost_read) {
      // add dummy timeout to not try to repair unread_count in read_history_inbox before server request succeeds
      // the timeout will be overwritten in the read_history_on_server call
@@ -290,23 +301,39 @@ index 0669e9c..1710f95 100644
      // call read_history_on_server after read_history_inbox to not have delay before request if all messages are read
      read_history_on_server(d, read_history_on_server_message_id);
    }
-@@ -17759,7 +17845,7 @@ class MessagesManager::ReadMessageThreadHistoryOnServerLogEvent {
+@@ -17758,8 +17850,9 @@ class MessagesManager::ReadMessageThreadHistoryOnServerLogEvent {
+   }
  };
  
- void MessagesManager::read_history_on_server(Dialog *d, MessageId max_message_id) {
+-void MessagesManager::read_history_on_server(Dialog *d, MessageId max_message_id) {
 -  if (td_->auth_manager_->is_bot()) {
-+  if (td_->auth_manager_->is_bot() || is_moex_ghost_read_blocked(td_, d->dialog_id, true)) {
++void MessagesManager::read_history_on_server(Dialog *d, MessageId max_message_id, bool allow_in_ghost_mode) {
++  if (td_->auth_manager_->is_bot() ||
++      (!allow_in_ghost_mode && is_moex_ghost_read_blocked(td_, d->dialog_id))) {
      return;
    }
  
-@@ -17804,7 +17890,7 @@ void MessagesManager::read_history_on_server(Dialog *d, MessageId max_message_id
+@@ -17804,7 +17897,7 @@ void MessagesManager::read_history_on_server(Dialog *d, MessageId max_message_id
  
  void MessagesManager::read_message_thread_history_on_server(Dialog *d, MessageId top_thread_message_id,
                                                              MessageId max_message_id, MessageId last_message_id) {
 -  if (td_->auth_manager_->is_bot()) {
-+  if (td_->auth_manager_->is_bot() || is_moex_ghost_read_blocked(td_, d->dialog_id, true)) {
++  if (td_->auth_manager_->is_bot() || is_moex_ghost_read_blocked(td_, d->dialog_id)) {
      return;
    }
+ 
+diff --git a/td/telegram/MessagesManager.h b/td/telegram/MessagesManager.h
+index 7c38534..5247d2f 100644
+--- a/td/telegram/MessagesManager.h
++++ b/td/telegram/MessagesManager.h
+@@ -2173,7 +2173,7 @@ class MessagesManager final : public Actor {
+ 
+   void repair_dialog_unread_poll_vote_count(Dialog *d, Promise<Unit> &&promise, const char *source);
+ 
+-  void read_history_on_server(Dialog *d, MessageId max_message_id);
++  void read_history_on_server(Dialog *d, MessageId max_message_id, bool allow_in_ghost_mode = false);
+ 
+   void do_read_history_on_server(DialogId dialog_id);
  
 diff --git a/td/telegram/OnlineManager.cpp b/td/telegram/OnlineManager.cpp
 index e73f6cc..8432d11 100644
@@ -337,17 +364,15 @@ index 9a7b730..23daa2a 100644
    TRY_RESULT_PROMISE(promise, message_topic, MessageTopic::get_message_topic(td_, dialog_id, request.topic_id_));
    td_->dialog_action_manager_->send_dialog_action(dialog_id, message_topic,
 diff --git a/td/telegram/SavedMessagesManager.cpp b/td/telegram/SavedMessagesManager.cpp
-index 3fa20bc..a7a8bc0 100644
+index 3fa20bc..ba87460 100644
 --- a/td/telegram/SavedMessagesManager.cpp
 +++ b/td/telegram/SavedMessagesManager.cpp
-@@ -1104,7 +1104,9 @@ void SavedMessagesManager::read_monoforum_topic_messages(DialogId dialog_id,
+@@ -1104,7 +1104,7 @@ void SavedMessagesManager::read_monoforum_topic_messages(DialogId dialog_id,
  
    read_topic_messages(topic, read_inbox_max_message_id, -1);
  
 -  if (topic->is_changed_) {
-+  if (topic->is_changed_ && (!td_->option_manager_->get_option_boolean("x_moex_ghost_read_private") ||
-+                             td_->option_manager_->get_option_boolean("x_moex_ghost_read_allow_once"))) {
-+    td_->option_manager_->set_option_boolean("x_moex_ghost_read_allow_once", false);
++  if (topic->is_changed_ && !td_->option_manager_->get_option_boolean("x_moex_ghost_read_private")) {
      td_->create_handler<ReadSavedHistoryQuery>()->send(dialog_id, saved_messages_topic_id,
                                                         read_inbox_max_message_id.get_prev_server_message_id());
    }

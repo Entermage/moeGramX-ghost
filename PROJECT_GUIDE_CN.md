@@ -60,9 +60,11 @@ flowchart LR
 
 登录状态不是 Cookie 或 Web Session。账号授权密钥和消息缓存由 TDLib 保存在应用私有数据中；覆盖安装只有在包名和签名满足 Android 更新规则且未清除应用数据时才会保留这些数据。
 
-`PhoneController` 在校验号码时检查尚未创建的输入控件和空文本；授权成功后的测试账号请求只允许在该控制器仍有焦点时触发。HLS 播放路径通过 `HlsVideo` 统一把 h264/h265/av1/vp8/vp9 标识规范化为 RFC 6381 codec，并在播放格式中设置对应 sample MIME；保留已包含 profile 的 codec 字符串，最终可播放性仍受设备解码器限制。
+`PhoneController` 在校验号码时检查尚未创建的输入控件和空文本；授权成功后的测试账号请求只允许在该控制器仍有焦点时触发。HLS 播放路径通过 `HlsVideo` 统一把 h264/h265/hevc/av1/vp8/vp9 标识规范化为 RFC 6381 codec，并在播放格式中设置对应 sample MIME；已知名称忽略首尾空白及大小写，profile 字段保持原样，API 版本判断使用相同规范化结果。未知大小或无效时长使用默认码率，有效估计限制为正 Int 以防止零值及溢出。最终可播放性仍受设备解码器限制。
 
 ### Ghost Mode、过滤与 Shadow Ban
+
+手动 `Read until` 与配置写入、自动本地已读共用操作队列。Java 将 `x_moex_ghost_read_once` 设置为精确的 `chatId:messageId`，原生只在匹配的单条、强制、聊天历史请求中消费一次许可；其他聊天、普通自动已读、评论线程及话题已读不能借用许可。设置令牌、发起请求、清理令牌始终使用同一个 TDLib Client，账号重启不能把旧操作转移到新连接。新客户端启动时清理遗留令牌。这不是逐条独立已读：原有 TDLib 发送流程仍可能将云端位置推进到更靠后的当前本地已读位置，而不是严格停在点选消息。
 
 `SettingsMoexController` 修改 `MoexConfig` 中的开关和名单。Ghost Mode 在已读、在线状态及输入动作发送路径上决定是否把操作提交给 TDLib；频道、群组和私聊的已读保护分别配置。TDLib 仍拦截普通聊天历史的云端已读位置，但会定向提交已查看消息的未读提及和未读反应内容回执，使 `@` 与表情互动提示不会在后续同步时恢复或累积；这类内容回执不推进聊天的云端已读位置。Ghost 配置写入与 Shadow Ban 自动本地已读请求在 Java 层串行执行，并等待相关 `SetOption` 完成，避免切换开关时使用到错误的聊天类型配置。
 
@@ -137,6 +139,10 @@ Gradle 的 `AppConfigurationPlugin` / `AppConfigurationSource` 读取 `version.p
 
 ## 本地构建与验证
 
+`ModulePlugin` 的 Application、Library、Test 配置按同一规则选择 NDK：`useLegacyNdk=true` 使用 legacy，否则使用 primary。可运行 `./gradlew -I tests/native-toolchain.init.gradle :app:auditNativeToolchain --no-configuration-cache -Dorg.gradle.unsafe.isolated-projects=false`，再加 `-PuseLegacyNdk=true` 复查兼容配置；检查包含插件初始值、应用最终值及主 NDK 的 libvpx/FFmpeg 任务，不会编译 ARMv7 或操作设备。
+
+`./gradlew -p tests/upstream-runtime runChecks` 编译生产 HLS 代码，使用项目实际版本的 Media3 MIME 解析器及 Android Uri；SDK 版本、TDLib 对象和 VP9 扩展可用性使用替身。覆盖别名、profile、API 门槛及码率边界，不验证真实 HLS 网络播放和硬件解码。
+
 推荐在 WSL/Linux 中使用 OpenJDK 21，并完整初始化 Git 子模块和 Git LFS：
 
 ```bash
@@ -157,6 +163,8 @@ arm64 release APK 输出到 `app/build/outputs/apk/latestArm64/release/`。编�
 `tests/VisibleUnreadAnchorTest.java` 直接运行生产分页策略，覆盖连续隐藏消息、短页、重复游标、稀疏 64 位消息 ID、相册成员和页数上限。`python3 -m unittest discover -s tests -p test_chat_navigation.py -v` 提取生产书签保存和默认定位方法，在 JVM 数据/布局替身下验证位置与偏移，并检查入口及取消逻辑的接线。两者不验证真实 TDLib 历史请求或 RecyclerView 渲染。用户占用手机时，不连接、安装或操作实体设备；可运行这些回归检查、CI 构建及下述独立模拟器测试。
 
 `python3 -m unittest discover -s tests -p test_preview_filter.py -v` 编译生产 `MoexMessageFilter`、`ListManager`，并提取生产预览和配置方法，在 TDLib/UI 替身下验证通知、屏蔽/取消屏蔽、正则开关、账号隔离、异步回调、缩略图、预览目标和请求失败后的手动重试。另检查监听与置顶点击的接线。它不执行 Android 渲染或真实网络错误，相关显示及导航仍需模拟器验证。
+
+`python3 -m unittest discover -s tests -p test_ghost_read.py -v` 在干净的固定版本 TDLib 源码上应用补丁，再编译实际原生策略及 Java 请求方法，覆盖错误目标、令牌重复使用、账号连接替换、请求失败和队列释放；它不连接 Telegram 服务，不能替代双账号云端回执验证。
 
 ### WSL 隔离模拟器
 

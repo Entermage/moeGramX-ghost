@@ -76,7 +76,7 @@ verify_tdjni() {
   local library="$1" option
   [[ -s "$library" ]] || return 1
   readelf -h "$library" | grep -q 'Machine:.*AArch64' || return 1
-  for option in x_moex_ghost_read_private x_moex_ghost_read_groups x_moex_ghost_read_channels x_moex_ghost_read_allow_once x_moex_ghost_online x_moex_ghost_actions x_moex_shadow_local_read; do
+  for option in x_moex_ghost_read_private x_moex_ghost_read_groups x_moex_ghost_read_channels x_moex_ghost_read_once x_moex_ghost_online x_moex_ghost_actions x_moex_shadow_local_read; do
     grep -aqF "$option" "$library" || return 1
   done
 }
