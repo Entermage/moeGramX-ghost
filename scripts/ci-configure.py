@@ -64,7 +64,7 @@ def configure(root, temp, env):
         "app.id": "com.ayx.mgx",
         "app.name": "moegramX",
         "app.experimental": "false",
-        "app.download_url": "https://github.com/Entermage/moeGramX-ghost/actions/workflows/android-arm64.yml",
+        "app.download_url": "https://github.com/Entermage/moeGramX-ghost/releases/latest",
         "app.sources_url": "https://github.com/Entermage/moeGramX-ghost",
         "tgx.extension": "none",
         "telegram.api_id": env["TELEGRAM_API_ID"],
