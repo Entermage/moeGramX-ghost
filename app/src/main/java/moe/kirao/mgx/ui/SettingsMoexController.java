@@ -5,6 +5,7 @@ import android.text.InputType;
 import android.view.View;
 import android.widget.Toast;
 
+import org.thunderdog.challegram.BuildConfig;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.component.base.SettingView;
@@ -92,7 +93,7 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
     } else if (viewId == R.id.btn_moexChannelLink) {
       tdlib.ui().openUrl(this, Lang.getString(R.string.MoexChannelLink), new TdlibUi.UrlOpenParameters().forceInstantView());
     } else if (viewId == R.id.btn_moexSourceLink) {
-      tdlib.ui().openUrl(this, Lang.getString(R.string.MoexSourceLink), new TdlibUi.UrlOpenParameters());
+      tdlib.ui().openUrl(this, BuildConfig.SOURCES_URL, new TdlibUi.UrlOpenParameters());
     } else if (viewId == R.id.btn_build) {
       UI.showToast(R.string.cuteToast, Toast.LENGTH_SHORT);
     } else if (viewId == R.id.btn_hidePhone) {
