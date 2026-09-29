@@ -155,10 +155,18 @@ index e05f763..c299d87 100644
    static uint64 save_unpin_all_dialog_messages_on_server_log_event(DialogId dialog_id);
  
 diff --git a/td/telegram/MessagesManager.cpp b/td/telegram/MessagesManager.cpp
-index 0669e9c..e083f49 100644
+index 0669e9c..c511966 100644
 --- a/td/telegram/MessagesManager.cpp
 +++ b/td/telegram/MessagesManager.cpp
-@@ -16650,6 +16650,18 @@ Status MessagesManager::close_dialog(DialogId dialog_id) {
+@@ -120,6 +120,7 @@
+ #include "td/utils/logging.h"
+ #include "td/utils/misc.h"
+ #include "td/utils/Random.h"
++#include "td/utils/ScopeGuard.h"
+ #include "td/utils/Slice.h"
+ #include "td/utils/SliceBuilder.h"
+ #include "td/utils/Time.h"
+@@ -16650,6 +16651,18 @@ Status MessagesManager::close_dialog(DialogId dialog_id) {
    return Status::OK();
  }
  
@@ -177,7 +185,7 @@ index 0669e9c..e083f49 100644
  Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> message_ids, MessageSource source,
                                        bool force_read) {
    CHECK(!td_->auth_manager_->is_bot());
-@@ -16926,8 +16938,9 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
+@@ -16926,8 +16939,9 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
      }
    }
    if (!read_content_message_ids.empty()) {
@@ -188,7 +196,7 @@ index 0669e9c..e083f49 100644
    }
    if (!read_reaction_message_ids.empty()) {
      td_->message_query_manager_->read_message_reactions_on_server(dialog_id, std::move(read_reaction_message_ids));
-@@ -16961,10 +16974,68 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
+@@ -16961,10 +16975,68 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
      send_screenshot_taken_notification_message(d);
    }
  
@@ -257,7 +265,7 @@ index 0669e9c..e083f49 100644
    if (source == MessageSource::MessageThreadHistory) {
      if (!top_thread_message_id.is_valid() || !max_message_id.is_valid()) {
        return Status::OK();
-@@ -17035,6 +17106,26 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
+@@ -17035,6 +17107,26 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
    return Status::OK();
  }
  
@@ -284,7 +292,7 @@ index 0669e9c..e083f49 100644
  void MessagesManager::read_dialog_inbox(Dialog *d, MessageId max_message_id) {
    if (max_message_id == MessageId()) {
      return;
-@@ -17060,13 +17151,14 @@ void MessagesManager::read_dialog_inbox(Dialog *d, MessageId max_message_id) {
+@@ -17060,13 +17152,14 @@ void MessagesManager::read_dialog_inbox(Dialog *d, MessageId max_message_id) {
      }
    }
  
@@ -301,7 +309,7 @@ index 0669e9c..e083f49 100644
      // call read_history_on_server after read_history_inbox to not have delay before request if all messages are read
      read_history_on_server(d, read_history_on_server_message_id);
    }
-@@ -17758,8 +17850,9 @@ class MessagesManager::ReadMessageThreadHistoryOnServerLogEvent {
+@@ -17758,8 +17851,9 @@ class MessagesManager::ReadMessageThreadHistoryOnServerLogEvent {
    }
  };
  
@@ -313,7 +321,7 @@ index 0669e9c..e083f49 100644
      return;
    }
  
-@@ -17804,7 +17897,7 @@ void MessagesManager::read_history_on_server(Dialog *d, MessageId max_message_id
+@@ -17804,7 +17898,7 @@ void MessagesManager::read_history_on_server(Dialog *d, MessageId max_message_id
  
  void MessagesManager::read_message_thread_history_on_server(Dialog *d, MessageId top_thread_message_id,
                                                              MessageId max_message_id, MessageId last_message_id) {
@@ -322,6 +330,68 @@ index 0669e9c..e083f49 100644
      return;
    }
  
+@@ -26710,18 +26804,23 @@ bool MessagesManager::add_new_message_notification(Dialog *d, Message *m, bool f
+   CHECK(m != nullptr);
+   CHECK(m->message_id.is_valid());
+ 
+-  if (!force && d->notification_info != nullptr) {
+-    if (d->notification_info->message_notification_group_.is_valid()) {
+-      send_closure_later(G()->notification_manager(), &NotificationManager::remove_temporary_notifications,
+-                         d->notification_info->message_notification_group_.get_group_id(),
+-                         "add_new_message_notification 1");
+-    }
+-    if (d->notification_info->mention_notification_group_.is_valid()) {
+-      send_closure_later(G()->notification_manager(), &NotificationManager::remove_temporary_notifications,
+-                         d->notification_info->mention_notification_group_.get_group_id(),
+-                         "add_new_message_notification 2");
++  // Keep the push visible until add_notification can publish its replacement
++  // together with the removal. Rejected/read/muted messages still clean up their push.
++  NotificationGroupId replacement_group_id;
++  SCOPE_EXIT {
++    if (!force && d->notification_info != nullptr) {
++      const auto &message_group = d->notification_info->message_notification_group_;
++      if (message_group.is_valid() && message_group.get_group_id() != replacement_group_id) {
++        send_closure_later(G()->notification_manager(), &NotificationManager::remove_temporary_notifications,
++                           message_group.get_group_id(), "add_new_message_notification 1");
++      }
++      const auto &mention_group = d->notification_info->mention_notification_group_;
++      if (mention_group.is_valid() && mention_group.get_group_id() != replacement_group_id) {
++        send_closure_later(G()->notification_manager(), &NotificationManager::remove_temporary_notifications,
++                           mention_group.get_group_id(), "add_new_message_notification 2");
++      }
+     }
+-  }
++  };
+ 
+   CHECK(!m->notification_id.is_valid());
+   if (is_message_notification_disabled(d, m)) {
+@@ -26855,13 +26954,15 @@ bool MessagesManager::add_new_message_notification(Dialog *d, Message *m, bool f
+     min_delay_ms = 1000;  // 1 second
+   }
+   auto ringtone_id = get_dialog_notification_ringtone_id(settings_dialog_id, settings_dialog);
+-  bool is_silent = m->disable_notification || m->message_id <= notification_info->max_push_notification_message_id_;
++  bool is_push_replacement = m->message_id <= notification_info->max_push_notification_message_id_;
++  bool is_silent = m->disable_notification || is_push_replacement;
+   send_closure_later(G()->notification_manager(), &NotificationManager::add_notification, notification_group_id,
+                      from_mentions ? NotificationGroupType::Mentions : NotificationGroupType::Messages, d->dialog_id,
+                      m->date, settings_dialog_id, m->disable_notification, is_silent ? 0 : ringtone_id, min_delay_ms,
+                      m->notification_id,
+                      create_new_message_notification(m->message_id, is_message_preview_enabled(d, m, from_mentions)),
+-                     "add_new_message_notification");
++                     is_push_replacement, "add_new_message_notification");
++  replacement_group_id = notification_group_id;
+   return true;
+ }
+ 
+@@ -33018,7 +33119,7 @@ void MessagesManager::force_create_dialog(DialogId dialog_id, const char *source
+               send_closure_later(G()->notification_manager(), &NotificationManager::add_notification,
+                                  notification_group_id, NotificationGroupType::SecretChat, dialog_id, date, dialog_id,
+                                  false, ringtone_id, 0, notification_info->new_secret_chat_notification_id_,
+-                                 create_new_secret_chat_notification(), "add_new_secret_chat_notification");
++                                 create_new_secret_chat_notification(), false, "add_new_secret_chat_notification");
+             }
+           }
+         }
 diff --git a/td/telegram/MessagesManager.h b/td/telegram/MessagesManager.h
 index 7c38534..5247d2f 100644
 --- a/td/telegram/MessagesManager.h
@@ -335,6 +405,80 @@ index 7c38534..5247d2f 100644
  
    void do_read_history_on_server(DialogId dialog_id);
  
+diff --git a/td/telegram/NotificationManager.cpp b/td/telegram/NotificationManager.cpp
+index f9a0cec..e3fda05 100644
+--- a/td/telegram/NotificationManager.cpp
++++ b/td/telegram/NotificationManager.cpp
+@@ -881,7 +881,7 @@ void NotificationManager::add_notification(NotificationGroupId group_id, Notific
+                                            DialogId dialog_id, int32 date, DialogId notification_settings_dialog_id,
+                                            bool disable_notification, int64 ringtone_id, int32 min_delay_ms,
+                                            NotificationId notification_id, unique_ptr<NotificationType> type,
+-                                           const char *source) {
++                                           bool is_push_replacement, const char *source) {
+   if (is_disabled() || max_notification_group_count_ == 0) {
+     on_notification_removed(notification_id);
+     return;
+@@ -936,7 +936,10 @@ void NotificationManager::add_notification(NotificationGroupId group_id, Notific
+   notification.notification_id = notification_id;
+   notification.type = std::move(type);
+ 
+-  auto delay_ms = get_notification_delay_ms(dialog_id, notification, min_delay_ms);
++  // The push has already alerted the user. Applying the cloud delay again would
++  // publish its removal before the full-message notification is ready.
++  auto delay_ms = is_push_replacement ? MIN_NOTIFICATION_DELAY_MS
++                                      : get_notification_delay_ms(dialog_id, notification, min_delay_ms);
+   VLOG(notifications) << "Delay " << notification_id << " for " << delay_ms << " milliseconds";
+   auto flush_time = delay_ms * 0.001 + Time::now();
+ 
+@@ -950,6 +953,17 @@ void NotificationManager::add_notification(NotificationGroupId group_id, Notific
+     on_delayed_notification_update_count_changed(1, group_id.get(), source);
+   }
+   group.pending_notifications.push_back(std::move(notification));
++
++  if (is_push_replacement) {
++    VLOG(notifications) << "Replace push with " << notification_id << " immediately in " << group_id;
++    if (!G()->close_flag()) {
++      flush_pending_notifications_timeout_.cancel_timeout(group_id.get(), "replace_push_notification");
++    }
++    // Queue both halves before sending updates, so clients never see an empty
++    // group between the temporary push and its silent full-message replacement.
++    flush_pending_notifications(group_id);
++    force_flush_pending_updates(group_id, "replace_push_notification");
++  }
+ }
+ 
+ StringBuilder &operator<<(StringBuilder &string_builder, const NotificationManager::NotificationUpdate &update) {
+@@ -2416,7 +2430,7 @@ void NotificationManager::add_call_notification(DialogId dialog_id, CallId call_
+   active_notifications.push_back(ActiveCallNotification{call_id, notification_id});
+ 
+   add_notification(group_id, NotificationGroupType::Calls, dialog_id, G()->unix_time() + 120, dialog_id, false, -1, 0,
+-                   notification_id, create_new_call_notification(call_id), "add_call_notification");
++                   notification_id, create_new_call_notification(call_id), false, "add_call_notification");
+ }
+ 
+ void NotificationManager::remove_call_notification(DialogId dialog_id, CallId call_id) {
+@@ -3795,7 +3809,7 @@ void NotificationManager::add_message_push_notification(DialogId dialog_id, Mess
+       group_id, group_type, dialog_id, date, settings_dialog_id, disable_notification, ringtone_id, 0, notification_id,
+       create_new_push_message_notification(sender_user_id, sender_dialog_id, sender_name, is_outgoing, message_id,
+                                            std::move(loc_key), std::move(arg), std::move(photo), std::move(document)),
+-      "add_message_push_notification");
++      false, "add_message_push_notification");
+ }
+ 
+ class NotificationManager::EditMessagePushNotificationLogEvent {
+diff --git a/td/telegram/NotificationManager.h b/td/telegram/NotificationManager.h
+index 8af7e8c..af62b58 100644
+--- a/td/telegram/NotificationManager.h
++++ b/td/telegram/NotificationManager.h
+@@ -74,7 +74,7 @@ class NotificationManager final : public Actor {
+   void add_notification(NotificationGroupId group_id, NotificationGroupType group_type, DialogId dialog_id, int32 date,
+                         DialogId notification_settings_dialog_id, bool disable_notification, int64 ringtone_id,
+                         int32 min_delay_ms, NotificationId notification_id, unique_ptr<NotificationType> type,
+-                        const char *source);
++                        bool is_push_replacement, const char *source);
+ 
+   void edit_notification(NotificationGroupId group_id, NotificationId notification_id,
+                          unique_ptr<NotificationType> type);
 diff --git a/td/telegram/OnlineManager.cpp b/td/telegram/OnlineManager.cpp
 index e73f6cc..8432d11 100644
 --- a/td/telegram/OnlineManager.cpp
