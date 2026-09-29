@@ -74,6 +74,10 @@ FCM 到达后，TDLib 可以先用部分消息数据发布临时 `NewPushMessage
 
 手动 `Read until` 与配置写入、自动本地已读共用操作队列。Java 将 `x_moex_ghost_read_once` 设置为精确的 `chatId:messageId`，原生只在匹配的单条、强制、聊天历史请求中消费一次许可；其他聊天、普通自动已读、评论线程及话题已读不能借用许可。设置令牌、发起请求、清理令牌始终使用同一个 TDLib Client，账号重启不能把旧操作转移到新连接。新客户端启动时清理遗留令牌。这不是逐条独立已读：原有 TDLib 发送流程仍可能将云端位置推进到更靠后的当前本地已读位置，而不是严格停在点选消息。
 
+聊天设置中的“交互时已读”（`Read on interact`）默认关闭，持久化为 `MoexConfig` 的 `ghost_read_on_interact`。开启后，仅当 Ghost 总开关及当前会话类型的隐藏已读均生效时，发送消息成功、添加/撤销普通表情反应成功、投票/撤销投票成功会自动对当前会话执行上述已读流程；浏览、打开菜单、输入状态、失败操作、定时/离线自动发送、Secret Chat 和收藏夹不触发。`UpdateMessageSendSucceeded` 覆盖文字、媒体和转发的成功发送；`TGReactions` 与 `Tdlib.send` 分别把表情和投票接入统一的 `sendMessageInteraction`，不把普通新消息更新当成主动交互。反应和投票以请求开始时的开关为准，并在成功回调、排队执行和令牌设置完成后重新检查当前开关及账号连接，取消尚未发出的过期已读请求；已经提交给服务器的已读不能撤回。自动路径复用 `Read until` 的本地/云端位置限制，不临时关闭全局 Ghost，也不改变在线状态隐身。
+
+功能语义参考 [AyuGram Desktop 的 Read on Interact](https://github.com/AyuGram/AyuGramDesktop/blob/dev/Telegram/SourceFiles/ayu/utils/telegram_helpers.cpp) 及其发送、反应、投票调用点；这里使用现有 TDLib 定向许可实现，并选择默认关闭、发送成功后才提交已读，以保留原有隐私行为。
+
 `SettingsMoexController` 修改 `MoexConfig` 中的开关和名单。Ghost Mode 在已读、在线状态及输入动作发送路径上决定是否把操作提交给 TDLib；频道、群组和私聊的已读保护分别配置。TDLib 仍拦截普通聊天历史的云端已读位置，但会定向提交已查看消息的未读提及和未读反应内容回执，使 `@` 与表情互动提示不会在后续同步时恢复或累积；这类内容回执不推进聊天的云端已读位置。Ghost 配置写入与 Shadow Ban 自动本地已读请求在 Java 层串行执行，并等待相关 `SetOption` 完成，避免切换开关时使用到错误的聊天类型配置。
 
 消息过滤与 Shadow Ban 在消息列表、回复预览、聊天列表摘要和输入状态展示等本地 UI 路径生效。聊天列表最后一条消息命中过滤词或 Shadow Ban 时，会按 TDLib 历史页异步向前查找并跳过连续命中过滤的消息，直到显示第一条未过滤消息；只有没有更早的可见消息时才保留 `Filtered message` 占位。聊天内加载同时区分 TDLib 返回的原始页与过滤后的可见条目：若普通聊天或线程历史的原始页非空但整页被隐藏，不会清空现有列表或误判历史结束，而是以该页最老或最新的原始消息 ID 沿当前加载方向串行补页。补页每次最多读取 100 条，连续页延迟由 500ms 渐进增加到最多 5 秒，并校验游标确实前进；直到找到可见消息或到达真实原始边界才结束。TDLib 错误不会再被当成空历史页或关闭加载方向。搜索、活动日志、预览和 Force Touch 等使用不同游标或生命周期的来源不会进入这条补页路径，避免重复请求或混入真实聊天历史。
@@ -192,6 +196,8 @@ arm64 release APK 输出到 `app/build/outputs/apk/latestArm64/release/`。编�
 
 `python3 -m unittest discover -s tests -p test_ghost_read.py -v` 在干净的固定版本 TDLib 源码上应用补丁，再编译实际原生策略及 Java 请求方法，覆盖错误目标、令牌重复使用、账号连接替换、请求失败和队列释放；它不连接 Telegram 服务，不能替代双账号云端回执验证。
 
+`python3 -m unittest discover -s tests -p test_read_on_interact.py -v` 提取生产交互和已读队列方法，在 JVM 客户端替身下检查三类会话、发送/反应/投票成功与失败、默认关闭、会话范围、定时与离线消息、Secret Chat/收藏夹、账号连接替换、开关变化、串行执行及取消时的令牌清理；同时检查设置持久化及事件接线。它不模拟 Telegram 服务，仍需在模拟器检查真实界面，并用指定测试会话单独验证服务器已读回执。
+
 ### WSL 隔离模拟器
 
 本机使用 `Ubuntu-26.04` 的 Android SDK（`/home/lunarclock/Android/Sdk`），模拟器作为 WSL 无窗口进程运行，由 Windows 便携版 scrcpy 显示和操作。Windows 只承担查看器角色，SDK、模拟器和构建仍在 WSL。AVD 名为 `moegramx_api35`，使用 Pixel 5 配置和 `system-images;android-35;google_apis;x86_64`。已安装的镜像声明支持 `x86_64,arm64-v8a`，通过 `libndk_translation.so` 运行同一份 ARM64 正式签名 APK，无需另外生成 x86 APK。运行用户须能读写 `/dev/kvm`；加入 `kvm` 组属于持久权限变更，只能在获得用户同意后执行。
@@ -250,9 +256,9 @@ APK 文件名应与当前构建输出一致；覆盖安装时明确添加 `-r`�
 
 ### GitHub Actions 构建与交付
 
-日常修改提交推送到 `publish` 远端的 `moe` 分支（`Entermage/moeGramX-ghost`），通过 `Android ARM64` 工作流提供下载，不为每次测试创建 Release。工作流响应该分支的代码推送，也可在 Actions 页面手动运行；仅 Markdown 文档变化不会自动构建。不接受 PR 触发，不向 `origin` 上游提交 PR。
+日常修改提交推送到 `publish` 远端的 `moe` 分支（`Entermage/moeGramX-ghost`），1813 升级工作树单独推送到 `codex/upgrade-1813`，不将试验分支整体并入 `moe`。这两个明确分支通过 `Android ARM64` 工作流提供下载，不为每次测试创建 Release。工作流响应这两个分支的代码推送，也可在 Actions 页面手动运行；仅 Markdown 文档变化不会自动构建。任务条件只允许本仓库及这两个分支，不接受 PR 触发，不向 `origin` 上游提交 PR。
 
-CI 使用 Ubuntu x64 交叉编译 ARM64，安装 JDK 21，并通过 `ANDROID_HOME` 下的绝对路径调用 `sdkmanager`，不依赖 runner 的 `PATH` 包含 Android 命令；SDK、NDK、CMake 版本由 `version.properties` 指定。它递归检出固定子模块、取得 `openssl/<NDK>/arm64-v8a` 的 Git LFS 文件，运行外部分享、公开频道分页、聊天定位、过滤、Ghost Mode、通知交接、HLS 与 CI 配置回归测试，然后将带上下文的 `patches/tdlib-ghost-mode.patch` 应用到原生 TDLib 并重建 `libtdjni.so`。补丁与源码差异必须完全匹配，不接受额外修改，也不会使用子模块附带的未打补丁库。Gradle 原生任务负责构建 libvpx、FFmpeg 及准备 Opus、AndroidX Media，CI 不再调用旧媒体 shell 构建脚本。Ghost TDLib 缓存按脚本、补丁、版本和子模块版本隔离，Gradle 只缓存下载依赖。1813 分支的 CI 适配尚未在 GitHub runner 验证，工作流仍仅对日常 `moe` 分支开放；1813 Release 使用本地 WSL 从已提交源码构建并验证的正式签名 APK。
+CI 使用 Ubuntu x64 交叉编译 ARM64，安装 JDK 21，并通过 `ANDROID_HOME` 下的绝对路径调用 `sdkmanager`，不依赖 runner 的 `PATH` 包含 Android 命令；SDK、NDK、CMake 版本由 `version.properties` 指定。它递归检出固定子模块、取得 `openssl/<NDK>/arm64-v8a` 的 Git LFS 文件，运行外部分享、公开频道分页、聊天定位、过滤、Ghost Mode、交互已读、通知交接、HLS 与 CI 配置回归测试，然后将带上下文的 `patches/tdlib-ghost-mode.patch` 应用到原生 TDLib 并重建 `libtdjni.so`。补丁与源码差异必须完全匹配，不接受额外修改，也不会使用子模块附带的未打补丁库。Gradle 原生任务负责构建 libvpx、FFmpeg 及准备 Opus、AndroidX Media，CI 不再调用旧媒体 shell 构建脚本。Ghost TDLib 缓存按脚本、补丁、版本和子模块版本隔离，Gradle 只缓存下载依赖。CI 构建成功与否以对应运行记录为准；1813 Release 也可使用本地 WSL 从已提交源码构建并验证的正式签名 APK。
 
 上游 `baseline-profile` 仅在 `-PgenerateBaselineProfile=true` 时参与生成，但预生成 profile 可随普通构建打包。它的 `SnapshotApplier` 和启动基准会执行 `pm clear`，不可在用户已登录的 AVD 上直接运行；本分支的 Ghost/过滤路径还未单独录制和测量，不能宣称启动收益。通知兼容代码使用账号与消息类别 tag 配合 ID，避免厂商通知覆盖问题；它不改变 FCM 送达条件，升级时旧无 tag 通知的迁移、多账号取消和前台服务并存仍需专门验证。
 

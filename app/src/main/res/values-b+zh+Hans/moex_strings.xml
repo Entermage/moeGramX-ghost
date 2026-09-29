@@ -93,6 +93,8 @@
   <string name="GhostReadChannels">频道隐藏已读</string>
   <string name="GhostReadGroups">群组隐藏已读</string>
   <string name="GhostReadPrivate">私聊隐藏已读</string>
+  <string name="GhostReadOnInteract">交互时已读</string>
+  <string name="GhostReadOnInteractInfo">在已开启隐藏已读的会话中，成功发送消息、修改表情反应或投票后，主动提交该会话的已读回执。沿用“读到此处”，云端也可能推进到当前本地已读位置。普通浏览、操作失败、定时消息及秘密聊天不触发。默认关闭。</string>
   <string name="GhostOnline">保持离线</string>
   <string name="GhostActions">隐藏输入与上传状态</string>
   <string name="GhostModeInfo">参考 AyuGram 行为实现。频道、群组和私聊可分别隐藏已读回执；需要主动已读时，可在消息菜单中选择“读到此处”。</string>

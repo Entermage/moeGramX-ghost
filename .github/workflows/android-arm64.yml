@@ -2,7 +2,7 @@ name: Android ARM64
 
 on:
   push:
-    branches: [moe]
+    branches: [moe, codex/upgrade-1813]
     paths-ignore:
       - '**.md'
   workflow_dispatch:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'Entermage/moeGramX-ghost' && github.ref == 'refs/heads/moe'
+    if: github.repository == 'Entermage/moeGramX-ghost' && (github.ref == 'refs/heads/moe' || github.ref == 'refs/heads/codex/upgrade-1813')
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     env:
@@ -105,6 +105,7 @@ jobs:
           python3 -m unittest discover -s tests -p test_chat_navigation.py -v
           python3 -m unittest discover -s tests -p test_preview_filter.py -v
           python3 -m unittest discover -s tests -p test_ghost_read.py -v
+          python3 -m unittest discover -s tests -p test_read_on_interact.py -v
           python3 -m unittest discover -s tests -p test_notification_handoff.py -v
           ./gradlew -p tests/upstream-runtime runChecks --no-daemon --no-watch-fs --console=plain
 
