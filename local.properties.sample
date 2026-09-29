@@ -24,6 +24,11 @@ app.download_url=https://telegram.org/dlx
 telegram.api_id=
 telegram.api_hash=
 
+## Maps SDK for Android key, restricted to this app's package name and signing SHA-1.
+# Enable Maps SDK for Android and billing in the key's Google Cloud project.
+# GOOGLE_MAPS_API_KEY in the build environment overrides this property.
+google.maps_api_key=
+
 ## Obtain credentials to access YouTube API:
 # https://developers.google.com/youtube/android/player/register
 youtube.api_key=
