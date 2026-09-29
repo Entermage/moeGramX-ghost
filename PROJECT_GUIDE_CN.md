@@ -142,6 +142,8 @@ Google 构建通过 `FirebaseListenerService` 接收 FCM，再唤醒账号和 TD
 
 这个入口是发布页面跳转，没有增加 GitHub Release 的自动版本比较、下载或安装逻辑。后台 `AppUpdater` 仍使用前述 Google Play / Telegram 频道流程，不会依据 `ghost.N` 判断同一主构建号的定制版本。
 
+应用自己的源码主页和构建链接统一来自 `app.sources_url`：本地配置优先，缺失或空白时读取 `local.properties.sample` 的本分支默认值 `https://github.com/Entermage/moeGramX-ghost`，CI 配置也显式设置该地址。Gradle 规范化末尾 `/` 和 `.git` 后生成 `SOURCES_URL`、`REMOTE_URL`、当前提交及差异链接；保留 `origin` 指向上游以便同步代码，不再把该 remote 当成本地包实际源码出处。“moegramX 选项 → Source”直接使用 `BuildConfig.SOURCES_URL`；主设置的源码入口通过 `AppBuildInfo` 打开本分支的实际构建提交。TDLib、通话库等依赖的源码链接与 README 上游致谢不变。`tests/test_source_repository.py` 检查配置与入口接线，另可通过 `--build-config` 校验真实生成的构建字段；CI 在打包后执行该校验，防止链接或提交号再次偏离当前仓库。
+
 ### Google Maps SDK
 
 发送位置页面的 `MediaLocationMapView` 和完整地图页面的 `MapGoogleController` 创建 Google Maps `MapView`，由 Google Play 服务加载底图。附近地点列表及聊天地图缩略图另有 Telegram / 静态地图路径；列表显示成功不能证明 SDK 底图加载成功。当前原生地图没有配置云端 Map ID，也没有创建街景全景视图。

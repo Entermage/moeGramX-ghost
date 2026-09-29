@@ -68,7 +68,8 @@ abstract class AppConfigurationSource : ValueSource<ApplicationConfig, AppConfig
       extension =
         applicationExtension,
       sourceCodeUrl =
-        properties.getProperty("app.sources_url", ""),
+        properties.getProperty("app.sources_url")?.takeIf { it.isNotBlank() }
+          ?: defaults.getProperty("app.sources_url", ""),
       isExperimentalBuild =
         isExperimentalBuild,
       isHuaweiBuild =

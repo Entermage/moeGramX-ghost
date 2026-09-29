@@ -40,6 +40,7 @@ class CiConfigurationTest(unittest.TestCase):
         local = (self.root / "local.properties").read_text()
         self.assertIn("app.experimental=false\n", local)
         self.assertIn("app.id=com.ayx.mgx\n", local)
+        self.assertIn("app.sources_url=" + ci.property_value("https://github.com/Entermage/moeGramX-ghost") + "\n", local)
         self.assertNotIn("test-password", local)
         self.assertIn("google.maps_api_key=test-maps-key\n", local)
         ci.cleanup(self.root, self.temp)
