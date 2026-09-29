@@ -1724,7 +1724,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   }
 
   public <T extends TdApi.Object> void send (TdApi.Function<T> function, ResultHandler<T> handler) {
-    send(client(), function, handler);
+    sendMessageInteraction(function, ResultHandler.toTdlibHandler(handler));
   }
 
   public <T extends TdApi.Object> void sendAll (TdApi.Function<T>[] functions, @NonNull ResultHandler<T> handler, @Nullable Runnable after) {
@@ -1736,7 +1736,38 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   }
 
   private <T extends TdApi.Object> void send (TdApi.Function<T> function, Client.ResultHandler handler) {
-    send(client(), function, handler);
+    sendMessageInteraction(function, handler);
+  }
+
+  /** Only successful, explicitly initiated reactions and poll answers may opt into cloud reads. */
+  public <T extends TdApi.Object> void sendMessageInteraction (TdApi.Function<T> function, @Nullable Client.ResultHandler handler) {
+    Client operationClient = client();
+    final long chatId, messageId;
+    if (function instanceof TdApi.AddMessageReaction) {
+      TdApi.AddMessageReaction reaction = (TdApi.AddMessageReaction) function;
+      chatId = reaction.chatId;
+      messageId = reaction.messageId;
+    } else if (function instanceof TdApi.RemoveMessageReaction) {
+      TdApi.RemoveMessageReaction reaction = (TdApi.RemoveMessageReaction) function;
+      chatId = reaction.chatId;
+      messageId = reaction.messageId;
+    } else if (function instanceof TdApi.SetPollAnswer) {
+      TdApi.SetPollAnswer answer = (TdApi.SetPollAnswer) function;
+      chatId = answer.chatId;
+      messageId = answer.messageId;
+    } else {
+      operationClient.send(function, handler);
+      return;
+    }
+    final boolean readOnInteract = canReadOnInteract(chatId);
+    operationClient.send(function, result -> {
+      if (readOnInteract && result instanceof TdApi.Ok) {
+        readMessageOnInteraction(operationClient, chatId, messageId);
+      }
+      if (handler != null) {
+        handler.onResult(result);
+      }
+    });
   }
 
   private static <T extends TdApi.Object> void send (Client client, TdApi.Function<T> function, Client.ResultHandler handler) {
@@ -6788,7 +6819,38 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   }
 
   public void readMessageOnServer (long chatId, long messageId) {
+    readMessageOnServer(chatId, messageId, null, messageHandler());
+  }
+
+  private boolean canReadOnInteract (long chatId) {
+    return chatId != 0 && MoexConfig.ghostReadOnInteract && isGhostReadEnabled(chatId) &&
+      !ChatId.isSecret(chatId) && !isSelfChat(chatId);
+  }
+
+  private void readMessageOnInteraction (Client operationClient, long chatId, long messageId) {
+    if (messageId == 0 || !ownsClient(operationClient) || !canReadOnInteract(chatId)) {
+      return;
+    }
+    // Recheck after queueing and after setting the token: disabling the option or
+    // replacing the account client must cancel a read which has not been sent yet.
+    readMessageOnServer(chatId, messageId,
+      () -> ownsClient(operationClient) && canReadOnInteract(chatId), okHandler());
+  }
+
+  private void readSentMessageOnInteraction (TdApi.Message message) {
+    if (message.isOutgoing && message.sendingState == null && message.schedulingState == null &&
+        !message.isFromOffline && canReadOnInteract(message.chatId)) {
+      readMessageOnInteraction(client(), message.chatId, message.id);
+    }
+  }
+
+  private void readMessageOnServer (long chatId, long messageId, @Nullable LocalReadCondition condition,
+                                    @NonNull Client.ResultHandler handler) {
     enqueueGhostReadOperation(() -> {
+      if (condition != null && !condition.isValid()) {
+        finishGhostReadOperation();
+        return;
+      }
       // Bind the one-shot permission to this target and this client, including cleanup.
       // Other automatic reads must never consume permission for a manual Read until.
       Client operationClient = client();
@@ -6796,10 +6858,21 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
         new TdApi.OptionValueString(chatId + ":" + messageId)), optionResult -> {
         if (optionResult.getConstructor() == TdApi.Error.CONSTRUCTOR) {
           try {
-            messageHandler().onResult(optionResult);
+            handler.onResult(optionResult);
           } finally {
             finishGhostReadOperation();
           }
+          return;
+        }
+        if (condition != null && !condition.isValid()) {
+          operationClient.send(new TdApi.SetOption(MOEX_GHOST_READ_ONCE_OPTION,
+            new TdApi.OptionValueEmpty()), resetResult -> {
+            try {
+              okHandler().onResult(resetResult);
+            } finally {
+              finishGhostReadOperation();
+            }
+          });
           return;
         }
         operationClient.send(new TdApi.ViewMessages(chatId, new long[] {messageId},
@@ -6808,7 +6881,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
             new TdApi.OptionValueEmpty()), resetResult -> {
             try {
               okHandler().onResult(resetResult);
-              messageHandler().onResult(result);
+              handler.onResult(result);
             } finally {
               finishGhostReadOperation();
             }
@@ -7797,6 +7870,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
     context.global().notifyUpdateMessageSendSucceeded(this, update);
 
     addRemoveSendingMessage(update.message.chatId, update.oldMessageId, false);
+    readSentMessageOnInteraction(update.message);
   }
 
   private void updateVideoPublished (TdApi.UpdateVideoPublished update) {

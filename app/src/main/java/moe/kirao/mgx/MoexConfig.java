@@ -57,6 +57,7 @@ public class MoexConfig {
   public static final String KEY_GHOST_READ_CHANNELS = "ghost_read_channels";
   public static final String KEY_GHOST_READ_GROUPS = "ghost_read_groups";
   public static final String KEY_GHOST_READ_PRIVATE = "ghost_read_private";
+  public static final String KEY_GHOST_READ_ON_INTERACT = "ghost_read_on_interact";
   public static final String KEY_GHOST_ONLINE = "ghost_online";
   public static final String KEY_GHOST_ACTIONS = "ghost_actions";
   public static final String KEY_FILTER_ENABLED = "filter_enabled";
@@ -115,6 +116,7 @@ public class MoexConfig {
   public static boolean ghostReadChannels = instance().getBoolean(KEY_GHOST_READ_CHANNELS, legacyGhostReadReceipts);
   public static boolean ghostReadGroups = instance().getBoolean(KEY_GHOST_READ_GROUPS, legacyGhostReadReceipts);
   public static boolean ghostReadPrivate = instance().getBoolean(KEY_GHOST_READ_PRIVATE, legacyGhostReadReceipts);
+  public static volatile boolean ghostReadOnInteract = instance().getBoolean(KEY_GHOST_READ_ON_INTERACT, false);
   public static boolean ghostOnline = instance().getBoolean(KEY_GHOST_ONLINE, true);
   public static boolean ghostActions = instance().getBoolean(KEY_GHOST_ACTIONS, true);
   public static boolean filterEnabled = instance().getBoolean(KEY_FILTER_ENABLED, false);
@@ -241,6 +243,11 @@ public class MoexConfig {
   public void setGhostReadPrivate (boolean enabled) {
     ghostReadPrivate = enabled;
     putBoolean(KEY_GHOST_READ_PRIVATE, enabled);
+  }
+
+  public void setGhostReadOnInteract (boolean enabled) {
+    ghostReadOnInteract = enabled;
+    putBoolean(KEY_GHOST_READ_ON_INTERACT, enabled);
   }
 
   public void setGhostOnline (boolean enabled) {

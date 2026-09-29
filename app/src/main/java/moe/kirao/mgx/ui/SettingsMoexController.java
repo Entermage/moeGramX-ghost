@@ -159,6 +159,8 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
     } else if (viewId == R.id.btn_ghostReadPrivate) {
       MoexConfig.instance().setGhostReadPrivate(adapter.toggleView(v));
       tdlib.applyGhostModeOptions();
+    } else if (viewId == R.id.btn_ghostReadOnInteract) {
+      MoexConfig.instance().setGhostReadOnInteract(adapter.toggleView(v));
     } else if (viewId == R.id.btn_ghostOnline) {
       MoexConfig.instance().setGhostOnline(adapter.toggleView(v));
       tdlib.applyGhostModeOptions();
@@ -497,6 +499,8 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
           view.getToggler().setRadioEnabled(MoexConfig.ghostReadGroups, isUpdate);
         } else if (itemId == R.id.btn_ghostReadPrivate) {
           view.getToggler().setRadioEnabled(MoexConfig.ghostReadPrivate, isUpdate);
+        } else if (itemId == R.id.btn_ghostReadOnInteract) {
+          view.getToggler().setRadioEnabled(MoexConfig.ghostReadOnInteract, isUpdate);
         } else if (itemId == R.id.btn_ghostOnline) {
           view.getToggler().setRadioEnabled(MoexConfig.ghostOnline, isUpdate);
         } else if (itemId == R.id.btn_ghostActions) {
@@ -596,6 +600,11 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
         items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_ghostActions, 0, R.string.GhostActions));
         items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
         items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.GhostModeInfo));
+
+        items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
+        items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_ghostReadOnInteract, 0, R.string.GhostReadOnInteract));
+        items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
+        items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.GhostReadOnInteractInfo));
 
         items.add(new ListItem(ListItem.TYPE_HEADER, 0, 0, R.string.MessageFilter));
         items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));

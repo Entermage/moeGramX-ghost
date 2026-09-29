@@ -793,6 +793,7 @@
   <item type="id" name="btn_ghostReadChannels" />
   <item type="id" name="btn_ghostReadGroups" />
   <item type="id" name="btn_ghostReadPrivate" />
+  <item type="id" name="btn_ghostReadOnInteract" />
   <item type="id" name="btn_ghostOnline" />
   <item type="id" name="btn_ghostActions" />
   <item type="id" name="btn_filterEnabled" />

@@ -144,7 +144,9 @@ int main() {
             self.assertNotIn("x_moex_ghost_read_allow_once", (self.native.parent / name).read_text())
 
     def test_manual_read_keeps_same_client_when_account_restarts(self):
-        method = block(JAVA, "public void readMessageOnServer (")
+        method = "\n".join(block(JAVA, signature) for signature in (
+            "public void readMessageOnServer (", "private void readMessageOnServer ("))
+        method = method.replace("@Nullable ", "").replace("@NonNull ", "")
         run_java({"ManualReadHarness.java": r'''
 import java.util.*;
 public class ManualReadHarness {
@@ -171,6 +173,7 @@ public class ManualReadHarness {
     void reply(TdApi.Object result){pending.remove().onResult(result);}
   }
   Client current=new Client(); int finished, errors, cleanupErrors; boolean throwOnResult;
+  interface LocalReadCondition { boolean isValid(); }
   Client client(){return current;}
   void enqueueGhostReadOperation(Runnable r){r.run();}
   void finishGhostReadOperation(){finished++;}

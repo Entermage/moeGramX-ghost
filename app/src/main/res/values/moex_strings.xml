@@ -117,6 +117,8 @@
   <string name="GhostReadChannels">Hide reads in channels</string>
   <string name="GhostReadGroups">Hide reads in groups</string>
   <string name="GhostReadPrivate">Hide reads in private chats</string>
+  <string name="GhostReadOnInteract">Read on interact</string>
+  <string name="GhostReadOnInteractInfo">While Ghost Mode hides reads in a chat, successfully sending a message, changing a reaction or voting sends a read receipt in that chat. Uses Read until: the server read position may also advance to your current local read position. Browsing, failed actions, scheduled messages and Secret Chats do not trigger this. Off by default.</string>
   <string name="GhostOnline">Stay offline</string>
   <string name="GhostActions">Hide typing and upload activity</string>
   <string name="GhostModeInfo">Global mode inspired by AyuGram. Read receipts can be hidden separately for channels, groups and private chats. Use Read until in a message menu to explicitly send one read receipt.</string>
