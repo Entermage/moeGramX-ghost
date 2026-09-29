@@ -1,8 +1,8 @@
 # moeGramX Ghost 项目说明
 
-## 当前实验工作树的边界
+## 当前 1813 分支的边界
 
-`codex/upgrade-1813` 是独立的 1813 依赖升级工作树，以 moeGramX 的 `79e4d5d2` / TGX `9312ace3` 完整上游代码为兼容基线，包含上游通知 tag、联系人同步服务、备份限制和 Baseline Profile 等关联改动。它已用于 Find N6 上的 `0.29.0.1813` 本地安装，通知交接与 Google Maps SDK 配置修复均基于该工作树。它与 `moe` 日常分支保持独立；将其合入日常分支或公开发布仍需单独确定范围，不能把本地修复等同于整个实验分支已经完成兼容性验证。
+`codex/upgrade-1813` 是独立的 1813 依赖升级工作树，以 moeGramX 的 `79e4d5d2` / TGX `9312ace3` 完整上游代码为兼容基线，包含上游通知 tag、联系人同步服务、备份限制和 Baseline Profile 等关联改动。它已用于 Find N6 上的 `0.29.0.1813` 本地安装，通知交接与 Google Maps SDK 配置修复均基于该工作树。1813 Release 从该分支的明确提交打标，仍与 `moe` 日常分支保持独立；通知、地图和既有回归检查的通过不代表全部上游功能都已完成兼容性验证。
 
 本工作树使用 TDLib wrapper `a032dcf1`（源码 `d1085f9c`）、Gradle 9.7.1、JDK 21、NDK `27.3.13750724`、SDK `android-37.2`。ARM64 使用 `c++_shared`；TDLib 和 OpenSSL 路径均增加 NDK 版本层。`patches/tdlib-ghost-mode.patch` 改为保留 3 行上下文的补丁，按函数重新移植到新 TDLib，不能把旧零上下文补丁直接套在新版本上。
 
@@ -130,6 +130,12 @@ FCM 到达后，TDLib 可以先用部分消息数据发布临时 `NewPushMessage
 
 Google 构建通过 `FirebaseListenerService` 接收 FCM，再唤醒账号和 TDLib 处理推送。应用被 Android 普通回收后仍可由 FCM 唤醒；如果系统或第三方管理工具对包执行 force-stop，Android 会将其标记为 stopped，用户再次手动启动前不会接收这类唤醒。
 
+### 检查更新的当前来源
+
+应用恢复到前台时，`BaseActivity` 调用 `AppUpdater.checkForUpdates()`，按安装来源使用 Google Play 或 Telegram 频道流程。当前正式侧载包的 `GOOGLE_PLAY_URL` 为空，Telegram 更新频道为 `moex_log`；`Tdlib.findUpdateFile` 搜索频道中的 APK 文档，只把主构建号高于 `ORIGINAL_VERSION_CODE` 的文件视为更新。
+
+设置页的“检查更新”调用 `openInstallerPage`，当前侧载包的 `DOWNLOAD_URL` 为 `https://github.com/moeCrafters/moeGramX`。现有实现没有查询 `Entermage/moeGramX-ghost` 的 GitHub Releases，也不会依据 `ghost.N` 递增识别同一主构建号的定制版本。发布到本仓库不会自动接入应用内更新；本仓库 APK 目前通过 GitHub Release 页面手动下载安装。
+
 ### Google Maps SDK
 
 发送位置页面的 `MediaLocationMapView` 和完整地图页面的 `MapGoogleController` 创建 Google Maps `MapView`，由 Google Play 服务加载底图。附近地点列表及聊天地图缩略图另有 Telegram / 静态地图路径；列表显示成功不能证明 SDK 底图加载成功。当前原生地图没有配置云端 Map ID，也没有创建街景全景视图。
@@ -244,7 +250,7 @@ APK 文件名应与当前构建输出一致；覆盖安装时明确添加 `-r`�
 
 日常修改提交推送到 `publish` 远端的 `moe` 分支（`Entermage/moeGramX-ghost`），通过 `Android ARM64` 工作流提供下载，不为每次测试创建 Release。工作流响应该分支的代码推送，也可在 Actions 页面手动运行；仅 Markdown 文档变化不会自动构建。不接受 PR 触发，不向 `origin` 上游提交 PR。
 
-CI 使用 Ubuntu x64 交叉编译 ARM64，安装 JDK 21，并通过 `ANDROID_HOME` 下的绝对路径调用 `sdkmanager`，不依赖 runner 的 `PATH` 包含 Android 命令；SDK、NDK、CMake 版本由 `version.properties` 指定。它递归检出固定子模块、取得 `openssl/<NDK>/arm64-v8a` 的 Git LFS 文件，运行外部分享、公开频道分页、聊天定位、过滤、Ghost Mode、通知交接、HLS 与 CI 配置回归测试，然后将带上下文的 `patches/tdlib-ghost-mode.patch` 应用到原生 TDLib 并重建 `libtdjni.so`。补丁与源码差异必须完全匹配，不接受额外修改，也不会使用子模块附带的未打补丁库。Gradle 原生任务负责构建 libvpx、FFmpeg 及准备 Opus、AndroidX Media，CI 不再调用旧媒体 shell 构建脚本。Ghost TDLib 缓存按脚本、补丁、版本和子模块版本隔离，Gradle 只缓存下载依赖。实验工作树的 CI 适配尚未在 GitHub runner 验证，工作流仍仅对日常 `moe` 分支开放。
+CI 使用 Ubuntu x64 交叉编译 ARM64，安装 JDK 21，并通过 `ANDROID_HOME` 下的绝对路径调用 `sdkmanager`，不依赖 runner 的 `PATH` 包含 Android 命令；SDK、NDK、CMake 版本由 `version.properties` 指定。它递归检出固定子模块、取得 `openssl/<NDK>/arm64-v8a` 的 Git LFS 文件，运行外部分享、公开频道分页、聊天定位、过滤、Ghost Mode、通知交接、HLS 与 CI 配置回归测试，然后将带上下文的 `patches/tdlib-ghost-mode.patch` 应用到原生 TDLib 并重建 `libtdjni.so`。补丁与源码差异必须完全匹配，不接受额外修改，也不会使用子模块附带的未打补丁库。Gradle 原生任务负责构建 libvpx、FFmpeg 及准备 Opus、AndroidX Media，CI 不再调用旧媒体 shell 构建脚本。Ghost TDLib 缓存按脚本、补丁、版本和子模块版本隔离，Gradle 只缓存下载依赖。1813 分支的 CI 适配尚未在 GitHub runner 验证，工作流仍仅对日常 `moe` 分支开放；1813 Release 使用本地 WSL 从已提交源码构建并验证的正式签名 APK。
 
 上游 `baseline-profile` 仅在 `-PgenerateBaselineProfile=true` 时参与生成，但预生成 profile 可随普通构建打包。它的 `SnapshotApplier` 和启动基准会执行 `pm clear`，不可在用户已登录的 AVD 上直接运行；本分支的 Ghost/过滤路径还未单独录制和测量，不能宣称启动收益。通知兼容代码使用账号与消息类别 tag 配合 ID，避免厂商通知覆盖问题；它不改变 FCM 送达条件，升级时旧无 tag 通知的迁移、多账号取消和前台服务并存仍需专门验证。
 
