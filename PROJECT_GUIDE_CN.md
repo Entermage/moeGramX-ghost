@@ -134,7 +134,9 @@ Google 构建通过 `FirebaseListenerService` 接收 FCM，再唤醒账号和 TD
 
 应用恢复到前台时，`BaseActivity` 调用 `AppUpdater.checkForUpdates()`，按安装来源使用 Google Play 或 Telegram 频道流程。当前正式侧载包的 `GOOGLE_PLAY_URL` 为空，Telegram 更新频道为 `moex_log`；`Tdlib.findUpdateFile` 搜索频道中的 APK 文档，只把主构建号高于 `ORIGINAL_VERSION_CODE` 的文件视为更新。
 
-设置页的“检查更新”调用 `openInstallerPage`，当前侧载包的 `DOWNLOAD_URL` 为 `https://github.com/moeCrafters/moeGramX`。现有实现没有查询 `Entermage/moeGramX-ghost` 的 GitHub Releases，也不会依据 `ghost.N` 递增识别同一主构建号的定制版本。发布到本仓库不会自动接入应用内更新；本仓库 APK 目前通过 GitHub Release 页面手动下载安装。
+设置页的“检查更新”调用 `openReleasePage`，直接通过 `BuildConfig.DOWNLOAD_URL` 打开 `https://github.com/Entermage/moeGramX-ghost/releases/latest`。本地示例配置、当前私有本地配置和 CI 的 `app.download_url` 均使用该地址；手动入口不再按安装来源或上游紧急更新状态改成其他页面。GitHub 会把这个固定地址跳转至本仓库的最新正式 Release，用户从页面下载安装 APK。
+
+这个入口是发布页面跳转，没有增加 GitHub Release 的自动版本比较、下载或安装逻辑。后台 `AppUpdater` 仍使用前述 Google Play / Telegram 频道流程，不会依据 `ghost.N` 判断同一主构建号的定制版本。
 
 ### Google Maps SDK
 

@@ -17,7 +17,7 @@ app.id=org.example.tgx
 app.name=TGX Example
 
 ## Link to the app's website. If unavailable, link to the market page could be used.
-app.download_url=https://telegram.org/dlx
+app.download_url=https://github.com/Entermage/moeGramX-ghost/releases/latest
 
 ## Obtain credentials to access Telegram API:
 # https://core.telegram.org/api/obtaining_api_id
