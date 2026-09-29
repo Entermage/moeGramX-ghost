@@ -2,7 +2,7 @@
 
 ## 当前实验工作树的边界
 
-`codex/upgrade-1813` 是依赖升级验证分支，不是已交付的 `moe` 日常分支。它以 moeGramX 的 `79e4d5d2` / TGX `9312ace3` 完整上游代码作为兼容性试编基线，因此暂时包含上游通知 tag、联系人同步服务、备份限制和 Baseline Profile 等关联改动。这里只验证 TDLib、通话库和构建链的升级可行性；这些额外功能没有被用户选为日常合入项，不能直接把整个实验合并发布。日常分支单独交付 HLS codec 与登录页保护两项修复。
+`codex/upgrade-1813` 是独立的 1813 依赖升级工作树，以 moeGramX 的 `79e4d5d2` / TGX `9312ace3` 完整上游代码为兼容基线，包含上游通知 tag、联系人同步服务、备份限制和 Baseline Profile 等关联改动。它已用于 Find N6 上的 `0.29.0.1813` 本地安装，本次通知交接修复也基于该工作树。它与 `moe` 日常分支保持独立；将其合入日常分支或公开发布仍需单独确定范围，不能把本地修复等同于整个实验分支已经完成兼容性验证。
 
 本工作树使用 TDLib wrapper `a032dcf1`（源码 `d1085f9c`）、Gradle 9.7.1、JDK 21、NDK `27.3.13750724`、SDK `android-37.2`。ARM64 使用 `c++_shared`；TDLib 和 OpenSSL 路径均增加 NDK 版本层。`patches/tdlib-ghost-mode.patch` 改为保留 3 行上下文的补丁，按函数重新移植到新 TDLib，不能把旧零上下文补丁直接套在新版本上。
 
@@ -61,6 +61,14 @@ flowchart LR
 登录状态不是 Cookie 或 Web Session。账号授权密钥和消息缓存由 TDLib 保存在应用私有数据中；覆盖安装只有在包名和签名满足 Android 更新规则且未清除应用数据时才会保留这些数据。
 
 `PhoneController` 在校验号码时检查尚未创建的输入控件和空文本；授权成功后的测试账号请求只允许在该控制器仍有焦点时触发。HLS 播放路径通过 `HlsVideo` 统一把 h264/h265/hevc/av1/vp8/vp9 标识规范化为 RFC 6381 codec，并在播放格式中设置对应 sample MIME；已知名称忽略首尾空白及大小写，profile 字段保持原样，API 版本判断使用相同规范化结果。未知大小或无效时长使用默认码率，有效估计限制为正 Int 以防止零值及溢出。最终可播放性仍受设备解码器限制。
+
+### 推送通知向完整消息通知的交接
+
+FCM 到达后，TDLib 可以先用部分消息数据发布临时 `NewPushMessage` 通知，再通过 MTProto 同步完整消息。`MessagesManager::add_new_message_notification` 对成功创建的正式通知，把同组临时通知的清理交给 `NotificationManager::add_notification`；无效、已读、静音等不创建通知的路径仍会清理临时通知。
+
+已经被推送覆盖的消息通过 `is_push_replacement` 标识。正式消息准备好后，这类通知沿用静默更新语义，不再重复等待云端在线状态引起的 30 秒延迟；原生层在同一处理过程中排入删除临时通知和新增正式通知，再使用现有更新合并器一并交付，避免 Android 层先收到空通知组而取消提示。普通消息、来电和 Secret Chat 保留原有延迟策略，同组队列仍遵循 TDLib 的批量刷新规则。真正已读、消息删除和用户清除通知的原有撤回路径继续生效。
+
+这项修改保存在 `patches/tdlib-ghost-mode.patch`，与现有原生定制一起应用和编译。`tests/test_notification_handoff.py` 使用生产原生方法进行替换、更新合并和普通延迟回归检查；它使用运行环境替身，不能替代手机上的 FCM、厂商后台限制和悬浮提示验证。
 
 ### Ghost Mode、过滤与 Shadow Ban
 
