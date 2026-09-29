@@ -28,9 +28,10 @@ jobs:
         env:
           HAS_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
           HAS_TELEGRAM_API: ${{ secrets.TELEGRAM_API_ID != '' && secrets.TELEGRAM_API_HASH != '' }}
+          HAS_GOOGLE_MAPS: ${{ secrets.GOOGLE_MAPS_API_KEY != '' }}
         run: |
-          if [ "$HAS_SIGNING" != true ] || [ "$HAS_TELEGRAM_API" != true ]; then
-            echo '::error::Required signing or Telegram API repository Secrets are missing. No placeholder credentials will be used.'
+          if [ "$HAS_SIGNING" != true ] || [ "$HAS_TELEGRAM_API" != true ] || [ "$HAS_GOOGLE_MAPS" != true ]; then
+            echo '::error::Required signing, Telegram API or Google Maps repository Secrets are missing. No placeholder credentials will be used.'
             exit 1
           fi
 
@@ -118,6 +119,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
         run: python3 scripts/ci-configure.py
 
       - name: Build signed release APK

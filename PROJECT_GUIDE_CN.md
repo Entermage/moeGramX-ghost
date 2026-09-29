@@ -2,7 +2,7 @@
 
 ## 当前实验工作树的边界
 
-`codex/upgrade-1813` 是独立的 1813 依赖升级工作树，以 moeGramX 的 `79e4d5d2` / TGX `9312ace3` 完整上游代码为兼容基线，包含上游通知 tag、联系人同步服务、备份限制和 Baseline Profile 等关联改动。它已用于 Find N6 上的 `0.29.0.1813` 本地安装，本次通知交接修复也基于该工作树。它与 `moe` 日常分支保持独立；将其合入日常分支或公开发布仍需单独确定范围，不能把本地修复等同于整个实验分支已经完成兼容性验证。
+`codex/upgrade-1813` 是独立的 1813 依赖升级工作树，以 moeGramX 的 `79e4d5d2` / TGX `9312ace3` 完整上游代码为兼容基线，包含上游通知 tag、联系人同步服务、备份限制和 Baseline Profile 等关联改动。它已用于 Find N6 上的 `0.29.0.1813` 本地安装，通知交接与 Google Maps SDK 配置修复均基于该工作树。它与 `moe` 日常分支保持独立；将其合入日常分支或公开发布仍需单独确定范围，不能把本地修复等同于整个实验分支已经完成兼容性验证。
 
 本工作树使用 TDLib wrapper `a032dcf1`（源码 `d1085f9c`）、Gradle 9.7.1、JDK 21、NDK `27.3.13750724`、SDK `android-37.2`。ARM64 使用 `c++_shared`；TDLib 和 OpenSSL 路径均增加 NDK 版本层。`patches/tdlib-ghost-mode.patch` 改为保留 3 行上下文的补丁，按函数重新移植到新 TDLib，不能把旧零上下文补丁直接套在新版本上。
 
@@ -38,14 +38,14 @@ flowchart LR
 - `app/src/main/java/moe/kirao/mgx/MoexConfig.java`：moeGramX 与本分支功能配置，使用应用私有目录中的 LevelDB。
 - `app/src/main/java/moe/kirao/mgx/ui/SettingsMoexController.java`：Ghost Mode、过滤和 Shadow Ban 等设置入口。
 - `tdlib/`：TDLib Java API、原生源码和构建配置。
-- `patches/tdlib-ghost-mode.patch`：相对 `tdlib/source/td` 的原生 Ghost Mode 修改，包含已读、在线状态以及未读提及和反应内容回执的 TDLib 侧逻辑。
+- `patches/tdlib-ghost-mode.patch`：相对 `tdlib/source/td` 的原生定制，包含 Ghost Mode 的已读、在线状态、未读提及和反应内容回执逻辑，以及临时推送通知向完整消息通知的交接。
 - `tgcalls/`：Telegram 通话相关模块。
 - `vkryl/`：UI、核心工具和 LevelDB 等基础模块。
 - `extension/`：按构建配置选用的扩展实现。
 - `buildSrc/`：Gradle 插件、代码生成和构建任务。
 - `scripts/setup.sh`：交互式生成本地构建配置。
 - `.github/workflows/android-arm64.yml`：GitHub Actions 的 ARM64 正式签名构建与 APK 下载产物。
-- `scripts/ci-prepare-native.sh`：CI 中应用带上下文的 Ghost Mode 补丁并重建 TDLib；VPX、FFmpeg、Opus 和 AndroidX Media 的准备改由 Gradle 任务处理。
+- `scripts/ci-prepare-native.sh`：CI 中应用带上下文的 Ghost Mode 与通知交接补丁并重建 TDLib；VPX、FFmpeg、Opus 和 AndroidX Media 的准备改由 Gradle 任务处理。
 - `scripts/ci-configure.py`：从 CI Secrets 生成临时签名和构建配置，结束后清理。
 
 ## 关键执行流程
@@ -129,6 +129,16 @@ FCM 到达后，TDLib 可以先用部分消息数据发布临时 `NewPushMessage
 ### 推送与后台运行
 
 Google 构建通过 `FirebaseListenerService` 接收 FCM，再唤醒账号和 TDLib 处理推送。应用被 Android 普通回收后仍可由 FCM 唤醒；如果系统或第三方管理工具对包执行 force-stop，Android 会将其标记为 stopped，用户再次手动启动前不会接收这类唤醒。
+
+### Google Maps SDK
+
+发送位置页面的 `MediaLocationMapView` 和完整地图页面的 `MapGoogleController` 创建 Google Maps `MapView`，由 Google Play 服务加载底图。附近地点列表及聊天地图缩略图另有 Telegram / 静态地图路径；列表显示成功不能证明 SDK 底图加载成功。当前原生地图没有配置云端 Map ID，也没有创建街景全景视图。
+
+`app/build.gradle.kts` 优先读取环境变量 `GOOGLE_MAPS_API_KEY`，否则读取被 Git 忽略的 `local.properties` 中的 `google.maps_api_key`，通过 Manifest placeholder 写入唯一的 `com.google.android.geo.API_KEY`。缺少 Key 时构建立即失败，避免继续打包不能用于当前签名的上游 Key。Key 不写入源码；它仍会随 APK 分发，因此 Google Cloud 端的应用及 API 限制是必要的。
+
+地图使用独立 Google Cloud 项目 `moegramx-maps-952391`，专用 Key 只允许 `maps-android-backend.googleapis.com`（Maps SDK for Android），以及包名 `com.ayx.mgx`、正式证书 SHA-1 `D3:E7:07:77:F0:31:F7:57:0E:8C:91:59:51:8D:44:6A:10:0A:9C:26`。Firebase 继续使用 `app/google-services.json` 中的原项目及 Key。更换包名或签名后，需要重新配置相应的 Maps Key 授权；debug 证书不在正式 Key 的允许列表里。
+
+Google 官方接入说明要求 Maps Key 所属项目启用 SDK 并关联有效结算账户。普通 Maps SDK 底图当前为免费不限量；街景、云端 Map ID 或其他 Maps 服务按各自 SKU 规则计费。独立地图项目已启用 SDK 并配置受限 Key，目前未关联结算账户，回读为 `billingEnabled=false`。在这一实际状态下，正式签名 APK 已通过 Android 15 虚拟机的发送位置底图、道路文字、跨区域拖动、缩放及重新进入验证，日志没有 `Authorization failure`。这仅记录当前普通底图的观察，不能外推其他 Maps 功能或今后的服务政策。完整地图查看页、聊天静态缩略图及修复 APK 的实机效果仍需分别验证。
 
 ## 数据与配置
 
@@ -234,11 +244,11 @@ APK 文件名应与当前构建输出一致；覆盖安装时明确添加 `-r`�
 
 日常修改提交推送到 `publish` 远端的 `moe` 分支（`Entermage/moeGramX-ghost`），通过 `Android ARM64` 工作流提供下载，不为每次测试创建 Release。工作流响应该分支的代码推送，也可在 Actions 页面手动运行；仅 Markdown 文档变化不会自动构建。不接受 PR 触发，不向 `origin` 上游提交 PR。
 
-CI 使用 Ubuntu x64 交叉编译 ARM64，安装 JDK 21，并通过 `ANDROID_HOME` 下的绝对路径调用 `sdkmanager`，不依赖 runner 的 `PATH` 包含 Android 命令；SDK、NDK、CMake 版本由 `version.properties` 指定。它递归检出固定子模块、取得 `openssl/<NDK>/arm64-v8a` 的 Git LFS 文件，运行外部分享、公开频道分页、聊天定位与 CI 配置回归测试，然后将带上下文的 `patches/tdlib-ghost-mode.patch` 应用到原生 TDLib 并重建 `libtdjni.so`。补丁与源码差异必须完全匹配，不接受额外修改，也不会使用子模块附带的未打补丁库。Gradle 原生任务负责构建 libvpx、FFmpeg 及准备 Opus、AndroidX Media，CI 不再调用旧媒体 shell 构建脚本。Ghost TDLib 缓存按脚本、补丁、版本和子模块版本隔离，Gradle 只缓存下载依赖。实验工作树的 CI 适配尚未在 GitHub runner 验证，工作流仍仅对日常 `moe` 分支开放。
+CI 使用 Ubuntu x64 交叉编译 ARM64，安装 JDK 21，并通过 `ANDROID_HOME` 下的绝对路径调用 `sdkmanager`，不依赖 runner 的 `PATH` 包含 Android 命令；SDK、NDK、CMake 版本由 `version.properties` 指定。它递归检出固定子模块、取得 `openssl/<NDK>/arm64-v8a` 的 Git LFS 文件，运行外部分享、公开频道分页、聊天定位、过滤、Ghost Mode、通知交接、HLS 与 CI 配置回归测试，然后将带上下文的 `patches/tdlib-ghost-mode.patch` 应用到原生 TDLib 并重建 `libtdjni.so`。补丁与源码差异必须完全匹配，不接受额外修改，也不会使用子模块附带的未打补丁库。Gradle 原生任务负责构建 libvpx、FFmpeg 及准备 Opus、AndroidX Media，CI 不再调用旧媒体 shell 构建脚本。Ghost TDLib 缓存按脚本、补丁、版本和子模块版本隔离，Gradle 只缓存下载依赖。实验工作树的 CI 适配尚未在 GitHub runner 验证，工作流仍仅对日常 `moe` 分支开放。
 
 上游 `baseline-profile` 仅在 `-PgenerateBaselineProfile=true` 时参与生成，但预生成 profile 可随普通构建打包。它的 `SnapshotApplier` 和启动基准会执行 `pm clear`，不可在用户已登录的 AVD 上直接运行；本分支的 Ghost/过滤路径还未单独录制和测量，不能宣称启动收益。通知兼容代码使用账号与消息类别 tag 配合 ID，避免厂商通知覆盖问题；它不改变 FCM 送达条件，升级时旧无 tag 通知的迁移、多账号取消和前台服务并存仍需专门验证。
 
-工作流需要仓库 Actions Secrets：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`，以及 `TELEGRAM_API_ID`、`TELEGRAM_API_HASH`。签名步骤才向配置脚本提供这些值，脚本以私有文件权限在 runner 临时目录创建 keystore 和签名配置，并生成被 Git 忽略的 `local.properties`；构建结束无论成功失败均尝试清理。缺少必需 Secrets 时停止，不使用占位登录凭据或自动换成 debug 签名。不要输出 Secrets、上传签名目录，或把不可信代码加入可以读取这些 Secrets 的工作流。
+工作流需要仓库 Actions Secrets：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`，以及 `TELEGRAM_API_ID`、`TELEGRAM_API_HASH`、`GOOGLE_MAPS_API_KEY`。签名步骤才向配置脚本提供这些值，脚本以私有文件权限在 runner 临时目录创建 keystore 和签名配置，并生成被 Git 忽略的 `local.properties`；构建结束无论成功失败均尝试清理。缺少必需 Secrets 时停止，不使用占位登录凭据或自动换成 debug 签名。不要输出 Secrets、上传签名目录，或把不可信代码加入可以读取这些 Secrets 的工作流。
 
 CI 构建 `assembleLatestArm64Release`，维持包名 `com.ayx.mgx`、应用名称 `moegramX` 和已有正式证书。上传前检查正式证书指纹、ARM64 ABI、非 debuggable 标志与 APK SHA-256。产物位于对应 Actions 运行页面的 Artifacts，直接保存 APK、不额外套 ZIP，保留 30 天；下载需要登录有仓库读取权限的 GitHub 账号，过期后可重新运行。运行摘要提供对应源码提交、文件校验和与下载链接。
 

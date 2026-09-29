@@ -26,6 +26,7 @@ class CiConfigurationTest(unittest.TestCase):
             "ANDROID_KEY_PASSWORD": "test-password",
             "TELEGRAM_API_ID": "123456",
             "TELEGRAM_API_HASH": "test-api-hash",
+            "GOOGLE_MAPS_API_KEY": "test-maps-key",
             "ANDROID_SDK_ROOT": "/tmp/test-sdk",
         }
 
@@ -40,6 +41,7 @@ class CiConfigurationTest(unittest.TestCase):
         self.assertIn("app.experimental=false\n", local)
         self.assertIn("app.id=com.ayx.mgx\n", local)
         self.assertNotIn("test-password", local)
+        self.assertIn("google.maps_api_key=test-maps-key\n", local)
         ci.cleanup(self.root, self.temp)
         ci.cleanup(self.root, self.temp)
         self.assertFalse(signing.exists())
@@ -50,11 +52,13 @@ class CiConfigurationTest(unittest.TestCase):
         self.assertEqual(ci.property_value("中😀"), "\\u4e2d\\ud83d\\ude00")
 
     def test_missing_secret_fails_before_any_write(self):
-        self.env.pop("TELEGRAM_API_HASH")
-        with self.assertRaises(ValueError):
-            ci.configure(self.root, self.temp, self.env)
-        self.assertEqual(list(self.temp.iterdir()), [])
-        self.assertEqual(list(self.root.iterdir()), [])
+        for name in self.env:
+            with self.subTest(missing=name):
+                incomplete = {key: value for key, value in self.env.items() if key != name}
+                with self.assertRaises(ValueError):
+                    ci.configure(self.root, self.temp, incomplete)
+                self.assertEqual(list(self.temp.iterdir()), [])
+                self.assertEqual(list(self.root.iterdir()), [])
 
     def test_bad_base64_fails_before_any_write(self):
         self.env["ANDROID_KEYSTORE_BASE64"] = "not valid base64"

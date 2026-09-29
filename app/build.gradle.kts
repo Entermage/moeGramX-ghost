@@ -19,6 +19,16 @@ plugins {
 }
 
 val config = tgxConfig.config.get()
+// Supply a key authorized for this build's application ID and signing certificate.
+val googleMapsApiKey = providers.environmentVariable("GOOGLE_MAPS_API_KEY")
+  .orElse(providers.fileContents(layout.projectDirectory.file("../local.properties")).asText.map { contents ->
+    Properties().apply { contents.reader().use { load(it) } }.getProperty("google.maps_api_key", "")
+  })
+  .getOrElse("")
+  .trim()
+require(googleMapsApiKey.isNotEmpty()) {
+  "Set GOOGLE_MAPS_API_KEY or google.maps_api_key in local.properties before building this app."
+}
 val generateBaselineProfile = tgxConfig.generateBaselineProfile.get()
 val useLegacyNdk = tgxConfig.useLegacyNdk.get()
 val appliedNdkVersion = if (useLegacyNdk) {
@@ -320,6 +330,7 @@ android {
 
   defaultConfig {
     applicationId = config.applicationId
+    manifestPlaceholders["GOOGLE_MAPS_API_KEY"] = googleMapsApiKey
     targetSdk = config.build.targetSdkVersion
     multiDexEnabled = true
 

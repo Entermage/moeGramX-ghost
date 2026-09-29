@@ -39,9 +39,9 @@ def write_private(path, data):
 
 def configure(root, temp, env):
     required = ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS",
-                "ANDROID_KEY_PASSWORD", "TELEGRAM_API_ID", "TELEGRAM_API_HASH", "ANDROID_SDK_ROOT")
+                "ANDROID_KEY_PASSWORD", "TELEGRAM_API_ID", "TELEGRAM_API_HASH", "GOOGLE_MAPS_API_KEY", "ANDROID_SDK_ROOT")
     if any(not env.get(name) for name in required):
-        raise ValueError("Required CI signing or Telegram build secrets are missing")
+        raise ValueError("Required CI signing, Telegram or Google Maps build secrets are missing")
     if not env["TELEGRAM_API_ID"].isdigit():
         raise ValueError("Invalid Telegram API ID")
     keystore = base64.b64decode(env["ANDROID_KEYSTORE_BASE64"], validate=True)
@@ -69,6 +69,7 @@ def configure(root, temp, env):
         "tgx.extension": "none",
         "telegram.api_id": env["TELEGRAM_API_ID"],
         "telegram.api_hash": env["TELEGRAM_API_HASH"],
+        "google.maps_api_key": env["GOOGLE_MAPS_API_KEY"],
     }
     for path, properties in ((signing_dir / "signing.properties", signing), (root / "local.properties", local)):
         content = HEADER + "".join(key + "=" + property_value(value) + "\n" for key, value in properties.items())

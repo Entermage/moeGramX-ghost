@@ -233,8 +233,8 @@
     </service>
 
     <meta-data
-      android:name="com.google.android.maps.v2.API_KEY"
-      android:value="AIzaSyDzAoJrVB72LgqSZ1LP6Hpp8egGEJVH7PA" />
+      android:name="com.google.android.geo.API_KEY"
+      android:value="${GOOGLE_MAPS_API_KEY}" />
 
     <uses-library
       android:name="com.google.android.maps"
