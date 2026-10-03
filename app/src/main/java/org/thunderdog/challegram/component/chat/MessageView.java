@@ -826,6 +826,17 @@ public class MessageView extends SparseDrawableView implements Destroyable, Draw
 
     int moreOptions = 0;
 
+    if (canShadowBan) {
+      if (isMore) {
+        boolean banned = MoexConfig.instance().isShadowBanned(m.tdlib().id(), shadowBanUserId);
+        ids.append(R.id.btn_messageShadowBan);
+        icons.append(R.drawable.baseline_block_24);
+        strings.append(banned ? R.string.RemoveShadowBan : R.string.ShadowBan);
+      } else {
+        moreOptions++;
+      }
+    }
+
     if (m.canPinAnyMessage(true) && isSent && msg.canBePinned()) {
       if (!isMore) {
         int totalCount = msg.getMessageCount();
@@ -1228,17 +1239,6 @@ public class MessageView extends SparseDrawableView implements Destroyable, Draw
         icons.append(R.drawable.baseline_bug_report_24);
         strings.append(R.string.ShareCallLogs);
         tag = callLogs;
-      }
-    }
-
-    if (canShadowBan) {
-      if (isMore) {
-        boolean banned = MoexConfig.instance().isShadowBanned(m.tdlib().id(), shadowBanUserId);
-        ids.append(R.id.btn_messageShadowBan);
-        icons.append(R.drawable.baseline_block_24);
-        strings.append(banned ? R.string.RemoveShadowBan : R.string.ShadowBan);
-      } else {
-        moreOptions++;
       }
     }
 
