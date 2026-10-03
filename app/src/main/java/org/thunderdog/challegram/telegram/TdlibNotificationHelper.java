@@ -187,7 +187,10 @@ public class TdlibNotificationHelper implements Iterable<TdlibNotificationGroup>
       } else {
         addedNotifications = null;
       }
-      if (update.removedNotificationIds != null && update.removedNotificationIds.length > 0) {
+      if (update.totalCount == 0) {
+        // Keep the global cache in sync with every entry cleared by updateGroup.
+        removedNotifications = new ArrayList<>(group.notifications().size());
+      } else if (update.removedNotificationIds != null && update.removedNotificationIds.length > 0) {
         removedNotifications = new ArrayList<>(update.removedNotificationIds.length);
       } else {
         removedNotifications = null;
@@ -250,7 +253,7 @@ public class TdlibNotificationHelper implements Iterable<TdlibNotificationGroup>
           }
         }
       }
-      if (update.addedNotifications == null || update.addedNotifications.length == 0 || tdlib.isUnauthorized())
+      if (update.totalCount == 0 || update.addedNotifications == null || update.addedNotifications.length == 0 || tdlib.isUnauthorized())
         return;
       group = new TdlibNotificationGroup(tdlib, update);
       if (group.isEmpty())

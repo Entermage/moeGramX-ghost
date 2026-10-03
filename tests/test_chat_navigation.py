@@ -96,6 +96,7 @@ public class ChatAnchorHarness {
     TdApi.MessageTopic topic=new TdApi.MessageTopic();
     long getChatId() { return -1002462267293L; }
     long getLastReadInboxMessageId() { return 110; }
+    long getNewestMessageId() { return 100; }
     boolean hasUnreadMessages(TdApi.Chat c) { return true; }
     TdApi.MessageTopic getMessageTopicId() { return topic; }
   }
