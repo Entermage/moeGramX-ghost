@@ -280,6 +280,16 @@ public class TdlibNotificationGroup implements Iterable<TdlibNotification> {
       this.totalCount = update.totalCount;
       changeCount++;
     }
+    if (update.totalCount == 0) {
+      // An empty TDLib group also invalidates cached notifications that are not
+      // listed in removedNotificationIds (for example, retained dismissed ones).
+      if (removedNotifications != null) {
+        removedNotifications.addAll(this.notifications);
+      }
+      changeCount += this.notifications.size();
+      this.notifications.clear();
+      return changeCount;
+    }
     if (update.removedNotificationIds != null && update.removedNotificationIds.length > 0) {
       for (int i = update.removedNotificationIds.length - 1; i >= 0; i--) {
         TdlibNotification removedNotification = removeNotification(update.removedNotificationIds[i]);

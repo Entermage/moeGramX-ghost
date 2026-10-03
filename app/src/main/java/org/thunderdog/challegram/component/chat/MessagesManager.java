@@ -3410,13 +3410,16 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     if (hasSavedPosition) {
       return new DefaultAnchor(saved.id, HIGHLIGHT_MODE_POSITION_RESTORE);
     }
-    return threadInfo != null ? new DefaultAnchor(resolveUnreadAnchor(chat, threadInfo), HIGHLIGHT_MODE_UNREAD) :
+    // A thread without unread replies is a normal history open, including zero comments.
+    return threadInfo != null && threadInfo.hasUnreadMessages(chat) ?
+      new DefaultAnchor(resolveUnreadAnchor(chat, threadInfo), HIGHLIGHT_MODE_UNREAD) :
       new DefaultAnchor(null, HIGHLIGHT_MODE_NONE);
   }
 
   public static MessageId resolveUnreadAnchor (TdApi.Chat chat, @Nullable ThreadInfo threadInfo) {
     if (threadInfo != null) {
-      return new MessageId(threadInfo.getChatId(), threadInfo.getLastReadInboxMessageId() == 0 ? MessageId.MIN_VALID_ID : threadInfo.getLastReadInboxMessageId());
+      // Root album members are context, not unread replies. Start after the newest root.
+      return new MessageId(threadInfo.getChatId(), threadInfo.getLastReadInboxMessageId() == 0 ? threadInfo.getNewestMessageId() : threadInfo.getLastReadInboxMessageId());
     } else if (chat.lastReadOutboxMessageId == MessageId.MAX_VALID_ID || ChatId.isMultiChat(chat.id)) {
       return new MessageId(chat.id, chat.lastReadInboxMessageId);
     } else {
