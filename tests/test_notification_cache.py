@@ -74,17 +74,14 @@ class NotificationCacheTest(unittest.TestCase):
     def test_empty_unknown_group_does_not_accept_added_notifications(self):
         self.run_case("unknown-empty")
 
-    def test_observed_stale_cache_regression_fails_before_fix(self):
-        # Verify that this is a behavior regression test, not just a compile test.
+    def test_stale_cache_regression_detects_missing_empty_group_cleanup(self):
+        # A negative control removes only the fix from the production group.
+        # Avoid HEAD/history dependencies: CI checks out the fixed commit shallowly.
         with tempfile.TemporaryDirectory(prefix="notification-cache-baseline-") as tmp:
-            paths = []
-            for path in (GROUP, HELPER):
-                previous = Path(tmp) / path.name
-                previous.write_bytes(subprocess.check_output([
-                    "git", "-C", str(ROOT), "show", "HEAD:" + str(path.relative_to(ROOT))
-                ]))
-                paths.append(previous)
-            compile_harness(tmp, source_for(*paths))
+            previous = Path(tmp) / GROUP.name
+            cleanup = block(GROUP, "if (update.totalCount == 0)")
+            previous.write_text(GROUP.read_text().replace(cleanup, "", 1))
+            compile_harness(tmp, source_for(group=previous))
             result = subprocess.run(["java", "-ea", "-cp", tmp,
                                      "NotificationCacheHarness", "stale-and-current"],
                                     text=True, capture_output=True)
