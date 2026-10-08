@@ -51,7 +51,7 @@ public class SyncTask extends Worker {
   }
 
   public static void schedule (long pushId, int accountId) {
-    final String uniqueWorkName = accountId != TdlibAccount.NO_ID ? "sync:all" : "sync:" + accountId;
+    final String uniqueWorkName = accountId == TdlibAccount.NO_ID ? "sync:all" : "sync:" + accountId;
     OneTimeWorkRequest.Builder b = new OneTimeWorkRequest.Builder(SyncTask.class);
     b.setConstraints(new Constraints.Builder()
       .setRequiredNetworkType(NetworkType.CONNECTED)

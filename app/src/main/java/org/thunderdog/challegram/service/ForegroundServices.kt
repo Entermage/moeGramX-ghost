@@ -3,6 +3,7 @@ package org.thunderdog.challegram.service
 import android.content.Context
 import androidx.annotation.DrawableRes
 import me.vkryl.core.lambda.RunnableBool
+import org.thunderdog.challegram.sync.SyncTask
 
 inline fun <reified T : BaseForegroundService> start(
   context: Context,
@@ -26,6 +27,12 @@ T::class.java, context, pushId, accountId
 )
 
 class FetchNotificationService : BaseForegroundService() {
+  override fun getTaskTimeoutMillis() = 60_000L
+
+  override fun onTaskTimeout(pushId: Long, accountId: Int) {
+    SyncTask.schedule(pushId, accountId)
+  }
+
   companion object {
     @JvmStatic fun startForegroundTask(
       context: Context,

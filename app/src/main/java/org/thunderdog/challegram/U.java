@@ -142,6 +142,7 @@ import org.thunderdog.challegram.tool.TGMimeType;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.ui.TextController;
 import org.thunderdog.challegram.util.AppBuildInfo;
+import org.thunderdog.challegram.util.FileCopyUtils;
 import org.thunderdog.challegram.util.Permissions;
 import org.thunderdog.challegram.util.text.TextReplacementSpan;
 import org.thunderdog.challegram.util.text.bidi.BiDiUtils;
@@ -1815,7 +1816,7 @@ public class U {
     File file = generateMediaPath(fromPath, type);
     if (file != null) {
       try {
-        if (FileUtils.copy(new File(fromPath), file)) {
+        if (FileCopyUtils.copy(new File(fromPath), file)) {
           addToGallery(file);
           if (onSaved != null) {
             onSaved.runWithData(file);
@@ -1879,7 +1880,7 @@ public class U {
   public static boolean copyFile (Context context, Uri src, File dst) {
     switch (src.getScheme()) {
       case "file":
-        return FileUtils.copy(new File(src.getPath()), dst);
+        return FileCopyUtils.copy(new File(src.getPath()), dst);
       case "content": {
         long totalDone = 0;
         try (InputStream inputStream = context.getContentResolver().openInputStream(src)) {
@@ -1946,7 +1947,7 @@ public class U {
     if (fromFile.isDirectory()) {
       return moveDir(fromFile, toFile);
     }
-    if (!FileUtils.copy(fromFile, toFile)) {
+    if (!FileCopyUtils.copy(fromFile, toFile)) {
       Log.w("Cannot copy file");
       return false;
     }

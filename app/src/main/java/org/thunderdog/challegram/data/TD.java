@@ -93,6 +93,7 @@ import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.ui.HashtagController;
 import org.thunderdog.challegram.ui.ShareController;
 import org.thunderdog.challegram.util.CustomTypefaceSpan;
+import org.thunderdog.challegram.util.FileCopyUtils;
 import org.thunderdog.challegram.util.Permissions;
 import org.thunderdog.challegram.util.text.Letters;
 import org.thunderdog.challegram.util.text.Text;
@@ -4537,7 +4538,7 @@ public class TD {
       return null;
     }
 
-    if (!FileUtils.copy(sourceFile, destFile))
+    if (!FileCopyUtils.copy(sourceFile, destFile))
       return null;
 
     U.scanFile(destFile);
@@ -4585,7 +4586,7 @@ public class TD {
     }
     String extension = U.getExtension(sourceFile.getName());
     final File destFile = StringUtils.isEmpty(extension) ? U.newFile(destDir, sourceFile.getName(), TGMimeType.mimeTypeForExtension(extension)) : U.newFile(destDir, sourceFile.getName());
-    if (!FileUtils.copy(sourceFile, destFile))
+    if (!FileCopyUtils.copy(sourceFile, destFile))
       return;
     UI.post(() -> {
       final DownloadManager downloadManager = (DownloadManager) UI.getAppContext().getSystemService(Context.DOWNLOAD_SERVICE);

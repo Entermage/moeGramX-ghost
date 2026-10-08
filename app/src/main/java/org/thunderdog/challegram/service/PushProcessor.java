@@ -300,21 +300,29 @@ public class PushProcessor {
         foregroundServiceLatch.countDown();
       }
     )) {
+      boolean started = false;
       try {
         long seconds = critical ? 10 : 5;
         TDLib.Tag.notifications(pushId, accountId, "Giving %d seconds for foreground service to start. critical: %b, inRecovery: %b", seconds, critical, inRecovery);
         long time = SystemClock.uptimeMillis();
         if (foregroundServiceLatch.await(seconds, TimeUnit.SECONDS)) {
-          boolean result = success.get();
-          if (result) {
+          started = success.get();
+          if (started) {
             TDLib.Tag.notifications(pushId, accountId, "Foreground service started in %dms. critical: %b, inRecovery: %b", (SystemClock.uptimeMillis() - time), critical, inRecovery);
           } else {
             TDLib.Tag.notifications(pushId, accountId, "Foreground service was not started in %dms. critical: %b, inRecovery: %b", (SystemClock.uptimeMillis() - time), critical, inRecovery);
           }
-          return result;
+          return started;
         }
         TDLib.Tag.notifications(pushId, accountId, "Foreground service did not start within %d seconds. critical: %b, inRecovery: %b", seconds, critical, inRecovery);
       } catch (InterruptedException ignored) { }
+      finally {
+        if (!started) {
+          // Processing can release the latch before Android handles START.
+          // An accepted, unconfirmed start still needs its matching STOP.
+          FetchNotificationService.stopForegroundTask(context, pushId, accountId);
+        }
+      }
     }
     return false;
   }
