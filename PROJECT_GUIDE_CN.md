@@ -82,11 +82,21 @@ Java 通知层以 TDLib 的 `UpdateNotificationGroup.totalCount=0` 为整组清�
 
 `SettingsMoexController` 修改 `MoexConfig` 中的开关和名单。Ghost Mode 在已读、在线状态及输入动作发送路径上决定是否把操作提交给 TDLib；频道、群组和私聊的已读保护分别配置。TDLib 仍拦截普通聊天历史的云端已读位置，但会定向提交已查看消息的未读提及和未读反应内容回执，使 `@` 与表情互动提示不会在后续同步时恢复或累积；这类内容回执不推进聊天的云端已读位置。Ghost 配置写入与 Shadow Ban 自动本地已读请求在 Java 层串行执行，并等待相关 `SetOption` 完成，避免切换开关时使用到错误的聊天类型配置。
 
-单条消息菜单由 `MessageView.fillMessageOptions` 构造。进入 `More` 时，适用的 `Shadow Ban` 或 `Remove Shadow Ban` 位于第一项，其余选项维持原有相对顺序。显示条件仍只接受非当前用户的用户发送者；操作通过 `MessagesController` 原有处理器修改当前账号名单并刷新消息与聊天列表。一级菜单中的 `Read until` 仍紧邻 `More` 上方。
+单条消息菜单由 `MessageView.fillMessageOptions` 构造。进入 `More` 时，常规选项依次为 `Shadow Ban`（已屏蔽时为 `Remove Shadow Ban`）、`Repeat`、`Messages from …`、`Report message`、`Details`；不适用的项目按原有条件省略，文件操作和管理员工具仍按各自条件显示。显示条件仍只接受非当前用户的用户发送者；操作通过 `MessagesController` 原有处理器修改当前账号名单并刷新消息与聊天列表。一级菜单中的 `Read until` 仍紧邻 `More` 上方。
 
 消息过滤与 Shadow Ban 在消息列表、回复预览、聊天列表摘要和输入状态展示等本地 UI 路径生效。聊天列表最后一条消息命中过滤词或 Shadow Ban 时，会按 TDLib 历史页异步向前查找并跳过连续命中过滤的消息，直到显示第一条未过滤消息；只有没有更早的可见消息时才保留 `Filtered message` 占位。聊天内加载同时区分 TDLib 返回的原始页与过滤后的可见条目：若普通聊天或线程历史的原始页非空但整页被隐藏，不会清空现有列表或误判历史结束，而是以该页最老或最新的原始消息 ID 沿当前加载方向串行补页。补页每次最多读取 100 条，连续页延迟由 500ms 渐进增加到最多 5 秒，并校验游标确实前进；直到找到可见消息或到达真实原始边界才结束。TDLib 错误不会再被当成空历史页或关闭加载方向。搜索、活动日志、预览和 Force Touch 等使用不同游标或生命周期的来源不会进入这条补页路径，避免重复请求或混入真实聊天历史。
 
 可见聊天行和当前会话的未读数字使用同一套按需计算结果：私聊直接排除被 Shadow Ban 或 Telegram 主黑名单屏蔽的对端；普通群组由 `MoexShadowUnreadManager` 按账号合并手动名单和主黑名单，并在未读较少时扫描共享历史、未读很多时按被屏蔽发送者定向搜索。相同聊天在多个文件夹中的行会复用结果和进行中的请求。若未读中仍有正常用户消息，只修改本地显示数字，不推进连续已读游标；若剩余未读全部来自被屏蔽用户，则 Java 层生成包含聊天、顶部消息、旧已读位置和原始未读数的单次快照令牌，原生 TDLib 校验快照后把本地未读数明确设为 0，并且不发送历史已读回执。`UpdateChatLastMessage` 以及未读数或 `lastReadInboxMessageId` 发生变化且仍有未读时都会触发 150ms 合并检查，因此“混合未读在用户读掉正常消息后只剩隐藏消息”的下降转折也会立即重新计算。自动处理保留用户手动“标为未读”的状态；Secret Chat 为避免触发自毁计时不自动推进，频道、论坛群仍不进入这套隐藏未读自动计数扫描。过滤或黑名单配置变更后会失效共享结果，并立即重建已缓存聊天文件夹的摘要和派生未读数字。Shadow Ban 名单按账号 ID 存储。
+
+### 检查新消息的前台同步服务
+
+`PushProcessor` 对耗时或受限环境中的推送启动 `FetchNotificationService`，显示 `Checking for new messages`。Android 服务启动与 TDLib 同步完成各自异步执行；如果启动请求已被接受，但等待被同步完成、超时或线程中断提前结束，必须按同一账号 ID 和推送 ID 发送停止请求，避免服务随后启动留下通知。
+
+`BaseForegroundService` 按服务类型、账号 ID 和推送 ID 管理启动回调，按账号和推送 ID 精确结束任务；重复启动同一任务不会新增一条记录，也不会延长其截止时间。已经运行的任务在应用主线程直接结束，不再要求系统允许启动一个新的前台服务；尚未处理的启动仍通过配对的 Intent 结束。最后一个任务结束时移除前台通知，以最新已处理的 `startId` 调用 `stopSelf`，避免丢弃 Android 已排队的新启动。
+
+每个 `FetchNotificationService` 任务显示最多 60 秒，主线程恢复调度后执行超时清理，再交给现有 WorkManager `SyncTask` 以联网约束重试。超时只结束前台服务任务，不终止 TDLib 的异步同步；迟到的完成回调只结束自己的任务，不移除后续推送。重试名称为单账号 `sync:<accountId>` 或全部账号 `sync:all`，与取消逻辑一致。联系人同步的 `SyncContactsService` 不使用这一 60 秒上限。
+
+`tests/test_foreground_notifications.py` 编译生产服务、启动等待和重试方法，检查晚启动、重复请求、多账号乱序完成、后台启动限制、超时及取消，并接入 ARM64 CI。JVM 回归使用 Android/WorkManager 替身；正式 APK 的服务生命周期另外在 Android 15 隔离模拟器中通过外部 instrumentation 验证。模拟器验证不代表真实 FCM 送达或 ColorOS 后台行为已经验证。
 
 ### 本地阅读位置与可见未读导航
 
@@ -117,6 +127,14 @@ Java 通知层以 TDLib 的 `UpdateNotificationGroup.totalCount=0` 为整组清�
 “打开方式”与普通分享使用相同的 MIME 解析规则：`ACTION_VIEW` 的 `image/*`、`video/*`、`audio/*` 类别进入现有媒体处理流程，不再因入口是“打开”而强制发送文档；无后缀但有效声明为图片的文件也按图片处理。其他类型和最终无法识别的文件仍使用 `InputMessageDocument`，关闭自动类型转换并保留提供方原始名称。入口语义与内容类型分开处理：`ACTION_VIEW` 始终只取 data URI，忽略附带文字，不把 vCard 转成联系人；普通 `SEND` / `SEND_MULTIPLE` 保持原有文字、联系人和相册行为。媒体处理把已接受的 MIME 传入 `TD.FileInfo`，避免后续重新按后缀覆盖；图片仅在现有尺寸读取返回正宽高时按照片、GIF 动图或 WebP 贴纸处理，解码尺寸失败则按原文件文档发送。来源的媒体声明不等于文件一定可解码，音频等仍受原有元数据读取能力限制。全部文件准备完成后才打开现有 `ShareController`，仍需用户选择会话并发送；不会仅因打开文件就自动上传。批次中任一文件不可读取时提示失败并停止整批，不静默发送残缺列表。
 
 外部 `content://` 始终通过原 URI 读取，不相信提供方的 `_data` 字段而直接打开其声称的磁盘路径。`file://` 检查规范化路径、拒绝应用自身私有数据目录和文件夹；只有旧 Android 上确实需要读取外部裸文件路径时才沿用已有存储权限申请，不新增“所有文件访问权限”或 root 依赖。内容 URI 复用现有 TDLib 文件生成器，真正复制发生在发送后的文件生成请求；本轮不新增跨重启缓存或强行获取持久授权，来源撤销授权、删除文件或超出上传限制仍可能导致发送失败。
+
+### 文件保存与移动
+
+媒体查看器、聊天菜单及批量保存通过 `U.copyToGalleryImpl` 把 TDLib 已下载文件复制到系统图片目录，再扫描并提示保存成功。作为文档保存的视频和其他文件通过 `TD.saveToDownloadsImpl` 写入 Downloads 或 Music。文件名、目录、权限申请及现有界面入口保持各自原有规则。
+
+这些保存入口、`file://` 文件复制及跨目录移动统一使用应用层 `FileCopyUtils`，避免基础库单次 `FileChannel.transferTo` 返回部分内容后仍报告成功。复制以 `long` 累计偏移，每次最多传输 16 MiB，持续处理短传输；零字节返回时改用最多 64 KiB 缓冲继续读写。复制结束核对源文件和目标文件的长度，异常、提前 EOF 或无法继续写入均返回失败，并清理已经打开写入的残留目标。移动仅在完整复制成功后删除源文件。修复不需要改动或重新固定 `vkryl/core` 子模块。
+
+`python3 -m unittest discover -s tests -p test_file_copy.py -v` 直接编译生产 Java 复制器，使用真实文件 IO 和可控短传输/零传输通道验证完整性及失败处理，仅替换应用日志器。设置 `MGX_LARGE_COPY_TEST=1` 可额外执行真实超过 2 GiB 文件的全文件 SHA-256 比对。该回归已接入 ARM64 CI；它不运行 Android 相册扫描与解码，应另行通过设备测试验证。
 
 ### Telegram 链接
 

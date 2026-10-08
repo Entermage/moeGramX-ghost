@@ -19,7 +19,9 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 
 import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
@@ -59,14 +61,45 @@ public abstract class BaseForegroundService extends Service {
   private static final String ACTION_STOP  = "stop";
 
   private final List<TaskInfo> tasks = new ArrayList<>();
+  private final Handler taskHandler = new Handler(Looper.getMainLooper());
+  private static final Map<Class<? extends BaseForegroundService>, BaseForegroundService> runningServices = new LinkedHashMap<>();
+  private int latestStartId;
   private CharSequence activeTitle;
   private CharSequence activeText;
   private String activeChannelId;
   private int activeIconRes;
 
   @Override
+  public void onCreate () {
+    super.onCreate();
+    synchronized (BaseForegroundService.class) {
+      runningServices.put(getClass(), this);
+    }
+  }
+
+  @Override
+  public void onDestroy () {
+    synchronized (BaseForegroundService.class) {
+      runningServices.remove(getClass(), this);
+      for (TaskInfo info : tasks) {
+        if (info.timeout != null)
+          taskHandler.removeCallbacks(info.timeout);
+      }
+      tasks.clear();
+    }
+    super.onDestroy();
+  }
+
+  protected long getTaskTimeoutMillis () {
+    return 0;
+  }
+
+  protected void onTaskTimeout (long pushId, int accountId) { }
+
+  @Override
   public int onStartCommand (Intent intent, int flags, int startId) {
     synchronized (BaseForegroundService.class) {
+      latestStartId = startId;
       String callbackId = intent != null ? intent.getStringExtra(EXTRA_CALLBACK_ID) : null;
       String action = intent != null ? intent.getAction() : null;
       TDLib.Tag.notifications("%s: handling %s, startId=%d", getClass().getSimpleName(), action, startId);
@@ -97,6 +130,7 @@ public abstract class BaseForegroundService extends Service {
     public final int iconRes;
     public final long pushId;
     public final int accountId;
+    public Runnable timeout;
 
     public TaskInfo (CharSequence title, CharSequence text, String channelId, int iconRes, long pushId, int accountId) {
       this.title = title;
@@ -106,6 +140,35 @@ public abstract class BaseForegroundService extends Service {
       this.pushId = pushId;
       this.accountId = accountId;
     }
+  }
+
+  private TaskInfo findTask (long pushId, int accountId) {
+    for (TaskInfo info : tasks) {
+      if (info.pushId == pushId && info.accountId == accountId)
+        return info;
+    }
+    return null;
+  }
+
+  private void scheduleTaskTimeout (TaskInfo info) {
+    long timeoutMillis = getTaskTimeoutMillis();
+    if (timeoutMillis <= 0 || info.timeout != null)
+      return;
+    info.timeout = () -> {
+      synchronized (BaseForegroundService.class) {
+        if (findTask(info.pushId, info.accountId) != info)
+          return;
+        TDLib.Tag.notifications(info.pushId, info.accountId, "%s: Task deadline reached. Ending foreground task and scheduling retry.", getClass().getSimpleName());
+        Intent stop = new Intent().putExtra(EXTRA_PUSH_ID, info.pushId).putExtra(EXTRA_ACCOUNT_ID, info.accountId);
+        handleStop(stop);
+        try {
+          onTaskTimeout(info.pushId, info.accountId);
+        } catch (Throwable t) {
+          TDLib.Tag.notifications(info.pushId, info.accountId, "%s: Failed to schedule task retry:\n%s", getClass().getSimpleName(), Log.toString(t));
+        }
+      }
+    };
+    taskHandler.postDelayed(info.timeout, timeoutMillis);
   }
 
   private boolean handleStart (@NonNull Intent intent) {
@@ -118,8 +181,12 @@ public abstract class BaseForegroundService extends Service {
     int    iconRes     = intent.getIntExtra(EXTRA_ICON_RES, R.drawable.baseline_sync_white_24);
     long pushId        = intent.getLongExtra(EXTRA_PUSH_ID, 0);
     int accountId      = intent.getIntExtra(EXTRA_ACCOUNT_ID, TdlibAccount.NO_ID);
-    TaskInfo info = new TaskInfo(title, text, channelId, iconRes, pushId, accountId);
-    this.tasks.add(info);
+    TaskInfo info = findTask(pushId, accountId);
+    boolean duplicate = info != null;
+    if (!duplicate) {
+      info = new TaskInfo(title, text, channelId, iconRes, pushId, accountId);
+      tasks.add(info);
+    }
 
     TDLib.Tag.notifications(pushId, accountId, "%s.handleStart() Title: %s  ChannelId: %s  Text: %s", getClass().getSimpleName(), title, channelId, text);
 
@@ -133,10 +200,12 @@ public abstract class BaseForegroundService extends Service {
 
     try {
       postObligatoryForegroundNotification(activeTitle, activeText, activeChannelId, activeIconRes);
+      scheduleTaskTimeout(info);
       return true;
     } catch (Throwable t) {
       TDLib.Tag.notifications(pushId, accountId, "failed %s.handleStart() Title: %s  ChannelId: %s  Text: %s Error:\n%s", getClass().getSimpleName(), title, channelId, text, Log.toString(t));
-      tasks.remove(info);
+      if (!duplicate)
+        tasks.remove(info);
       if (tasks.isEmpty()) {
         TDLib.Tag.notifications(pushId, accountId, "%s: Ending foreground service because of failure.", getClass().getSimpleName());
         finishService();
@@ -147,7 +216,8 @@ public abstract class BaseForegroundService extends Service {
 
   private void finishService () {
     stopForeground(true);
-    stopSelf();
+    // A newer START may already be queued by Android but not handled yet.
+    stopSelf(latestStartId);
 
     activeTitle = null;
     activeText = null;
@@ -159,12 +229,13 @@ public abstract class BaseForegroundService extends Service {
     int accountId    = intent.getIntExtra(EXTRA_ACCOUNT_ID, TdlibAccount.NO_ID);
     TDLib.Tag.notifications(pushId, accountId, "%s.handleStop()", getClass().getSimpleName());
 
-    TaskInfo lastTask;
-    if (tasks.isEmpty()) {
-      TDLib.Tag.notifications(pushId, accountId, "Bug: %s.handleStop() without handleStart()", getClass().getSimpleName());
-      lastTask = null;
+    TaskInfo lastTask = findTask(pushId, accountId);
+    if (lastTask != null) {
+      tasks.remove(lastTask);
+      if (lastTask.timeout != null)
+        taskHandler.removeCallbacks(lastTask.timeout);
     } else {
-      lastTask = tasks.remove(tasks.size() - 1);
+      TDLib.Tag.notifications(pushId, accountId, "%s.handleStop(): no matching task", getClass().getSimpleName());
     }
 
     CharSequence title, text;
@@ -185,7 +256,7 @@ public abstract class BaseForegroundService extends Service {
       title = Lang.getString(R.string.RetrievingMessages);
       text = null;
       channelId = U.getOtherNotificationChannel();
-      iconRes = 0;
+      iconRes = R.drawable.baseline_sync_white_24;
     }
 
     if (StringUtils.isEmpty(channelId))
@@ -255,11 +326,14 @@ public abstract class BaseForegroundService extends Service {
     intent.putExtra(EXTRA_PUSH_ID, pushId);
     intent.putExtra(EXTRA_ACCOUNT_ID, accountId);
     if (after != null) {
-      String callbackId = keyOf(accountId, pushId);
+      String callbackId = keyOf(clazz, accountId, pushId);
       addCallback(callbackId, after);
       intent.putExtra(EXTRA_CALLBACK_ID, callbackId);
     }
-    return startForegroundService(context, intent, pushId, accountId);
+    boolean dispatched = startForegroundService(context, intent, pushId, accountId);
+    if (!dispatched && after != null)
+      invokeCallback(keyOf(clazz, accountId, pushId), false);
+    return dispatched;
   }
 
   public static <T extends BaseForegroundService> boolean stopTask (
@@ -272,6 +346,20 @@ public abstract class BaseForegroundService extends Service {
     intent.setAction(ACTION_STOP);
     intent.putExtra(EXTRA_PUSH_ID, pushId);
     intent.putExtra(EXTRA_ACCOUNT_ID, accountId);
+    synchronized (BaseForegroundService.class) {
+      BaseForegroundService service = runningServices.get(clazz);
+      if (service != null && service.findTask(pushId, accountId) != null) {
+        // Stop an existing task in-process: completing a push must not need a
+        // new background foreground-service start exemption.
+        service.taskHandler.post(() -> {
+          synchronized (BaseForegroundService.class) {
+            if (runningServices.get(clazz) == service)
+              service.handleStop(intent);
+          }
+        });
+        return true;
+      }
+    }
     return startForegroundService(context, intent, pushId, accountId);
   }
 
@@ -302,8 +390,8 @@ public abstract class BaseForegroundService extends Service {
     }
   }
 
-  private static String keyOf (int accountId, long pushId) {
-    return accountId + "_" + pushId;
+  private static String keyOf (Class<? extends BaseForegroundService> clazz, int accountId, long pushId) {
+    return clazz.getName() + "_" + accountId + "_" + pushId;
   }
 
   private static void invokeCallback (String key, boolean value) {

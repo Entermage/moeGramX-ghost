@@ -1110,12 +1110,36 @@ public class MessageView extends SparseDrawableView implements Destroyable, Draw
       }
     }
 
-    if (isMore) {
-      ids.append(R.id.btn_msgDetails);
-      strings.append(R.string.MsgDetails);
-      icons.append(R.drawable.baseline_info_24);
-    } else {
-      moreOptions++;
+    if (m.canWriteMessages() && !m.shouldDisallowScreenshots()) {
+      if (isMore) {
+        ids.append(R.id.btn_msgRepeat);
+        strings.append(R.string.Repeat);
+        icons.append(R.drawable.baseline_repeat_24);
+      } else {
+        moreOptions++;
+      }
+    }
+
+    // Messages from X
+    if (chat != null && msg.tdlib().isMultiChat(chat.id) && !msg.tdlib().isDirectMessagesChat(chat.id)) {
+      if (isMore) {
+        ids.append(R.id.btn_messageViewList);
+        int icon = R.drawable.baseline_person_24;
+        if (msg.getSender().isAnonymousGroupAdmin()) {
+          strings.append(R.string.ViewMessagesFromAnonymousAdmins);
+          icon = R.drawable.baseline_group_24;
+        } else if (msg.isOutgoing()) {
+          strings.append(R.string.ViewMessagesFromYou);
+        } else if (msg.getMessage().senderId.getConstructor() == TdApi.MessageSenderChat.CONSTRUCTOR) {
+          strings.append(Lang.getString(R.string.ViewMessagesFromChat, msg.getSender().getNameShort()));
+          icon = msg.tdlib().isChannel(Td.getSenderId(msg.getMessage().senderId)) ? R.drawable.baseline_bullhorn_24 : R.drawable.baseline_group_24;
+        } else {
+          strings.append(Lang.getString(R.string.ViewMessagesFromUser, msg.getSender().getNameShort()));
+        }
+        icons.append(icon);
+      } else {
+        moreOptions++;
+      }
     }
 
     if (msg.canBeReported() && !msg.isFakeMessage() && !msg.isSponsoredMessage()) {
@@ -1126,6 +1150,14 @@ public class MessageView extends SparseDrawableView implements Destroyable, Draw
       } else {
         moreOptions++;
       }
+    }
+
+    if (isMore) {
+      ids.append(R.id.btn_msgDetails);
+      strings.append(R.string.MsgDetails);
+      icons.append(R.drawable.baseline_info_24);
+    } else {
+      moreOptions++;
     }
 
     if (!isMore && msg.canBeDeletedForSomebody()) {
@@ -1197,38 +1229,6 @@ public class MessageView extends SparseDrawableView implements Destroyable, Draw
             }
           }
         }
-      }
-    }
-
-    // Messages from X
-    if (chat != null && msg.tdlib().isMultiChat(chat.id) && !msg.tdlib().isDirectMessagesChat(chat.id)) {
-      if (isMore) {
-        ids.append(R.id.btn_messageViewList);
-        int icon = R.drawable.baseline_person_24;
-        if (msg.getSender().isAnonymousGroupAdmin()) {
-          strings.append(R.string.ViewMessagesFromAnonymousAdmins);
-          icon = R.drawable.baseline_group_24;
-        } else if (msg.isOutgoing()) {
-          strings.append(R.string.ViewMessagesFromYou);
-        } else if (msg.getMessage().senderId.getConstructor() == TdApi.MessageSenderChat.CONSTRUCTOR) {
-          strings.append(Lang.getString(R.string.ViewMessagesFromChat, msg.getSender().getNameShort()));
-          icon = msg.tdlib().isChannel(Td.getSenderId(msg.getMessage().senderId)) ? R.drawable.baseline_bullhorn_24 : R.drawable.baseline_group_24;
-        } else {
-          strings.append(Lang.getString(R.string.ViewMessagesFromUser, msg.getSender().getNameShort()));
-        }
-        icons.append(icon);
-      } else {
-        moreOptions++;
-      }
-    }
-
-    if (m.canWriteMessages() && !m.shouldDisallowScreenshots()) {
-      if (isMore) {
-        ids.append(R.id.btn_msgRepeat);
-        strings.append(R.string.Repeat);
-        icons.append(R.drawable.baseline_repeat_24);
-      } else {
-        moreOptions++;
       }
     }
 
