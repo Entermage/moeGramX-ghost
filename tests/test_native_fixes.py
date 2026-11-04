@@ -18,7 +18,8 @@ from test_chat_navigation import block
 
 ROOT = Path(__file__).resolve().parents[1]
 JNI = ROOT / "app/jni"
-TOPICS = ROOT / "tdlib/source/td/td/telegram/ForumTopicManager.cpp"
+TD_SOURCE = ROOT / "tdlib/source/td"
+TOPICS = "td/telegram/ForumTopicManager.cpp"
 
 
 def jdk_include():
@@ -238,8 +239,20 @@ def device_source(text=None):
     return DEVICE.replace("/* FORMAT_MACRO */", fmt).replace("/* DEVICE_FUNCTION */", block_text(text, "inline std::string sprintf_device_info () {"))
 
 
+def patched_topics():
+    """ForumTopicManager.cpp with the Ghost patch applied to a copy: CI runs this before it patches the TDLib checkout."""
+    patch = ROOT / "patches/tdlib-ghost-mode.patch"
+    with tempfile.TemporaryDirectory(prefix="native-topics-patched-") as tmp:
+        for name in re.findall(r"^--- a/(.+)$", patch.read_text(), re.M):
+            target = Path(tmp) / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(subprocess.check_output(["git", "-C", str(TD_SOURCE), "show", "HEAD:" + name]))
+        subprocess.run(["git", "apply", str(patch)], cwd=tmp, check=True)
+        return (Path(tmp) / TOPICS).read_text()
+
+
 def topics_source(text=None):
-    text = text or TOPICS.read_text()
+    text = text or patched_topics()
     methods = "\n".join(block_text(text, s) for s in (
         "void ForumTopicManager::on_delete_forum_topic(", "void ForumTopicManager::delete_all_dialog_topics("))
     return TOPICS_HARNESS.replace("/* TOPIC_METHODS */", methods)
@@ -318,7 +331,7 @@ class NativeFixesTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr[-3000:])
 
     def test_negative_topic_delete_keeps_key(self):
-        text = TOPICS.read_text()
+        text = patched_topics()
         old = ("  G()->td_db()->get_binlog_pmc()->erase(PSTRING() << \"moex_topic_read:\" << dialog_id.get() << ':'\n"
                "                                                  << forum_topic_id.get());\n")
         self.assertEqual(text.count(old), 1)

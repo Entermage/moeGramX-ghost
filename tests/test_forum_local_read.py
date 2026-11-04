@@ -7,7 +7,7 @@ import unittest
 from test_chat_navigation import block
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE = ROOT / 'tdlib/source/td/td/telegram'
+TD_SOURCE = ROOT / 'tdlib/source/td'
 
 PREAMBLE = r'''
 #include <algorithm>
@@ -88,8 +88,22 @@ int main(){
 '''
 
 class ForumLocalReadTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # CI runs the regressions before it patches the TDLib checkout: apply the Ghost patch to a copy.
+        cls.temp=tempfile.TemporaryDirectory(prefix='forum-read-patched-');patched=Path(cls.temp.name)
+        patch=ROOT/'patches/tdlib-ghost-mode.patch'
+        for name in re.findall(r'^--- a/(.+)$',patch.read_text(),re.M):
+            (patched/name).parent.mkdir(parents=True,exist_ok=True)
+            (patched/name).write_bytes(subprocess.check_output(['git','-C',str(TD_SOURCE),'show','HEAD:'+name]))
+        subprocess.run(['git','apply',str(patch)],cwd=patched,check=True)
+        cls.native=patched/'td/telegram'
+
+    @classmethod
+    def tearDownClass(cls):cls.temp.cleanup()
+
     def test_production_manager_keeps_ghost_reads_local(self):
-        method=block(NATIVE/'ForumTopicManager.cpp','void ForumTopicManager::read_forum_topic_messages(')
+        method=block(self.native/'ForumTopicManager.cpp','void ForumTopicManager::read_forum_topic_messages(')
         source=r'''
 #include <vector>
 #include <sstream>
@@ -125,7 +139,7 @@ int main(){Td td;ForumTopicManager manager{&td};
             subprocess.run([str(p/'test')],check=True,capture_output=True,text=True)
 
     def run_native(self, negative=None):
-        methods='\n'.join(block(NATIVE/'ForumTopic.cpp', s) for s in (
+        methods='\n'.join(block(self.native/'ForumTopic.cpp', s) for s in (
             'void ForumTopic::preserve_local_read(const ForumTopic &previous)', 'bool ForumTopic::read_inbox_messages(',
             'bool ForumTopic::update_last_read_inbox_message_id(',
             'vector<int64> ForumTopic::get_local_read_state(', 'void ForumTopic::preserve_local_read(const vector<int64>'))
