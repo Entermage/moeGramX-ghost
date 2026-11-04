@@ -65,6 +65,8 @@ import org.thunderdog.challegram.widget.BaseView;
 
 import java.util.List;
 
+import moe.kirao.mgx.layout.MoexTwoPane;
+
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.animator.BoolAnimator;
 import me.vkryl.android.util.InvalidateContentProvider;
@@ -575,6 +577,8 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
 
     if (isDragging) {
       c.drawColor(ColorUtils.alphaColor(.8f, Theme.fillingColor()));
+    } else if (MoexTwoPane.isHighlighted(tdlib, chat.getChatId())) {
+      c.drawColor(ColorUtils.alphaColor(.6f, Theme.getColor(ColorId.fillingPressed)));
     }
 
     c.drawText(chat.getTime(), (rtl ? viewWidth - chat.getTimeLeft() - chat.getTimeWidth() : chat.getTimeLeft()), getTitleTop(chatListMode), timePaint);

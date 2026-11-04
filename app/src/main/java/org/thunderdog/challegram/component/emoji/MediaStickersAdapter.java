@@ -126,6 +126,10 @@ public class MediaStickersAdapter extends RecyclerView.Adapter<MediaStickersAdap
   }
 
   public int measureScrollTop (int position, int spanCount, int sectionIndex, ArrayList<TGStickerSetInfo> sections, @Nullable RecyclerView recyclerView, boolean haveRecentsTitle) {
+    return measureScrollTop(position, spanCount, sectionIndex, sections, recyclerView, haveRecentsTitle, false);
+  }
+
+  public int measureScrollTop (int position, int spanCount, int sectionIndex, ArrayList<TGStickerSetInfo> sections, @Nullable RecyclerView recyclerView, boolean haveRecentsTitle, boolean useRecyclerWidthForTrending) {
     if (position == 0 || sections == null || sectionIndex == -1) {
       return 0;
     }
@@ -140,7 +144,8 @@ public class MediaStickersAdapter extends RecyclerView.Adapter<MediaStickersAdap
     final int stickerViewForceHeight = LayoutParams.getStickerViewForceHeight(layoutParams);
     final int recyclerWidth = recyclerView != null ? recyclerView.getMeasuredWidth() - recyclerView.getPaddingLeft() - recyclerView.getPaddingRight(): 0;
     final int stickersRowHeight = stickerViewForceHeight > 0 ? stickerViewForceHeight :
-      ((sections.get(0).isTrending() ? Screen.smallestSide() : (recyclerWidth > 0 ? recyclerWidth: Screen.currentWidth())) / spanCount);
+      ((recyclerWidth > 0 && useRecyclerWidthForTrending ? recyclerWidth :
+        sections.get(0).isTrending() ? Screen.smallestSide() : (recyclerWidth > 0 ? recyclerWidth : Screen.currentWidth())) / spanCount);
     // final int rowSize = ((sections.get(0).isTrending() ? Screen.smallestSide() : Screen.currentWidth()) / spanCount);
 
     boolean hadFavorite = false;

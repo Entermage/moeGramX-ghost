@@ -119,6 +119,10 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import moe.kirao.mgx.layout.MoexTwoPane;
+import moe.kirao.mgx.MoexConfig;
+import moe.kirao.mgx.MoexShadowUnreadManager;
+
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.animator.BoolAnimator;
 import me.vkryl.android.animator.FactorAnimator;
@@ -135,7 +139,7 @@ import tgx.td.ChatId;
 import tgx.td.ChatPosition;
 import tgx.td.Td;
 
-public class ChatsController extends TelegramViewController<ChatsController.Arguments> implements Menu,
+public class ChatsController extends TelegramViewController<ChatsController.Arguments> implements Menu, MoexShadowUnreadManager.HiddenUsersListener, MoexConfig.SettingsChangeListener,
   View.OnClickListener, View.OnLongClickListener, ChatsRecyclerView.LoadMoreCallback,
   ChatListener, ConnectionListener, MessageListener, MessageEditListener, NotificationSettingsListener,
   TdlibCache.SupergroupDataChangeListener, TdlibCache.BasicGroupDataChangeListener, TdlibCache.UserDataChangeListener, TdlibCache.SecretChatDataChangeListener,
@@ -477,7 +481,7 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
   @Override
   protected void onBottomInsetChanged (int extraBottomInset, int extraBottomInsetWithoutIme, boolean isImeInset) {
     super.onBottomInsetChanged(extraBottomInset, extraBottomInsetWithoutIme, isImeInset);
-    Views.applyBottomInset(chatsView, extraBottomInset);
+    Views.applyBottomInset(chatsView, extraBottomInset + MoexTwoPane.fabSpace(this));
   }
 
   @Override
@@ -496,7 +500,7 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
         adapter.notifyLastItemChanged();
       }
     });
-    Views.applyBottomInset(chatsView, extraBottomInset);
+    Views.applyBottomInset(chatsView, extraBottomInset + MoexTwoPane.fabSpace(this));
     chatsView.setItemAnimator(null);
     if (isInForceTouchMode()) {
       chatsView.setVerticalScrollBarEnabled(false);
@@ -609,6 +613,9 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
     updateNetworkStatus(tdlib.connectionState());
 
     tdlib.listeners().subscribeForGlobalUpdates(this);
+    MoexConfig.instance().addSettingsListener(this);
+    MoexShadowUnreadManager.addHiddenUsersListener(tdlib, this);
+    MoexShadowUnreadManager.ensureHiddenUsers(tdlib, ready -> { });
     tdlib.cache().subscribeForGlobalUpdates(this);
 
     Settings.instance().addChatListModeListener(this);
@@ -2119,7 +2126,9 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
         if (chat.isArchive()) {
           ChatsController c = new ChatsController(context, tdlib);
           c.setArguments(new Arguments(new TdApi.ChatListArchive()).setNeedMessagesSearch(true));
-          context.navigation().navigateTo(c);
+          if (!MoexTwoPane.showOnLeft(this, c)) {
+            context.navigation().navigateTo(c);
+          }
         } else {
           onClick(chat.getChat());
         }
@@ -2206,7 +2215,9 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
         c.setArguments(new Arguments(ChatPosition.CHAT_LIST_ARCHIVE).setNeedMessagesSearch(true));
         c.postOnAnimationReady(() -> target1.animateTo(animateToWhenReady));
         c.forceFastAnimationOnce();
-        context().navigation().navigateTo(c);
+        if (!MoexTwoPane.showOnLeft(ChatsController.this, c)) {
+          context().navigation().navigateTo(c);
+        }
         return true;
       });
 
@@ -2735,6 +2746,8 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
     Settings.instance().removeChatListModeListener(this);
     tdlib.settings().removeUserPreferenceChangeListener(this);
     tdlib.listeners().unsubscribeFromGlobalUpdates(this);
+    MoexConfig.instance().removeSettingsListener(this);
+    MoexShadowUnreadManager.removeHiddenUsersListener(tdlib, this);
     tdlib.cache().unsubscribeFromGlobalUpdates(this);
     list.performDestroy();
     TGLegacyManager.instance().removeEmojiListener(this);
@@ -2749,6 +2762,19 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
   public void onEmojiUpdated (boolean isPackSwitch) {
     if (chatsView != null) {
       chatsView.invalidateAll();
+    }
+  }
+
+  @Override
+  public void onHiddenUsersChanged (long revision) {
+    if (!isDestroyed()) refreshMessageFilter();
+  }
+
+  @Override
+  public void onSettingsChanged (String key, Object newSettings, Object oldSettings) {
+    if (MoexConfig.KEY_FILTER_ENABLED.equals(key) || MoexConfig.KEY_FILTER_IN_CHATS.equals(key) ||
+        MoexConfig.KEY_FILTER_CASE_INSENSITIVE.equals(key) || MoexConfig.KEY_FILTER_PATTERNS.equals(key)) {
+      runOnUiThreadOptional(this::refreshMessageFilter);
     }
   }
 

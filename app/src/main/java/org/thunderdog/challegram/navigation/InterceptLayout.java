@@ -38,6 +38,27 @@ public class InterceptLayout extends FrameLayoutFix implements FactorAnimator.St
   }
 
   @Override
+  public boolean dispatchTouchEvent (MotionEvent event) {
+    BaseActivity context = (BaseActivity) getContext();
+    moe.kirao.mgx.layout.MoexTwoPane twoPane = context.moexTwoPane();
+    if (twoPane != null) {
+      // Observe before dispatch so a RecyclerView's disallow-intercept request cannot hide the gesture.
+      // Ordinary clicks/vertical swipes continue down the original path, with no synthetic replay.
+      boolean wasResizing = twoPane.isExpandedResizeCaptured();
+      if (twoPane.onExpandedResizeTouchEvent(event, isBlocked() || context.isAnimating(true))) {
+        if (!wasResizing) {
+          MotionEvent cancel = MotionEvent.obtain(event);
+          cancel.setAction(MotionEvent.ACTION_CANCEL);
+          super.dispatchTouchEvent(cancel);
+          cancel.recycle();
+        }
+        return true;
+      }
+    }
+    return super.dispatchTouchEvent(event);
+  }
+
+  @Override
   public boolean onTouchEvent (MotionEvent event) {
     return super.onTouchEvent(event) || event.getAction() == MotionEvent.ACTION_DOWN;
   }
@@ -100,6 +121,10 @@ public class InterceptLayout extends FrameLayoutFix implements FactorAnimator.St
   @Override
   protected void onLayout (boolean changed, int left, int top, int right, int bottom) {
     super.onLayout(changed, left, top, right, bottom);
+    moe.kirao.mgx.layout.MoexTwoPane twoPane = ((BaseActivity) getContext()).moexTwoPane();
+    if (twoPane != null) {
+      twoPane.onLayout(this);
+    }
     if (scheduledAnimator != null) {
       scheduledAnimator.animateTo(scheduledAnimationFactor);
       scheduledAnimator = null;
@@ -109,6 +134,10 @@ public class InterceptLayout extends FrameLayoutFix implements FactorAnimator.St
   @Override
   protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
     super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+    moe.kirao.mgx.layout.MoexTwoPane twoPane = ((BaseActivity) getContext()).moexTwoPane();
+    if (twoPane != null) {
+      twoPane.onMeasure(this);
+    }
     UI.getContext(getContext()).applyContentTranslation(this);
   }
 }

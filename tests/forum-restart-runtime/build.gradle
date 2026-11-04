@@ -1,0 +1,97 @@
+plugins { id 'org.jetbrains.kotlin.jvm' version '2.4.10' }
+repositories { google(); mavenCentral() }
+kotlin { jvmToolchain(21) }
+dependencies {
+  // vkryl's ReferenceList uses AndroidX collections; their JVM artifact is the real implementation.
+  implementation "androidx.collection:collection-jvm:${file('../../gradle/libs.versions.toml').readLines().find { it.startsWith('androidx-collection =') }.split('"')[1]}"
+}
+
+// Production classes compiled as they are: TDLib's generated TdApi, the topic data manager and its
+// Kotlin subclass, the metadata request queue and vkryl's reference map. Only the Tdlib transport,
+// Android handlers and annotations are doubles (src/main/java). -Pnegative=<name> removes one fix.
+def root = file('../..')
+def negative = findProperty('negative') ?: ''
+def negatives = [
+  restart: ['TdlibDataManager.java', '      loadingKeys.clear();\n      postponedKeys.clear();\n', ''],
+  closed: ['ForumRequests.java', '    for (Waiter waiter : callbacks) waiter.handler.onResult(null, new TdApi.Error(CLIENT_CLOSED_CODE, CLIENT_CLOSED_MESSAGE));\n', ''],
+  cached: ['TdlibForumTopicManager.kt', '&& moe.kirao.mgx.topics.ForumRequests.isClientClosed(error)', '&& error.code < 0'],
+  'default-ends': ['TdlibDataManager.java', '  protected boolean endsWaitsOnRestart () {\n    return false;', '  protected boolean endsWaitsOnRestart () {\n    return true;'],
+  // Each one moves a weak watcher detach back out of the dataLock section that changes the generation or key.
+  'weak-restart': ['TdlibDataManager.java', '      cancelledReferences = removeAllReferences();\n    }\n', '    }\n    cancelledReferences = removeAllReferences();\n'],
+  'weak-cancelled': ['TdlibDataManager.java', '      referenceList = watcherReferences.removeAll(key);\n    }\n', '    }\n    referenceList = watcherReferences.removeAll(key);\n'],
+  'weak-entry': ['TdlibDataManager.java', '      referenceList = watcherReferences.removeAll(entry.key);\n    }\n', '    }\n    referenceList = watcherReferences.removeAll(entry.key);\n'],
+]
+if (negative && !negatives.containsKey(negative)) throw new GradleException("Unknown negative control: $negative")
+
+def productionSources = tasks.register('productionSources', Sync) {
+  inputs.property('negative', negative)
+  into layout.buildDirectory.dir('production-src')
+  from("$root/app/src/main/java") {
+    include 'org/thunderdog/challegram/telegram/TdlibDataManager.java'
+    include 'org/thunderdog/challegram/telegram/TdlibForumTopicManager.kt'
+    include 'org/thunderdog/challegram/telegram/CleanupStartupDelegate.java'
+    include 'org/thunderdog/challegram/telegram/TdlibThread.java'
+    include 'moe/kirao/mgx/topics/ForumRequests.java'
+    include 'moe/kirao/mgx/topics/ForumTopicSnapshotUpdates.java'
+    include 'moe/kirao/mgx/topics/XgramTopicFlood.java'
+  }
+  from("$root/tdlib/src/main/java") { include 'org/drinkless/tdlib/TdApi.java' }
+  from("$root/vkryl/core/src/main/java") {
+    include 'me/vkryl/core/reference/ReferenceCreator.java'
+    include 'me/vkryl/core/reference/ReferenceUtils.java'
+    include 'me/vkryl/core/reference/ReferenceList.java'
+    include 'me/vkryl/core/reference/ReferenceMap.java'
+    include 'me/vkryl/core/lambda/RunnableData.java'
+    include 'me/vkryl/core/util/CombinedIterator.java'
+  }
+  if (negative) {
+    def (name, oldText, newText) = negatives[negative]
+    doLast {
+      def file = fileTree(destinationDir).matching { include "**/$name" }.singleFile
+      def text = file.getText('UTF-8')
+      if (!text.contains(oldText)) throw new GradleException("Negative control $negative no longer matches $name")
+      file.setText(text.replace(oldText, newText), 'UTF-8')
+    }
+  }
+}
+
+// XgramForums depends on the whole UI. Its two pure helpers used here are copied verbatim.
+def forumHelpers = tasks.register('forumHelpers') {
+  def source = file("$root/app/src/main/java/moe/kirao/mgx/topics/XgramForums.java")
+  def output = layout.buildDirectory.dir('forum-helpers')
+  inputs.file(source)
+  outputs.dir(output)
+  doLast {
+    def text = source.getText('UTF-8')
+    def block = { String signature ->
+      int start = text.indexOf(signature)
+      if (start < 0) throw new GradleException("Missing $signature")
+      int depth = 1, end = text.indexOf('{', start) + 1
+      while (depth > 0) { char c = text.charAt(end++); if (c == '{') depth++; else if (c == '}') depth-- }
+      text.substring(start, end)
+    }
+    def target = output.get().file('moe/kirao/mgx/topics/XgramForums.java').asFile
+    target.parentFile.mkdirs()
+    target.setText("package moe.kirao.mgx.topics;\n\nimport org.drinkless.tdlib.TdApi;\n\npublic final class XgramForums {\n" +
+      block('public static boolean isTopicGone (') + '\n' + block('public static long retryAfterMs (') + '\n}\n', 'UTF-8')
+  }
+}
+
+sourceSets {
+  main {
+    java.srcDir(productionSources)
+    java.srcDir(forumHelpers)
+    kotlin.srcDir(productionSources)
+  }
+}
+
+tasks.register('runChecks', JavaExec) {
+  dependsOn tasks.named('classes')
+  classpath = sourceSets.main.runtimeClasspath
+  mainClass = 'ForumRestartRuntimeTest'
+  maxHeapSize = '512m'
+  // The weak watcher races use threads; a regression must fail instead of hanging the suite.
+  timeout = java.time.Duration.ofMinutes(3)
+}
+tasks.named('check') { dependsOn tasks.named('runChecks') }
+defaultTasks 'runChecks'

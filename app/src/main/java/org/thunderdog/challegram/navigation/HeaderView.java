@@ -1109,6 +1109,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     /*if (!isLayered) {
       popupLayout.setNeedRootInsets();
     }*/
+    moreWrap.setSourceController(stack != null ? stack.getCurrent() : null);
     popupLayout.showMoreView(moreWrap);
   }
 
@@ -1380,10 +1381,11 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
 
   // Animation
 
-  private static final int MODE_NONE = 0; // Values must be the same as in NavigationController
-  private static final int MODE_HORIZONTAL = 1;
-  private static final int MODE_VERTICAL = 2;
-  private static final int MODE_FADE = 3;
+  // Shared with NavigationController: the header receives the navigation mode directly.
+  static final int MODE_NONE = 0;
+  static final int MODE_HORIZONTAL = 1;
+  static final int MODE_VERTICAL = 2;
+  static final int MODE_FADE = 3;
 
   private static final int BACK_SWITCH_NONE = 0;
   private static final int BACK_SWITCH_NORMAL = 1;
@@ -2077,6 +2079,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
       if (item.getMenuId() != 0) {
         ((Menu) item).fillMenuItems(item.getMenuId(), this, menu);
         menu.setVisibility(View.VISIBLE);
+        menu.setAlpha(1f); // may still hold the faded-out buttons of an earlier transition
         int width = 0;
         for (int i = 0; i < menu.getChildCount(); i++) {
           width += menu.getChildAt(i).getLayoutParams().width;
@@ -2106,6 +2109,10 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     if (item.getBackButton() != BackHeaderButton.TYPE_NONE) {
       backButton.setButtonFactor(item.getBackButton());
       backButton.setVisibility(View.VISIBLE);
+      // A transition to a controller without the button fades it out before hiding it, and a controller's
+      // button type can change later (the two-pane root on fold). Translation Y may come from fillMenuItems.
+      backButton.setAlpha(1f);
+      backButton.setTranslationX(0f);
       if (item.getBackButtonResource() != 0) {
         backButton.setBackgroundResource(item.getBackButtonResource());
       }
@@ -2273,6 +2280,11 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
       }
       case MODE_NONE: {
         preview.setAlpha(1f);
+        if (direction == MODE_NONE) {
+          // Reused headers can retain the final position of an earlier animated transition.
+          preview.setTranslationX(0f);
+          preview.setTranslationY(0f);
+        }
         axisShift = 0f;
 
         break;

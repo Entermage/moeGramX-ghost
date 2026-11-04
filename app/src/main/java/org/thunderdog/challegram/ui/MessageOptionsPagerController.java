@@ -298,6 +298,12 @@ public class MessageOptionsPagerController extends BottomSheetViewController<Opt
     return vg;
   }
 
+  @Override
+  protected void invalidateAllItemDecorations () {
+    super.invalidateAllItemDecorations();
+    if (reactionsPickerRecyclerView != null) reactionsPickerRecyclerView.invalidateItemDecorations();
+  }
+
   private void invalidatePickerWrapper () {
     if (reactionsPickerWrapper != null) {
       reactionsPickerWrapper.invalidate();
@@ -429,7 +435,7 @@ public class MessageOptionsPagerController extends BottomSheetViewController<Opt
     int optionItemsHeight = state.options.items != null ? Screen.dp(54) * state.options.items.length : 0;
     int hintHeight;
     if (!StringUtils.isEmpty(state.options.info)) {
-      int availWidth = Screen.currentWidth() - Screen.dp(16f) * 2; // FIXME: rely on parent view width
+      int availWidth = Math.max(1, getPopupContentWidth() - Screen.dp(16f) * 2);
       if (cachedHint != null && cachedHintAvailWidth == availWidth && cachedHint.equals(state.options.info)) {
         hintHeight = cachedHintHeight;
       } else {
@@ -709,6 +715,7 @@ public class MessageOptionsPagerController extends BottomSheetViewController<Opt
         reactionPickerTopDecoration.enableDecorationOffset();
       }
     };
+    reactionsPickerController.setParentWrapper(this);
     reactionsPickerController.setArguments(state);
     reactionsPickerController.setBottomInset(extraBottomInset, extraBottomInsetWithoutIme);
     reactionsPickerController.getValue();
@@ -872,7 +879,7 @@ public class MessageOptionsPagerController extends BottomSheetViewController<Opt
 
   @Override
   public boolean shouldTouchOutside (float x, float y) {
-    return headerView != null && y < getPickerTop() - HeaderView.getSize(true);
+    return isOutsideSourcePane(x) || (headerView != null && popupToContentY(y) < getPickerTop() - HeaderView.getSize(true));
   }
 
   @Override
@@ -981,10 +988,10 @@ public class MessageOptionsPagerController extends BottomSheetViewController<Opt
     }
   }
 
-  public static float getReactionsPickerRightHiddenWidth (State state) {
+  public static float getReactionsPickerRightHiddenWidth (State state, int contentWidth) {
     int buttonsWidth = state.getRightViewsWidth();
 
-    int emojiPickerWidthWithoutPadding = Screen.currentWidth() - Screen.dp(ReactionsPickerController.RECYCLER_VIEW_LEFT_RIGHT_PADDING * 2);
+    int emojiPickerWidthWithoutPadding = Math.max(1, contentWidth - Screen.dp(ReactionsPickerController.RECYCLER_VIEW_LEFT_RIGHT_PADDING * 2));
     int emojiPickerSpanCount = EmojiLayoutRecyclerController.calculateSpanCount(emojiPickerWidthWithoutPadding, 9, Screen.dp(38));
     float emojiPickerItemSize = (float) emojiPickerWidthWithoutPadding / emojiPickerSpanCount;
     return (float) Math.ceil(((float) buttonsWidth - Screen.dp(12)) / emojiPickerItemSize)

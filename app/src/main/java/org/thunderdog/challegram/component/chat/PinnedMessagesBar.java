@@ -470,6 +470,8 @@ public class PinnedMessagesBar extends ViewGroup implements Destroyable, Message
         }
       }
     };
+    // An empty preview has no content to load; do not create a spinning placeholder.
+    messagesAdapter.setNoEmptyProgress();
     recyclerView.setAdapter(messagesAdapter);
     recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
       @Override
@@ -721,10 +723,11 @@ public class PinnedMessagesBar extends ViewGroup implements Destroyable, Message
       this.messageList = null;
     }
     this.focusIndex = RecyclerView.NO_POSITION;
+    this.needsClear = false;
   }
 
   public void setMessageList (@Nullable MessageListManager messageList) {
-    if (this.messageList == messageList)
+    if (this.messageList == messageList && this.staticList == null)
       return;
     clearMessageList();
     this.messageList = messageList;

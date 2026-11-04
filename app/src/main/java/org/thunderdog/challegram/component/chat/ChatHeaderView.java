@@ -115,8 +115,27 @@ public class ChatHeaderView extends ComplexHeaderView {
       setText(tdlib.chatTitle(chat), !StringUtils.isEmpty(forcedSubtitle) ? forcedSubtitle : tdlib.status().chatStatus(chat));
       setExpandedSubtitle(tdlib.status().chatStatusExpanded(chat));
       setUseRedHighlight(tdlib.isRedTeam(chat.id));
-      attachChatStatus(chat.id, null);
+      if (xgramNoChatActions) {
+        removeChatStatus(); // XGram: the topic list's header (each topic row shows its own "typing…")
+      } else {
+        attachChatStatus(chat.id, xgramStatusTopic); // XGram: inside a forum topic, only that topic's "typing…"
+      }
     }
+  }
+
+  // XGram: forum topic whose chat actions the header shows (null: the whole chat).
+  private @Nullable TdApi.MessageTopic xgramStatusTopic;
+  private boolean xgramNoChatActions;
+
+  /** XGram: no "typing…" in this header at all. */
+  public void xgramHideChatActions () {
+    this.xgramNoChatActions = true;
+    removeChatStatus();
+  }
+
+  public void xgramSetStatusTopic (long chatId, @Nullable TdApi.MessageTopic topicId) {
+    this.xgramStatusTopic = topicId;
+    attachChatStatus(chatId, topicId);
   }
 
   // Updates (new)

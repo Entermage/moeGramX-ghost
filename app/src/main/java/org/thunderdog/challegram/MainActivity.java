@@ -750,6 +750,10 @@ public class MainActivity extends BaseActivity implements GlobalAccountListener,
 
     if (action.startsWith(Intents.ACTION_OPEN_MAIN)) {
       int accountId = intent.getIntExtra("account_id", TdlibAccount.NO_ID);
+      if (accountId != TdlibAccount.NO_ID && !isIntentAccount(accountId, false)) {
+        Log.w("Received unknown accountId extra: %d", accountId);
+        accountId = TdlibAccount.NO_ID;
+      }
       if (accountId == TdlibAccount.NO_ID) {
         if (action.length() > Intents.ACTION_OPEN_MAIN.length() + 1) {
           accountId = StringUtils.parseInt(action.substring(Intents.ACTION_OPEN_MAIN.length() + 1));
@@ -775,6 +779,10 @@ public class MainActivity extends BaseActivity implements GlobalAccountListener,
 
     if (action.startsWith(Intents.ACTION_OPEN_CHAT)) {
       int accountId = intent.getIntExtra("account_id", TdlibAccount.NO_ID);
+      if (!isIntentAccount(accountId, true)) {
+        Log.e("Cannot open chat, unknown or logged out account: %d", accountId);
+        return false;
+      }
       long chatId = intent.getLongExtra("chat_id", 0);
       if (chatId == 0) {
         long localChatId = intent.getLongExtra("local_id", 0);
@@ -783,8 +791,8 @@ public class MainActivity extends BaseActivity implements GlobalAccountListener,
         }
       }
       long messageId = intent.getLongExtra("message_id", 0);
-      if (accountId != TdlibAccount.NO_ID && chatId != 0) {
-        openMessagesController(accountId, chatId, messageId);
+      if (chatId != 0) {
+        openMessagesController(accountId, chatId, messageId, intent.getIntExtra(moe.kirao.mgx.topics.XgramForums.EXTRA_NOTIFICATION_TOPIC_ID, 0));
         return true;
       } else {
         Log.e("Cannot open chat, no information found: %s", intent);
@@ -1415,22 +1423,30 @@ public class MainActivity extends BaseActivity implements GlobalAccountListener,
     }
   }
 
-  private void openMessagesController (int accountId, long chatId, long specificMessageId) {
+  private void openMessagesController (int accountId, long chatId, long specificMessageId, int forumTopicId) {
     final Tdlib tdlib = TdlibManager.instanceForAccountId(accountId).account(accountId).tdlib();
     tdlib.awaitInitialization(() -> {
       tdlib.incrementUiReferenceCount();
       handler.post(() -> {
         final TdlibContext context = new TdlibContext(this, tdlib);
-        final TdlibUi.ChatOpenParameters params = new TdlibUi.ChatOpenParameters().onDone(tdlib::decrementUiReferenceCount);
-        if (specificMessageId != 0)
+        final TdlibUi.ChatOpenParameters params = new TdlibUi.ChatOpenParameters().onDone(tdlib::decrementUiReferenceCount).xgramFromNotification(forumTopicId);
+        if (specificMessageId != 0) {
           params.highlightMessage(new MessageId(chatId, specificMessageId));
+          if (forumTopicId != 0) params.messageTopicId = new TdApi.MessageTopicForum(forumTopicId);
+        }
         tdlib.ui().openChat(context, chatId, params);
       });
     });
   }
 
+  // MainActivity is exported: an account number from an intent is outside input until it names a known account.
+  private static boolean isIntentAccount (int accountId, boolean needAuthorized) {
+    TdlibManager manager = TdlibManager.instance();
+    return manager.hasAccount(accountId) && (!needAuthorized || !manager.account(accountId).isUnauthorized());
+  }
+
   private void openPlayerController (int accountId) {
-    if (accountId == TdlibAccount.NO_ID) {
+    if (!isIntentAccount(accountId, true)) {
       return;
     }
     TdlibAccount account = TdlibManager.instanceForAccountId(accountId).account(accountId);

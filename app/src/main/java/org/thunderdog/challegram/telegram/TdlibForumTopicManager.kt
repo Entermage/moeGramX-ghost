@@ -29,12 +29,20 @@ class TdlibForumTopicManager(
   override fun newEntry(key: Key, value: ForumTopic?, error: Error?): Entry =
     Entry(key, value, error)
 
+  // Topic callers keep loading flags and pending sets; a restart must end them (see ForumRequests).
+  override fun endsWaitsOnRestart(): Boolean = true
+
   override fun requestData(contextId: Int, keysToRequest: Collection<Key>) {
     for (key in keysToRequest) {
-      tdlib.send(GetForumTopic(key.chatId, key.forumTopicId)) { forumTopic, error ->
+      moe.kirao.mgx.topics.ForumRequests.send(tdlib, this, GetForumTopic(key.chatId, key.forumTopicId)) { forumTopic, error ->
         if (!isCancelled(contextId)) {
-          if (error != null) {
+          if (error != null && moe.kirao.mgx.topics.ForumRequests.isClientClosed(error)) {
+            processCancelled(contextId, key, error)
+          } else if (error != null) {
             processError(contextId, key, error)
+            if (!moe.kirao.mgx.topics.XgramForums.isTopicGone(error)) {
+              tdlib.ui().postDelayed({ forgetError(contextId, key, error) }, 60_000)
+            }
           } else {
             processData(contextId, key, forumTopic)
           }

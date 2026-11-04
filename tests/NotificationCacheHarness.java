@@ -6,6 +6,8 @@ public class NotificationCacheHarness {
   static class Type { final int value; Type(int v) { value=v; } int getConstructor() { return value; } }
   static class TdApi {
     static class NotificationGroupType extends Type { NotificationGroupType() { super(0); } }
+    static class NotificationGroupTypeMentions extends NotificationGroupType { }
+    static class RemoveNotification { final int group, id; RemoveNotification(int g,int i) { group=g; id=i; } }
     static class NotificationTypeNewMessage extends Type {
       static final int CONSTRUCTOR=1; Message message;
       NotificationTypeNewMessage(Message m) { super(CONSTRUCTOR); message=m; }
@@ -14,7 +16,7 @@ public class NotificationCacheHarness {
       static final int CONSTRUCTOR=2; long messageId; Object senderId;
       NotificationTypeNewPushMessage(long id) { super(CONSTRUCTOR); messageId=id; senderId=7L; }
     }
-    static class Message { long id, chatId=123; Object senderId=7L, content; Message(long i) { id=i; } }
+    static class Message { long id, chatId=123; Object senderId=7L, content; boolean topicMuted; Message(long i) { id=i; } }
     static class FormattedText { TextEntity[] entities; }
     static class TextEntity { Type type; }
     static class User { boolean isContact=true; }
@@ -45,7 +47,18 @@ public class NotificationCacheHarness {
       notificationGroupData.put(id,((long)hiddenId<<32)|(flags&0xffffffffL));
     }
   }
+  static class Client {
+    final List<Integer> removed=new ArrayList<>();
+    void send(TdApi.RemoveNotification query,Object handler) { removed.add(query.id); }
+  }
+  // Topic settings double; XgramTopicMute's own decision has a production-class suite (test_forum_notification).
+  static class Mute {
+    static boolean dropsNotification(Tdlib tdlib,TdApi.Message message,boolean mentionGroup) { return message.topicMuted && !mentionGroup; }
+  }
   static class Tdlib {
+    final Client client=new Client();
+    Client client() { return client; }
+    Object silentHandler() { return null; }
     TdlibSettings settings=new TdlibSettings();
     TdlibSettings settings() { return settings; }
     boolean isUnauthorized() { return false; }
@@ -85,8 +98,9 @@ public class NotificationCacheHarness {
     final Tdlib tdlib=new Tdlib(); final NotificationContext context=new NotificationContext();
     final ArrayList<TdlibNotification> notifications=new ArrayList<>();
     final Map<Integer,TdlibNotificationGroup> groups=new HashMap<>();
-    int hides, displays; final List<Integer> displayedIds=new ArrayList<>();
+    int hides, displays, alerts; final List<Integer> displayedIds=new ArrayList<>();
     boolean accept(TdApi.NotificationGroupType type) { return true; }
+    /* DROP_METHOD */
     boolean allowNotificationPreview() { return true; }
     TdlibNotificationGroup findNotificationGroup(int id) { return groups.get(id); }
     int indexOfNotification(int id) {
@@ -95,7 +109,7 @@ public class NotificationCacheHarness {
     }
     void hideNotificationGroup(TdlibNotificationGroup group) { hides++; }
     void displayNotificationGroup(TdlibNotificationGroup group,boolean alert,long settingsChatId) {
-      displays++; displayedIds.clear();
+      displays++; if(alert) alerts++; displayedIds.clear();
       for(TdlibNotification notification:group.notifications())
         if(!notification.isHidden()) displayedIds.add(notification.getId());
     }
@@ -197,6 +211,57 @@ public class NotificationCacheHarness {
     check(helper.groups.isEmpty() && helper.notifications.isEmpty(),"zero total cannot create an unknown notification group");
     check(helper.displays==0,"contradictory empty update must not post a notification");
   }
+  static TdApi.Notification mutedTopic(int id,long messageId) {
+    TdApi.Notification notification=message(id,messageId);
+    ((TdApi.NotificationTypeNewMessage)notification.type).message.topicMuted=true; return notification;
+  }
+  static TdApi.UpdateNotificationGroup sounding(int count,TdApi.Notification[] added,int... removed) {
+    TdApi.UpdateNotificationGroup update=update(count,added,removed); update.notificationSoundId=5; return update;
+  }
+  static void filteredAll() {
+    Helper helper=new Helper(); TdlibNotificationGroup group=fixture(helper,4,1,message(4522,111));
+    // TDLib counts and rings for a burst that is entirely in a muted topic.
+    helper.updateGroup(sounding(3,new TdApi.Notification[]{mutedTopic(4523,112),mutedTopic(4524,113)}));
+    check(helper.tdlib.client.removed.equals(List.of(4523,4524)),"filtered notifications are removed from TDLib");
+    check(helper.displays==0 && helper.alerts==0,"fully filtered update must not re-show or ring");
+    check(group.getTotalCount()==1,"filtered notifications must not inflate the summary count");
+    check(group.notifications().size()==1 && helper.notifications.size()==1,"cache keeps only real notifications");
+    helper.updateGroup(update(1,null,4523,4524)); // TDLib's answer to RemoveNotification
+    check(helper.displays==0 && helper.hides==0 && group.notifications().size()==1,"the later TDLib removal changes nothing visible");
+  }
+  static void filteredHidden() {
+    Helper helper=new Helper(); TdlibNotificationGroup group=fixture(helper,4,2,message(4521,110),message(4522,111));
+    group.setNotificationData(4522,0);
+    check(group.isHidden(),"dismissed group fixture");
+    helper.updateGroup(sounding(3,new TdApi.Notification[]{mutedTopic(4523,112)}));
+    check(group.isHidden() && helper.displays==0 && helper.alerts==0,"a dismissed group must stay dismissed for filtered messages");
+    helper.updateGroup(sounding(2,new TdApi.Notification[]{mutedTopic(4525,114)},4521));
+    check(group.isHidden() && helper.displays==0 && helper.alerts==0 && group.getTotalCount()==1,"deletion plus filtered message keeps a dismissed group hidden");
+    check(group.notifications().size()==1 && group.notifications().get(0).getId()==4522,"the deletion still applies");
+    helper.updateGroup(sounding(1,new TdApi.Notification[]{mutedTopic(4526,115)},4522));
+    check(!helper.groups.containsKey(4) && helper.hides==1 && helper.displays==0,"an emptied group is hidden without ringing");
+  }
+  static void filteredPartial() {
+    Helper helper=new Helper(); TdlibNotificationGroup group=fixture(helper,4,1,message(4522,111));
+    helper.updateGroup(sounding(3,new TdApi.Notification[]{mutedTopic(4523,112),message(4524,113)}));
+    check(helper.displays==1 && helper.alerts==1,"a real new message in the same update still alerts once");
+    check(group.getTotalCount()==2,"count excludes only the filtered notification");
+    check(helper.displayedIds.equals(List.of(4522,4524)),"only real notifications are shown");
+  }
+  static void pureDeletion() {
+    Helper helper=new Helper(); TdlibNotificationGroup group=fixture(helper,4,2,message(4522,111),message(4523,112));
+    helper.updateGroup(update(1,null,4523));
+    check(helper.tdlib.client.removed.isEmpty(),"a deletion is never filtered");
+    check(group.notifications().size()==1 && group.getTotalCount()==1 && helper.displays==1 && helper.alerts==0,"deletion updates silently");
+  }
+  static void mentionsGroup() {
+    Helper helper=new Helper();
+    TdApi.UpdateNotificationGroup mention=sounding(1,new TdApi.Notification[]{mutedTopic(4600,200)});
+    mention.type=new TdApi.NotificationGroupTypeMentions(); mention.notificationGroupId=9;
+    helper.updateGroup(mention);
+    check(helper.tdlib.client.removed.isEmpty() && helper.groups.containsKey(9),"the Mentions group is decided by mention settings, not the topic mute");
+    check(helper.displays==1 && helper.alerts==1,"mention in a muted topic still notifies");
+  }
   public static void main(String[] args) {
     switch(args[0]) {
       case "stale-and-current": staleAndCurrent(); break;
@@ -205,6 +270,11 @@ public class NotificationCacheHarness {
       case "push-replacement": pushReplacement(); break;
       case "later-new-message": laterNewMessage(); break;
       case "unknown-empty": unknownEmpty(); break;
+      case "filtered-all": filteredAll(); break;
+      case "filtered-hidden": filteredHidden(); break;
+      case "filtered-partial": filteredPartial(); break;
+      case "pure-deletion": pureDeletion(); break;
+      case "mentions-group": mentionsGroup(); break;
       default: throw new AssertionError("unknown scenario: "+args[0]);
     }
     System.out.println("Notification cache production-method scenario passed: "+args[0]);

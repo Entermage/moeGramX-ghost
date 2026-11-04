@@ -150,6 +150,17 @@ public class ReactionsPickerController extends ViewController<MessageOptionsPage
     reactionsController.setStickerObjModifier(this::modifyStickerObj);
     adapter = new MediaStickersAdapter(this, this, false, this) {
       @Override
+      public StickerHolder onCreateViewHolder (@NonNull ViewGroup parent, int viewType) {
+        StickerHolder holder = super.onCreateViewHolder(parent, viewType);
+        if (viewType == StickerHolder.TYPE_STICKER) {
+          // Fill the current span exactly. WRAP_CONTENT can retain a tiny cached
+          // measurement from an intermediate pane width during folding.
+          holder.itemView.getLayoutParams().width = ViewGroup.LayoutParams.MATCH_PARENT;
+        }
+        return holder;
+      }
+
+      @Override
       public void onBindViewHolder (StickerHolder holder, int position) {
         super.onBindViewHolder(holder, position);
         int type = getItemViewType(position);

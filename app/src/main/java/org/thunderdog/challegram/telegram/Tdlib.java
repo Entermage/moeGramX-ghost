@@ -1222,7 +1222,16 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
         break;
     }
     final @Status int newStatus = authorizationStatus();
+    if (newAuthState.getConstructor() == TdApi.AuthorizationStateClosed.CONSTRUCTOR ||
+        newAuthState.getConstructor() == TdApi.AuthorizationStateLoggingOut.CONSTRUCTOR ||
+        (prevStatus == Status.READY && newStatus == Status.UNAUTHORIZED)) {
+      MoexShadowUnreadManager.invalidate(this);
+      org.thunderdog.challegram.component.chat.MessageHistoryPreview.clear(this);
+    }
 
+    if (newAuthState.getConstructor() == TdApi.AuthorizationStateClosed.CONSTRUCTOR) {
+      moe.kirao.mgx.topics.XgramForums.onClientClosed(this);
+    }
     closeListeners.notifyConditionChanged(true);
     readyOrWaitingForDataListeners.notifyConditionChanged(false);
 
@@ -5307,7 +5316,11 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   }
 
   public void blockSender (TdApi.MessageSender sender, @Nullable TdApi.BlockList blockList, Client.ResultHandler handler) {
-    client().send(new TdApi.SetMessageSenderBlockList(sender, blockList), handler);
+    long generation = MoexShadowUnreadManager.blockListGeneration(this);
+    client().send(new TdApi.SetMessageSenderBlockList(sender, blockList), result -> {
+      MoexShadowUnreadManager.onBlockListResult(this, generation, sender, blockList, result);
+      if (handler != null) handler.onResult(result);
+    });
   }
 
   public void unblockSender (TdApi.MessageSender sender, Client.ResultHandler handler) {
@@ -6893,6 +6906,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   public void setOnline (boolean isOnline) {
     if (this.isOnline != isOnline) {
       this.isOnline = isOnline;
+      if (isOnline) MoexShadowUnreadManager.refreshHiddenUsers(this, false);
       Log.i("SetOnline accountId:%d -> %b", accountId, isOnline);
       if (Config.NEED_ONLINE) {
         performOptional(client -> client.send(new TdApi.SetOption("online", new TdApi.OptionValueBoolean(isOnline)), okHandler()), null);
@@ -8751,12 +8765,16 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
 
   @TdlibThread
   private void updateForumTopicInfo (TdApi.UpdateForumTopicInfo update) {
+    moe.kirao.mgx.topics.ForumRequests.onTopicInfo(this, update.info);
     topics.updateForumTopicInfo(update);
     listeners.updateForumTopicInfo(update);
   }
 
   @TdlibThread
   private void updateForumTopic (TdApi.UpdateForumTopic update) {
+    moe.kirao.mgx.topics.ForumRequests.onTopicUpdate(this, update);
+    moe.kirao.mgx.topics.XgramTopicReadOutbox.set(this, update.chatId, update.forumTopicId, update.lastReadOutboxMessageId);
+    moe.kirao.mgx.topics.XgramTopicMute.onSettings(this, update.chatId, update.forumTopicId, update.notificationSettings);
     topics.updateForumTopic(update);
     listeners.updateForumTopic(update);
   }
@@ -8823,6 +8841,9 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
 
   @TdlibThread
   private void updateChatIsBlocked (TdApi.UpdateChatBlockList update) {
+    long blockedUserId = ChatId.isUserChat(update.chatId) ? ChatId.toUserId(update.chatId) : chatUserId(update.chatId);
+    MoexShadowUnreadManager.onBlockListChanged(this, blockedUserId,
+      update.blockList != null && update.blockList.getConstructor() == TdApi.BlockListMain.CONSTRUCTOR);
     synchronized (dataLock) {
       final TdApi.Chat chat = chats.get(update.chatId);
       if (TdlibUtils.assertChat(update.chatId, chat, update)) {
@@ -8831,8 +8852,6 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       chat.blockList = update.blockList;
     }
 
-    MoexShadowUnreadManager.onBlockListChanged(this, chatUserId(update.chatId),
-      update.blockList != null && update.blockList.getConstructor() == TdApi.BlockListMain.CONSTRUCTOR);
     listeners.updateChatBlockList(update);
   }
 
@@ -11155,6 +11174,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   }
 
   private void onConnected () {
+    if (isOnline) MoexShadowUnreadManager.refreshHiddenUsers(this, false);
     setHasUnprocessedPushes(false);
     connectionListeners.notifyConditionChanged();
   }

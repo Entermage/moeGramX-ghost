@@ -206,7 +206,7 @@ public class ViewPagerHeaderViewReactionsCompact extends FrameLayoutFix implemen
 
   private float getReactionPickerHiddenZoneLeft () {
     final int x = (int) (reactionsSelectorRecyclerView != null ? reactionsSelectorRecyclerView.getTranslationX() : 0);
-    final float width = MessageOptionsPagerController.getReactionsPickerRightHiddenWidth(state);
+    final float width = MessageOptionsPagerController.getReactionsPickerRightHiddenWidth(state, getMeasuredWidth());
     return getMeasuredWidth() - width + x;
   }
 

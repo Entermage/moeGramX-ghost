@@ -55,6 +55,7 @@ import org.thunderdog.challegram.navigation.BackListener;
 import org.thunderdog.challegram.navigation.CounterHeaderView;
 import org.thunderdog.challegram.navigation.HeaderView;
 import org.thunderdog.challegram.navigation.NavigationController;
+import org.thunderdog.challegram.navigation.PopupPaneBounds;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.support.RippleSupport;
@@ -100,7 +101,7 @@ import tgx.td.TdConstants;
 public class MediaLayout extends FrameLayoutFix implements
   MediaBottomBar.Callback, BaseActivity.PopupAnimatorOverride,
   View.OnClickListener, BaseActivity.ActivityListener, ActivityResultHandler, /*ActivityResultCancelHandler,*/ BackListener,
-  PopupLayout.AnimatedPopupProvider, PopupLayout.DismissListener, FactorAnimator.Target, ThemeChangeListener, Lang.Listener, Destroyable, PopupLayout.TouchDownInterceptor, RootFrameLayout.MarginModifier {
+  PopupLayout.AnimatedPopupProvider, PopupLayout.DismissListener, FactorAnimator.Target, ThemeChangeListener, Lang.Listener, Destroyable, PopupLayout.TouchDownInterceptor, RootFrameLayout.MarginModifier, PopupPaneBounds.Provider {
 
   private interface MediaCallback { }
 
@@ -138,10 +139,12 @@ public class MediaLayout extends FrameLayoutFix implements
   private final ThemeListenerList themeListeners = new ThemeListenerList();
 
   private final ViewController<?> parent;
+  private final PopupPaneBounds paneBounds;
 
   public MediaLayout (ViewController<?> context) {
     super(context.context());
     this.parent = context;
+    this.paneBounds = new PopupPaneBounds(this, context);
   }
 
   private int extraBottomInset, extraBottomInsetWithoutIme;
@@ -163,8 +166,27 @@ public class MediaLayout extends FrameLayoutFix implements
 
   @Override
   public void onApplyMarginInsets (View child, LayoutParams params, Rect legacyInsets, Rect insets, Rect insetsWithoutIme) {
-    Views.setMargins(params, legacyInsets.left, legacyInsets.top, legacyInsets.right, 0);
+    paneBounds.update();
+    Views.setMargins(params, Math.max(legacyInsets.left, paneBounds.getLeftInset()), legacyInsets.top,
+      Math.max(legacyInsets.right, paneBounds.getRightInset()), 0);
     setExtraBottomInset(insets.bottom, insetsWithoutIme.bottom);
+  }
+
+  @Override
+  public PopupPaneBounds getPopupPaneBounds () {
+    return paneBounds;
+  }
+
+  @Override
+  protected void onAttachedToWindow () {
+    super.onAttachedToWindow();
+    paneBounds.attach();
+  }
+
+  @Override
+  protected void onDetachedFromWindow () {
+    paneBounds.detach();
+    super.onDetachedFromWindow();
   }
 
   public Tdlib tdlib () {
@@ -437,6 +459,10 @@ public class MediaLayout extends FrameLayoutFix implements
   }
 
   public int getCurrentContentWidth () {
+    View pane = paneBounds.getSourcePaneView();
+    if (pane != null) {
+      return bottomBar != null ? Math.min(bottomBar.getCurrentBarWidth(), pane.getWidth()) : pane.getWidth();
+    }
     return bottomBar != null ? bottomBar.getCurrentBarWidth() : Screen.currentWidth();
   }
 
@@ -1541,7 +1567,7 @@ public class MediaLayout extends FrameLayoutFix implements
           }
         }
         return true;
-      }, themeListeners, null).attachToView(sendButton);
+      }, themeListeners, null).setSourceController(parent).attachToView(sendButton);
 
       params = FrameLayoutFix.newParams(Screen.dp(55f), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.RIGHT);
       params.rightMargin = Screen.dp(55f);
@@ -1920,7 +1946,10 @@ public class MediaLayout extends FrameLayoutFix implements
       this.visible = visible;
       NavigationController c = UI.getNavigation();
       if (c != null) {
-        c.getValue().setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+        View pane = visible ? null : paneBounds.getSourcePaneView();
+        if (pane == null || pane == c.getValue()) {
+          c.getValue().setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+        }
       }
     }
   }
@@ -1957,6 +1986,7 @@ public class MediaLayout extends FrameLayoutFix implements
       UI.post(() -> {
         if (result != null) {
           final SetSenderController c = new SetSenderController(getContext(), tdlib());
+          c.setPopupSourceController(parent);
           c.setArguments(new SetSenderController.Args(chat, result.senders, chat.messageSenderId));
           c.setDelegate(this::setNewMessageSender);
           c.show();

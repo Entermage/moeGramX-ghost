@@ -306,8 +306,7 @@ inline void fprint_device_info (FILE *file, bool need_short) {
 inline std::string sprintf_device_info () {
   int count = snprintf(NULL, 0, APP_INFO_FORMAT);
   char buffer[count + 1];
-  buffer[count + 1] = '\0';
-  snprintf(buffer, count, APP_INFO_FORMAT);
+  snprintf(buffer, count + 1, APP_INFO_FORMAT);
   return std::string(buffer);
 }
 

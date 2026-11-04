@@ -30,9 +30,11 @@ def source_for(group=GROUP, helper=HELPER):
     helper_methods = "\n".join(block(helper, signature) for signature in (
         "public void updateGroup (", "private void onGroupChanged (",
     ))
+    drop_method = block(helper, "private int dropMutedTopicNotifications (").replace(
+        "moe.kirao.mgx.topics.XgramTopicMute", "Mute")
     return (ROOT / "tests/NotificationCacheHarness.java").read_text().replace(
         "/* GROUP_METHODS */", group_methods).replace(
-        "/* HELPER_METHODS */", helper_methods).replace(
+        "/* HELPER_METHODS */", helper_methods).replace("/* DROP_METHOD */", drop_method).replace(
         "/* NOTIFICATION_HIDDEN_METHOD */", block(NOTIFICATION, "public boolean isHidden ()"))
 
 
@@ -73,6 +75,64 @@ class NotificationCacheTest(unittest.TestCase):
 
     def test_empty_unknown_group_does_not_accept_added_notifications(self):
         self.run_case("unknown-empty")
+
+    def test_fully_filtered_topic_update_is_silent_and_not_counted(self):
+        self.run_case("filtered-all")
+
+    def test_filtered_topic_update_keeps_dismissed_group_hidden(self):
+        self.run_case("filtered-hidden")
+
+    def test_partially_filtered_update_alerts_for_real_message(self):
+        self.run_case("filtered-partial")
+
+    def test_pure_deletion_is_unchanged(self):
+        self.run_case("pure-deletion")
+
+    def test_mentions_group_reaches_the_mention_decision(self):
+        self.run_case("mentions-group")
+
+    def filter_negative(self, old, new, scenario, message):
+        with tempfile.TemporaryDirectory(prefix="notification-filter-baseline-") as tmp:
+            previous = Path(tmp) / HELPER.name
+            text = HELPER.read_text()
+            self.assertEqual(text.count(old), 1, old)
+            previous.write_text(text.replace(old, new, 1))
+            compile_harness(tmp, source_for(helper=previous))
+            result = subprocess.run(["java", "-ea", "-cp", tmp, "NotificationCacheHarness", scenario],
+                                    text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(message, result.stderr)
+
+    def test_negative_filter_without_silence_rings_and_reshows(self):
+        self.filter_negative(
+            "boolean isSilent = update.notificationSoundId == 0 || (droppedCount > 0 && update.addedNotifications.length == 0);",
+            "boolean isSilent = update.notificationSoundId == 0;", "filtered-hidden",
+            "deletion plus filtered message keeps a dismissed group hidden")
+
+    def test_negative_filter_without_count_adjustment(self):
+        self.filter_negative("update.totalCount = Math.max(0, update.totalCount - droppedCount);", "",
+                             "filtered-partial", "count excludes only the filtered notification")
+
+    def test_negative_previous_filter_rings_for_filtered_burst(self):
+        text = HELPER.read_text()
+        old = ("if (droppedCount > 0) {\n      // TDLib still counts the dropped notifications until it handles their RemoveNotification.\n"
+               "      update.totalCount = Math.max(0, update.totalCount - droppedCount);\n    }")
+        self.assertEqual(text.count(old), 1)
+        with tempfile.TemporaryDirectory(prefix="notification-filter-previous-") as tmp:
+            previous = Path(tmp) / HELPER.name
+            previous.write_text(text.replace(old, "").replace(
+                "boolean isSilent = update.notificationSoundId == 0 || (droppedCount > 0 && update.addedNotifications.length == 0);",
+                "boolean isSilent = update.notificationSoundId == 0;"))
+            compile_harness(tmp, source_for(helper=previous))
+            result = subprocess.run(["java", "-ea", "-cp", tmp, "NotificationCacheHarness", "filtered-all"],
+                                    text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("fully filtered update must not re-show or ring", result.stderr)
+
+    def test_negative_mentions_group_treated_as_messages(self):
+        self.filter_negative("final boolean mentionGroup = update.type instanceof TdApi.NotificationGroupTypeMentions;",
+                             "final boolean mentionGroup = false;", "mentions-group",
+                             "the Mentions group is decided by mention settings")
 
     def test_stale_cache_regression_detects_missing_empty_group_cleanup(self):
         # A negative control removes only the fix from the production group.

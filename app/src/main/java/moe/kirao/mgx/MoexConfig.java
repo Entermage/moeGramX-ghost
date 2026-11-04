@@ -48,6 +48,8 @@ public class MoexConfig {
   public static final String KEY_TYPING_INSTEAD_CHOOSING = "typing_instead_choosing";
   public static final String KEY_DISABLE_REACTIONS = "disable_reactions";
   public static final String KEY_HIDE_BOTTOM_BAR = "hide_bottom_bar";
+  public static final String KEY_TWO_PANE_LAYOUT = "two_pane_layout";
+  public static final String KEY_PANE_LIST_WIDTH_DP = "pane_list_width_dp";
   public static final String KEY_DARKEN_DRAWER = "darken_drawer";
   public static final String KEY_SILENT_MESSAGE = "silent_message";
   public static final String KEY_CHAT_QUICK_EDIT = "quick_edit";
@@ -105,6 +107,8 @@ public class MoexConfig {
   public static boolean typingInsteadChoosing = instance().getBoolean(KEY_TYPING_INSTEAD_CHOOSING, true);
   public static boolean disableReactions = instance().getBoolean(KEY_DISABLE_REACTIONS, false);
   public static boolean hideBottomBar = instance().getBoolean(KEY_HIDE_BOTTOM_BAR, false);
+  public static boolean twoPaneLayout = instance().getBoolean(KEY_TWO_PANE_LAYOUT, true);
+  public static int paneListWidthDp = instance().getInt(KEY_PANE_LIST_WIDTH_DP, 0);
   public static boolean darkenDrawer = instance().getBoolean(KEY_DARKEN_DRAWER, false);
   public static boolean silentMessage = instance().getBoolean(KEY_SILENT_MESSAGE, false);
   public static boolean quickEdit = instance().getBoolean(KEY_CHAT_QUICK_EDIT, false);
@@ -223,6 +227,16 @@ public class MoexConfig {
 
   public String getString (String key, String defValue) {
     return config.getString(key, defValue);
+  }
+
+  public void toggleTwoPaneLayout () {
+    twoPaneLayout = !twoPaneLayout;
+    putBoolean(KEY_TWO_PANE_LAYOUT, twoPaneLayout);
+  }
+
+  public void setPaneListWidthDp (int widthDp) {
+    paneListWidthDp = Math.max(0, widthDp);
+    putInt(KEY_PANE_LIST_WIDTH_DP, paneListWidthDp);
   }
 
   public void setGhostMode (boolean enabled) {
@@ -348,6 +362,16 @@ public class MoexConfig {
     putLongArray(key, newUserIds);
     MoexShadowUnreadManager.invalidateAccount(accountId);
     notifyClientListeners(key, newUserIds, oldUserIds);
+  }
+
+  /** Only for a real logout or data reset: the local slot's next login may be a different user. */
+  public synchronized void clearAccountData (int accountId) {
+    String key = shadowBannedUsersKey(accountId);
+    long[] oldUserIds = getLongArray(key);
+    if (oldUserIds == null) return;
+    remove(key);
+    MoexShadowUnreadManager.invalidateAccount(accountId);
+    notifyClientListeners(key, new long[0], oldUserIds);
   }
 
   public boolean containsKey (String key) {

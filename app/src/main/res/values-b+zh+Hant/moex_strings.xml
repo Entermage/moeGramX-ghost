@@ -89,4 +89,10 @@
   <string name="ProxyAlertCheck">檢查</string>
   <string name="moex_birthdayBarSubtitle">今天過生日</string>
   <string name="moex_birthdaysTodayTitle">今天有 %1$d 人過生日</string>
+  <string name="MoexWideScreens">寬螢幕顯示</string>
+  <string name="MoexTwoPaneLayout">聊天分欄</string>
+  <string name="MoexTwoPaneLayoutInfo">在寬螢幕上並排顯示聊天列表與目前聊天，拖動中間分隔線可調整寬度。窄螢幕自動恢復單欄。</string>
+  <string name="MoexTwoPaneSelectChat">請選擇一個聊天</string>
+  <string name="MoexTwoPaneResize">調整聊天列表寬度</string>
+  <string name="ReadOnServer">在伺服器上標為已讀</string>
 </resources>

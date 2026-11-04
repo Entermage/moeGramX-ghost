@@ -18,6 +18,7 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.view.View;
 
 import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
@@ -56,6 +57,16 @@ public class MediaViewThumbLocation {
     this.top = top;
     this.right = right;
     this.bottom = bottom;
+  }
+
+  /** Converts a freshly calculated source-view rectangle to full-screen media coordinates. */
+  public void offsetToWindow (View sourceView) {
+    int[] position = new int[2];
+    sourceView.getLocationInWindow(position);
+    left += position[0];
+    right += position[0];
+    top += position[1];
+    bottom += position[1];
   }
 
   public void setClip (int left, int top, int right, int bottom) {

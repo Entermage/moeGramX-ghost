@@ -1332,9 +1332,10 @@ public class TdlibListeners {
   // updateForumTopic
 
   void updateForumTopic (TdApi.UpdateForumTopic update) {
-    runForumUpdate(update.chatId, update.forumTopicId, listener ->
-      listener.onForumTopicUpdated(update.chatId, update.forumTopicId, update.isPinned, update.lastReadInboxMessageId, update.lastReadOutboxMessageId, update.notificationSettings)
-    );
+    runForumUpdate(update.chatId, update.forumTopicId, listener -> {
+      listener.onForumTopicUpdated(update.chatId, update.forumTopicId, update.isPinned, update.lastReadInboxMessageId, update.lastReadOutboxMessageId, update.notificationSettings);
+      listener.onForumTopicUpdated(update); // XGram
+    });
   }
 
   // updateChatViewAsTopics

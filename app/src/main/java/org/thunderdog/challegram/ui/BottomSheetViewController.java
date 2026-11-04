@@ -17,6 +17,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.thunderdog.challegram.navigation.HeaderView;
+import org.thunderdog.challegram.navigation.PopupPaneBounds;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.navigation.ViewPagerController;
@@ -32,6 +33,7 @@ import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.v.CustomRecyclerView;
 import org.thunderdog.challegram.widget.LickView;
 import org.thunderdog.challegram.widget.PopupLayout;
+import org.thunderdog.challegram.widget.RootFrameLayout;
 
 import me.vkryl.android.widget.FrameLayoutFix;
 
@@ -42,6 +44,74 @@ public abstract class BottomSheetViewController<T> extends ViewPagerController<T
   protected RelativeLayout contentView;
   protected View fixView;
   protected View pagerInFrameLayoutFix;
+
+  private @Nullable ViewController<?> popupSourceController;
+  private @Nullable PopupPaneBounds popupPaneBounds;
+
+  /** Pane-owned sheets opt in; independent full-screen workflows keep their own scope. */
+  public final void setPopupSourceController (@Nullable ViewController<?> source) {
+    if (popupPaneBounds != null) popupPaneBounds.detach();
+    popupSourceController = source;
+    popupPaneBounds = source != null && wrapView != null ? new PopupPaneBounds(wrapView, this) : null;
+    if (wrapView != null) {
+      if (popupPaneBounds != null && wrapView.isAttachedToWindow()) popupPaneBounds.attach();
+      wrapView.requestLayout();
+    }
+  }
+
+  @Override
+  public @Nullable ViewController<?> getOptionsSourceController () {
+    return popupSourceController != null ? popupSourceController.getOptionsSourceController() : super.getOptionsSourceController();
+  }
+
+  protected final int getPopupContentWidth () {
+    int width = wrapView != null ? wrapView.getMeasuredWidth() : 0;
+    if (width > 0) return width;
+    width = context().getRootView().getMeasuredWidth();
+    if (width <= 0) width = Screen.currentWidth();
+    return popupPaneBounds != null ? popupPaneBounds.getAvailableWidth(width) : width;
+  }
+
+  protected final boolean isOutsideSourcePane (float x) {
+    return popupPaneBounds != null && popupPaneBounds.isConstrained() && wrapView != null &&
+      (x < wrapView.getLeft() || x >= wrapView.getRight());
+  }
+
+  protected final float popupToContentY (float y) {
+    return popupPaneBounds != null && popupPaneBounds.isConstrained() && wrapView != null ? y - wrapView.getY() : y;
+  }
+
+  private class PaneWrap extends FrameLayoutFix implements RootFrameLayout.MarginModifier, PopupPaneBounds.Provider {
+    PaneWrap (Context context) {
+      super(context);
+      if (popupSourceController != null) popupPaneBounds = new PopupPaneBounds(this, BottomSheetViewController.this);
+    }
+
+    @Override
+    public @Nullable PopupPaneBounds getPopupPaneBounds () {
+      return popupPaneBounds;
+    }
+
+    @Override
+    public void onApplyMarginInsets (View child, FrameLayout.LayoutParams params, Rect legacyInsets, Rect insets, Rect insetsWithoutIme) {
+      if (popupPaneBounds != null) popupPaneBounds.update();
+      Views.setMargins(params,
+        Math.max(legacyInsets.left, popupPaneBounds != null ? popupPaneBounds.getLeftInset() : 0), legacyInsets.top,
+        Math.max(legacyInsets.right, popupPaneBounds != null ? popupPaneBounds.getRightInset() : 0), legacyInsets.bottom);
+    }
+
+    @Override
+    protected void onAttachedToWindow () {
+      super.onAttachedToWindow();
+      if (popupPaneBounds != null) popupPaneBounds.attach();
+    }
+
+    @Override
+    protected void onDetachedFromWindow () {
+      if (popupPaneBounds != null) popupPaneBounds.detach();
+      super.onDetachedFromWindow();
+    }
+  }
 
   protected abstract int getHeaderHeight ();
   protected abstract int getContentOffset ();
@@ -91,7 +161,7 @@ public abstract class BottomSheetViewController<T> extends ViewPagerController<T
       protected boolean drawChild (Canvas canvas, View child, long drawingTime) {
         if (child == pagerInFrameLayoutFix) {
           canvas.save();
-          canvas.clipRect(0, headerTranslationY + (headerView != null ? getHeaderTopOffset() : 0), getMeasuredWidth(), getMeasuredHeight());
+          canvas.clipRect(0, getContentClipTop(), getMeasuredWidth(), getMeasuredHeight());
           boolean result = super.drawChild(canvas, child, drawingTime);
           canvas.restore();
           return result;
@@ -110,7 +180,7 @@ public abstract class BottomSheetViewController<T> extends ViewPagerController<T
     ViewSupport.setThemedBackground(fixView, ColorId.background, this);
     fixView.setLayoutParams(fp);
 
-    wrapView = new FrameLayoutFix(context) {
+    wrapView = new PaneWrap(context) {
       @Override
       public boolean onInterceptTouchEvent (MotionEvent e) {
         boolean b = (e.getAction() == MotionEvent.ACTION_DOWN && e.getY() < (getTopEdge() + getHeaderTopOffset()));
@@ -123,20 +193,23 @@ public abstract class BottomSheetViewController<T> extends ViewPagerController<T
         return b && super.onTouchEvent(e);
       }
 
-      private int oldHeight = -1;
+      private int oldHeight = -1, oldWidth = -1;
 
       @Override
       protected void onLayout (boolean changed, int left, int top, int right, int bottom) {
         super.onLayout(changed, left, top, right, bottom);
         post(() -> {
+          if (isDestroyed() || !isAttachedToWindow()) return;
           final int height = getTargetHeight();
-          if (height != oldHeight) {
+          final int width = getMeasuredWidth();
+          if (height != oldHeight || width != oldWidth) {
             invalidateAllItemDecorations();
             boolean disallowKeyboardHide = isDisallowKeyboardHideOnPageScrolled();
             setDisallowKeyboardHideOnPageScrolled(true);
             onPageScrolled(currentMediaPosition, currentPositionOffset, 0);
             setDisallowKeyboardHideOnPageScrolled(disallowKeyboardHide);
             oldHeight = height;
+            oldWidth = width;
           }
         });
       }
@@ -171,12 +244,7 @@ public abstract class BottomSheetViewController<T> extends ViewPagerController<T
     }
     wrapView.setWillNotDraw(false);
     addThemeInvalidateListener(wrapView);
-    if (getHeaderTopOffset() > 0) {
-      lickView = new LickView(context);
-      addThemeInvalidateListener(lickView);
-      lickView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, getHeaderTopOffset()));
-      wrapView.addView(lickView);
-    }
+    updateHeaderTopOffset();
 
     onAfterCreateView();
 
@@ -288,7 +356,7 @@ public abstract class BottomSheetViewController<T> extends ViewPagerController<T
       final int topOffset = getHeaderTopOffset();
       final float top = y - topOffset;
       lickView.setTranslationY(realHeaderOffset - topOffset);
-      float factor = top > topOffset ? 0f : 1f - (top / (float) topOffset);
+      float factor = topOffset == 0 || top > topOffset ? 0f : 1f - (top / (float) topOffset);
       lickView.setFactor(factor);
       onUpdateLickViewFactor(factor);
       // headerView.getFilling().setShadowAlpha(factor);
@@ -304,9 +372,29 @@ public abstract class BottomSheetViewController<T> extends ViewPagerController<T
     return Math.max(0, (int) (headerTranslationY - getHeaderTopOffset()));
   }
 
+  protected float getContentClipTop () {
+    return headerTranslationY + (headerView != null ? getHeaderTopOffset() : 0);
+  }
+
+  /** Optional bounds in popup-local coordinates. The root popup keeps outside-tap dismissal. */
+  protected boolean getPopupContentBounds (@NonNull View popup, @NonNull Rect available, @NonNull Rect out) {
+    return false;
+  }
+
+  protected void onPopupContentLayout () { }
+  protected void onPopupRevealFactorChanged (float factor) { }
+
+  private final Rect popupContentBounds = new Rect();
+  private final Rect availablePopupBounds = new Rect();
+  private boolean hasPopupContentBounds;
+
   @Override
   public boolean shouldTouchOutside (float x, float y) {
-    return y < headerTranslationY - (headerView != null ? getHeaderHeight(true) : 0);
+    if (hasPopupContentBounds) {
+      return x < popupContentBounds.left || x >= popupContentBounds.right ||
+        y < popupContentBounds.top || y >= popupContentBounds.bottom;
+    }
+    return isOutsideSourcePane(x) || popupToContentY(y) < headerTranslationY - (headerView != null ? getHeaderHeight(true) : 0);
   }
 
   @Override
@@ -371,6 +459,7 @@ public abstract class BottomSheetViewController<T> extends ViewPagerController<T
 
   @Override
   public void destroy () {
+    if (popupPaneBounds != null) popupPaneBounds.detach();
     super.destroy();
     context().removeFullScreenView(this, false);
   }
@@ -388,6 +477,51 @@ public abstract class BottomSheetViewController<T> extends ViewPagerController<T
       return null;
     }
     popupLayout = new PopupLayout(context()) {
+      private boolean resolveContentBounds (View child, int width, int height) {
+        ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) child.getLayoutParams();
+        int left = getPaddingLeft() + params.leftMargin;
+        int top = getPaddingTop() + params.topMargin;
+        availablePopupBounds.set(left, top,
+          Math.max(left, width - getPaddingRight() - params.rightMargin),
+          Math.max(top, height - getPaddingBottom() - params.bottomMargin));
+        return getPopupContentBounds(this, availablePopupBounds, popupContentBounds);
+      }
+
+      @Override
+      protected void measureChildWithMargins (View child, int parentWidthMeasureSpec, int widthUsed,
+                                               int parentHeightMeasureSpec, int heightUsed) {
+        if (child == getBoundView()) {
+          boolean constrained = resolveContentBounds(child,
+            MeasureSpec.getSize(parentWidthMeasureSpec) - widthUsed,
+            MeasureSpec.getSize(parentHeightMeasureSpec) - heightUsed);
+          updateHeaderTopOffset();
+          onPopupContentLayout();
+          if (constrained) {
+            child.measure(MeasureSpec.makeMeasureSpec(popupContentBounds.width(), MeasureSpec.EXACTLY),
+              MeasureSpec.makeMeasureSpec(popupContentBounds.height(), MeasureSpec.EXACTLY));
+            return;
+          }
+        }
+        super.measureChildWithMargins(child, parentWidthMeasureSpec, widthUsed, parentHeightMeasureSpec, heightUsed);
+      }
+
+      @Override
+      protected void onLayout (boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        View content = getBoundView();
+        hasPopupContentBounds = content != null && resolveContentBounds(content, getMeasuredWidth(), getMeasuredHeight());
+        if (hasPopupContentBounds) {
+          content.layout(popupContentBounds.left, popupContentBounds.top,
+            popupContentBounds.right, popupContentBounds.bottom);
+        }
+      }
+
+      @Override
+      public void setRevealFactor (float factor) {
+        super.setRevealFactor(factor);
+        onPopupRevealFactorChanged(factor);
+      }
+
       @Override
       public void onCustomShowComplete () {
         super.onCustomShowComplete();
@@ -448,6 +582,27 @@ public abstract class BottomSheetViewController<T> extends ViewPagerController<T
   // LickView
 
   private @Nullable LickView lickView;
+  private int currentHeaderTopOffset = -1;
+  private boolean hasLickViewColor;
+  private @ColorInt int lickViewColor;
+
+  private void updateHeaderTopOffset () {
+    int topOffset = getHeaderTopOffset();
+    if (currentHeaderTopOffset == topOffset) return;
+    currentHeaderTopOffset = topOffset;
+    ((RelativeLayout.LayoutParams) pagerInFrameLayoutFix.getLayoutParams()).topMargin = getHeaderHeight() + topOffset;
+    if (topOffset > 0 && lickView == null) {
+      lickView = new LickView(context());
+      addThemeInvalidateListener(lickView);
+      lickView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, topOffset));
+      if (hasLickViewColor) lickView.setHeaderBackground(lickViewColor);
+      wrapView.addView(lickView);
+    }
+    if (lickView != null) {
+      lickView.getLayoutParams().height = topOffset;
+      lickView.setVisibility(topOffset > 0 ? View.VISIBLE : View.GONE);
+    }
+  }
 
   protected float getLickViewFactor () {
     return lickView != null ? lickView.getFactor() : 0;
@@ -458,6 +613,8 @@ public abstract class BottomSheetViewController<T> extends ViewPagerController<T
   }
 
   protected void setLickViewColor (@ColorInt int color) {
+    hasLickViewColor = true;
+    lickViewColor = color;
     if (lickView != null) {
       lickView.setHeaderBackground(color);
     }

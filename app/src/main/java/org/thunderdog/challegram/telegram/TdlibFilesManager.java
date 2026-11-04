@@ -1383,7 +1383,8 @@ public class TdlibFilesManager implements GlobalConnectionListener {
     }
     int automaticDownloadTypes;
     if (chatType == null) {
-      automaticDownloadTypes = (DOWNLOAD_DEFAULTS >> DOWNLOAD_PRIVATE_SHIFT) & 0xff;
+      // Media without a chat follows the configured private-chat policy (XGram 2b27a31b).
+      automaticDownloadTypes = downloadInPrivateChats;
     } else {
       switch (chatType.getConstructor()) {
         case TdApi.ChatTypeSupergroup.CONSTRUCTOR: {

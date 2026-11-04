@@ -11,8 +11,39 @@ dependencies {
   implementation 'org.robolectric:android-all:16-robolectric-13921718'
 }
 
+// -Pnegative=<name> compiles a copy of ExternalShareUtils with exactly one boundary check removed.
+def shareUtils = file('../../app/src/main/java/org/thunderdog/challegram/ui/ExternalShareUtils.java')
+def negative = findProperty('negative') ?: ''
+def negatives = [
+  'own-provider': ['if (policy.isOwnAuthority(authority) && !OfferedUris.wasOffered(uri)) {', 'if (false) {'],
+  'app-specific': ['File root = appSpecificRoot(directory, packageName);', 'File root = null;'],
+  'device-protected': ['      if (hasDeviceProtectedStorage) dataDirectories.add(deviceProtectedDataDir(context));\n', ''],
+  'user-id': ["authority.substring(authority.lastIndexOf('@') + 1)", 'authority'],
+]
+if (negative && !negatives.containsKey(negative)) throw new GradleException("Unknown negative control: $negative")
+def negativeDir = layout.buildDirectory.dir("negative-src/$negative")
+def negativeSource = tasks.register('negativeSource') {
+  inputs.file(shareUtils)
+  inputs.property('negative', negative)
+  outputs.dir(negativeDir)
+  doLast {
+    def (oldText, newText) = negatives[negative]
+    def text = shareUtils.getText('UTF-8')
+    if (!text.contains(oldText)) throw new GradleException("Negative control $negative no longer matches")
+    def target = negativeDir.get().file('ExternalShareUtils.java').asFile
+    target.parentFile.mkdirs()
+    target.setText(text.replace(oldText, newText), 'UTF-8')
+  }
+}
+
 tasks.named('compileJava', JavaCompile) {
-  source file('../../app/src/main/java/org/thunderdog/challegram/ui/ExternalShareUtils.java')
+  if (negative) {
+    dependsOn negativeSource
+    source negativeDir
+  } else {
+    source shareUtils
+  }
+  source file('../../app/src/main/java/org/thunderdog/challegram/util/OfferedUris.java')
   options.release = 17
 }
 

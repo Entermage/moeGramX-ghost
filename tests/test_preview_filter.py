@@ -127,7 +127,7 @@ public class MoexConfig {
   public String getString(String k,String d) { return (String)db.getOrDefault(k,d); }
   __METHODS__
 }
-class MoexShadowUnreadManager { static void invalidateAccount(int id) {} }
+class MoexShadowUnreadManager { static void invalidateAccount(int id) {} static boolean isMainBlocked(org.thunderdog.challegram.telegram.Tdlib t,long u) { return t.chatFullyBlocked(tgx.td.ChatId.fromUserId(u)); } }
 '''.replace("__METHODS__", methods)
     return sources
 

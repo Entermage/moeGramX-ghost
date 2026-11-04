@@ -591,7 +591,7 @@ public class TdlibNotificationStyle implements TdlibNotificationStyleDelegate, F
     final String textContent = textBuilder.toString();
     final CharSequence tickerText = getTickerText(tdlib, helper, allowPreview, chat, lastNotification, true, group.singleSenderId() != 0, hasCustomText);
 
-    final PendingIntent contentIntent = TdlibNotificationUtils.newIntent(tdlib.id(), tdlib.settings().getLocalChatId(chatId), group.findTargetMessageId());
+    final PendingIntent contentIntent = TdlibNotificationUtils.newIntent(tdlib.id(), tdlib.settings().getLocalChatId(chatId), group.findTargetMessageId(), moe.kirao.mgx.topics.XgramForums.notificationTopicId(tdlib, chatId, group));
 
     boolean needGroupLogic = true; // !isSummary || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && settings == null);
 
@@ -1090,7 +1090,7 @@ public class TdlibNotificationStyle implements TdlibNotificationStyleDelegate, F
       }
       b.setSortKey(makeSortKey(lastNotification, true));
     }
-    b.setContentIntent(TdlibNotificationUtils.newIntent(tdlib.id(), tdlib.settings().getLocalChatId(singleChatId), singleTargetMessageId));
+    b.setContentIntent(TdlibNotificationUtils.newIntent(tdlib.id(), tdlib.settings().getLocalChatId(singleChatId), singleTargetMessageId, singleChatId != 0 ? moe.kirao.mgx.topics.XgramForums.notificationTopicId(tdlib, singleChatId, notifications) : 0));
 
     styleNotification(tdlib, b, singleChatId, displayingChatsCount == 1 ? chat : null, allowPreview);
 

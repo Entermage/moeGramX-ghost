@@ -1359,7 +1359,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       int oldHeight = height;
       height = computeHeight();
       if (oldHeight != height) {
-        manager.onMessageHeightChanged(getChatId(), getId(), oldHeight, height);
+        manager.onMessageHeightChanged(this, oldHeight, height);
       }
       return oldHeight != height;
     } else {
@@ -3901,7 +3901,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     if (height != oldHeight) {
       // FIXME?
       if (hasAnyTargetToInvalidate()) {
-        manager.onMessageHeightChanged(getChatId(), getId(), oldHeight, height);
+        manager.onMessageHeightChanged(this, oldHeight, height);
       }
       requestLayout();
     }
@@ -5217,7 +5217,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     if (messageThread != null) {
       lastReadMessageId = msg.isOutgoing ? messageThread.getLastReadOutboxMessageId() : messageThread.getLastReadInboxMessageId();
     } else if (chat != null) {
-      lastReadMessageId = msg.isOutgoing ? chat.lastReadOutboxMessageId : chat.lastReadInboxMessageId;
+      lastReadMessageId = msg.isOutgoing ? Math.max(chat.lastReadOutboxMessageId, moe.kirao.mgx.topics.XgramTopicReadOutbox.forMessage(tdlib, msg)) : chat.lastReadInboxMessageId;
     } else {
       return false;
     }
@@ -5381,7 +5381,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     this.flags = flags;
 
     if (isOutgoing() && !isSending()) {
-      setUnread(messageThread != null ? messageThread.getLastReadOutboxMessageId() : chat.lastReadOutboxMessageId);
+      setUnread(messageThread != null ? messageThread.getLastReadOutboxMessageId() : Math.max(chat.lastReadOutboxMessageId, moe.kirao.mgx.topics.XgramTopicReadOutbox.forMessage(tdlib, msg)));
     }
 
     /*if (replyData != null && TD.isMultiChat(chat)) {
@@ -9943,38 +9943,27 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       return;
     }
     boolean needRegister;
-    boolean hasTopicInfo;
     synchronized (forumTopicKey) {
       needRegister = !topicObserverRegistered;
-      if (needRegister) {
-        topicObserverRegistered = true;
-      }
+      topicObserverRegistered = true;
+    }
+    if (needRegister) {
+      tdlib.topics().findAndObserve(forumTopicKey, this);
+    }
+    // A cached Entry can represent a failed request. Only real metadata can replace the fallback text.
+    // Check and queue under the same lock as setTopicInfo, including when another callback already waits.
+    boolean hasTopicInfo;
+    synchronized (forumTopicKey) {
       hasTopicInfo = topicInfo != null;
+      if (!hasTopicInfo) {
+        if (postponedTopicInfoCallbacks == null) {
+          postponedTopicInfoCallbacks = new ArrayList<>();
+        }
+        postponedTopicInfoCallbacks.add(after);
+      }
     }
     if (hasTopicInfo) {
       after.runWithBool(true);
-    }
-    if (needRegister) {
-      TdlibForumTopicManager.Entry entry =
-        tdlib.topics().findAndObserve(forumTopicKey, this);
-
-      if (entry != null) {
-        after.runWithBool(true);
-      } else {
-        synchronized (forumTopicKey) {
-          if (topicInfo != null) {
-            hasTopicInfo = true;
-          } else {
-            if (postponedTopicInfoCallbacks == null) {
-              postponedTopicInfoCallbacks = new ArrayList<>();
-            }
-            postponedTopicInfoCallbacks.add(after);
-          }
-        }
-        if (hasTopicInfo) {
-          after.runWithBool(true);
-        }
-      }
     }
   }
 

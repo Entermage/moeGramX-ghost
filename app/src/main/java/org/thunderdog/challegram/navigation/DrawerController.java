@@ -95,6 +95,7 @@ import me.vkryl.core.lambda.CancellableRunnable;
 import tgx.td.ChatId;
 import tgx.td.ChatPosition;
 import moe.kirao.mgx.MoexConfig;
+import moe.kirao.mgx.layout.MoexTwoPane;
 
 public class DrawerController extends ViewController<Void> implements View.OnClickListener, Settings.ProxyChangeListener, GlobalAccountListener, GlobalCountersListener, BaseView.CustomControllerProvider, BaseView.ActionListProvider, View.OnLongClickListener, TdlibSettingsManager.NotificationProblemListener, TdlibOptionListener, SessionListener, GlobalTokenStateListener, SystemBackEventListener {
   private int currentWidth, shadowWidth;
@@ -108,6 +109,17 @@ public class DrawerController extends ViewController<Void> implements View.OnCli
 
   public DrawerController (Context context) {
     super(context, null);
+  }
+
+  @Override
+  public @Nullable ViewController<?> getOptionsSourceController () {
+    MoexTwoPane panes = context().moexTwoPane();
+    return panes != null && panes.isActive() ? panes.leftMain() : super.getOptionsSourceController();
+  }
+
+  private ViewController<?> menuSourceController () {
+    ViewController<?> source = getOptionsSourceController();
+    return source != null && source != this ? source : context.navigation().getCurrentStackItem();
   }
 
   @Override
@@ -289,6 +301,7 @@ public class DrawerController extends ViewController<Void> implements View.OnCli
       items.add(new ListItem(ListItem.TYPE_DRAWER_ITEM, R.id.btn_calls, R.drawable.baseline_call_24, R.string.Calls));
     }
     items.add(new ListItem(ListItem.TYPE_DRAWER_ITEM, R.id.btn_savedMessages, R.drawable.baseline_bookmark_24, R.string.SavedMessages));
+    items.add(new ListItem(ListItem.TYPE_DRAWER_ITEM, R.id.btn_readOnServer, R.drawable.outline_read_on_server_24, R.string.ReadOnServer));
     this.settingsClickBait = getSettingsClickBait();
     items.add(new ListItem(ListItem.TYPE_DRAWER_ITEM, R.id.btn_settings, R.drawable.baseline_settings_24, R.string.Settings));
     //items.add(new ListItem(ListItem.TYPE_DRAWER_ITEM, R.id.btn_invite, R.drawable.baseline_person_add_24, R.string.InviteFriends));
@@ -863,6 +876,8 @@ public class DrawerController extends ViewController<Void> implements View.OnCli
       }
     } else if (viewId == R.id.btn_savedMessages) {
       openSavedMessages();
+    } else if (viewId == R.id.btn_readOnServer) {
+      readAllChats();
     } else if (viewId == R.id.btn_addAccount) {
       context.currentTdlib().ui().addAccount(context, true, false);
       /*case R.id.btn_logout: {
@@ -877,11 +892,11 @@ public class DrawerController extends ViewController<Void> implements View.OnCli
         boolean value = Settings.instance().toggleProxySetting(Settings.PROXY_FLAG_ENABLED);
         setProxyEnabled(value);
       } else {
-        context.currentTdlib().ui().openProxySettings(context.navigation().getCurrentStackItem(), false);
+        close(0f, () -> context.currentTdlib().ui().openProxySettings(menuSourceController(), false));
       }
     } else if (viewId == R.id.btn_help) {
       cancelSupportOpen();
-      supportOpen = context.currentTdlib().ui().openSupport(context.navigation().getCurrentStackItem());
+      close(0f, () -> supportOpen = context.currentTdlib().ui().openSupport(menuSourceController()));
     } else if (viewId == R.id.btn_invite) {
         context.currentTdlib().cache().getInviteText(text -> {
           if (isVisible() && !isDestroyed()) {
@@ -981,6 +996,21 @@ public class DrawerController extends ViewController<Void> implements View.OnCli
     }
   }*/
 
+  private void readAllChats () {
+    final Tdlib tdlib = context.currentTdlib();
+    close(0f, () -> showConfirm(Lang.getString(R.string.ReadAllChatsInfo), null, () -> {
+      if (context.currentTdlib() != tdlib) {
+        return;
+      }
+      // Keep the same behavior as the Read All entry in the testing tools.
+      tdlib.readAllChats(ChatPosition.CHAT_LIST_MAIN, readCount ->
+        tdlib.readAllChats(ChatPosition.CHAT_LIST_ARCHIVE, archiveReadCount ->
+          UI.showToast(Lang.plural(R.string.ReadAllChatsDone, readCount + archiveReadCount), Toast.LENGTH_SHORT)
+        )
+      );
+    }));
+  }
+
   private void openSettings () {
     openController(new SettingsController(context, context.currentTdlib()));
   }
@@ -994,9 +1024,20 @@ public class DrawerController extends ViewController<Void> implements View.OnCli
   }
 
   private void openArchive () {
+    boolean inListPane = moexTwoPane() != null;
+    if (inListPane) {
+      ViewController<?> top = moe.kirao.mgx.layout.MoexTwoPane.leftTop(context);
+      if (top instanceof ChatsController && top.tdlib() == context.currentTdlib()) {
+        ChatsController chats = (ChatsController) top;
+        if (chats.chatList() instanceof TdApi.ChatListArchive && !chats.isPicker() && !chats.isFiltered()) {
+          close(0f, null);
+          return; // Keep the existing archive and its search/scroll state.
+        }
+      }
+    }
     ChatsController c = new ChatsController(context, context.currentTdlib());
     c.setArguments(new ChatsController.Arguments(ChatPosition.CHAT_LIST_ARCHIVE).setNeedMessagesSearch(true));
-    openController(c);
+    openController(c, inListPane);
   }
 
   private void openCallList() {
@@ -1006,6 +1047,10 @@ public class DrawerController extends ViewController<Void> implements View.OnCli
   private boolean ignoreClose;
 
   private void openController (ViewController<?> c) {
+    openController(c, false);
+  }
+
+  private void openController (ViewController<?> c, boolean inListPane) {
     if (c.needAsynchronousAnimation()) {
       ignoreClose = true;
       c.postOnAnimationReady(() -> {
@@ -1013,7 +1058,16 @@ public class DrawerController extends ViewController<Void> implements View.OnCli
         close(0f, null);
       });
     }
-    UI.navigateTo(c);
+    if (inListPane) {
+      if (!moe.kirao.mgx.layout.MoexTwoPane.showOnLeft(this, c)) {
+        // A busy or disappearing list pane must not redirect Archive over the user's chat.
+        ignoreClose = false;
+        c.destroy();
+        close(0f, null);
+      }
+    } else {
+      UI.navigateTo(c);
+    }
   }
 
   public DrawerHeaderView getHeaderView () {
@@ -1066,10 +1120,14 @@ public class DrawerController extends ViewController<Void> implements View.OnCli
   }
 
   public void open () {
-    ViewController<?> c = UI.getCurrentStackItem(context());
-    if (c != null && c.useDrawer() && !c.isIntercepted()) {
-      prepare();
-      open(0f);
+    // Adapted from XGram: the drawer belongs to the list pane while a chat is open beside it.
+    boolean twoPane = moexTwoPane() != null;
+    ViewController<?> c = twoPane ? moexOwner() : UI.getCurrentStackItem(context());
+    if (c != null && (c.useDrawer() || twoPane) && !c.isIntercepted()) {
+      boolean prepared = prepare();
+      if (prepared || !twoPane) {
+        open(0f);
+      }
     }
   }
 
@@ -1233,8 +1291,24 @@ public class DrawerController extends ViewController<Void> implements View.OnCli
   // private int currentScreenWidth;
 
   public boolean isNeeded () {
-    ViewController<?> c = context.navigation().getCurrentStackItem();
+    ViewController<?> c = moexOwner();
     return c != null && c.useDrawer();
+  }
+
+  @Nullable
+  private moe.kirao.mgx.layout.MoexTwoPane moexTwoPane () {
+    moe.kirao.mgx.layout.MoexTwoPane twoPane = context.moexTwoPane();
+    return twoPane != null && twoPane.isActive() ? twoPane : null;
+  }
+
+  /** The list pane owns the drawer; in a narrow window the original navigation owns it. */
+  @Nullable
+  private ViewController<?> moexOwner () {
+    NavigationController list = moe.kirao.mgx.layout.MoexTwoPaneGestures.listNavigation(context);
+    if (list != null && list.getCurrentStackItem() != null) {
+      return list.getCurrentStackItem();
+    }
+    return context.navigation().getCurrentStackItem();
   }
 
   public boolean prepare () {
@@ -1269,7 +1343,11 @@ public class DrawerController extends ViewController<Void> implements View.OnCli
   }
 
   private float getScreenWidth () {
-    return context.navigation().getValue().getMeasuredWidth();
+    View navigationView = context.navigation().getValue();
+    if (moexTwoPane() != null && navigationView.getParent() instanceof View) {
+      return ((View) navigationView.getParent()).getMeasuredWidth();
+    }
+    return navigationView.getMeasuredWidth();
   }
 
   public void translate (int lastScrollX) {

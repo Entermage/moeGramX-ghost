@@ -2642,6 +2642,31 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
   private int pipWidth, pipHeight;
   private float pipX, pipY;
+  private int pipLayoutWidth, pipLayoutHeight;
+
+  private void checkPipLayoutSize (int width, int height) {
+    boolean resized = pipLayoutWidth > 0 && pipLayoutHeight > 0 &&
+      (pipLayoutWidth != width || pipLayoutHeight != height);
+    pipLayoutWidth = width;
+    pipLayoutHeight = height;
+    if (!resized) return;
+
+    // Pixel targets belong to the old window. Keep the intended dock edge, then
+    // let the current layout calculate its position in the new window once.
+    if (pipPositionAnimator != null && pipPositionAnimator.isAnimating()) {
+      pipPositionAnimator.cancel();
+      pipXFactor = toPipXFactor;
+      pipYFactor = toPipYFactor;
+      savePipFactors();
+    }
+    listenCatchPip = false;
+    if (isPipUp) {
+      isPipUp = false;
+      animatePipUpFactor(false);
+    }
+    pipStartX = pipStartY = pipAddX = pipAddY = 0f;
+    setPipHidden(Math.abs(pipXFactor) == 2f, pipXFactor == -2f);
+  }
 
   private void updatePipLayout (int viewWidth, int viewHeight, boolean byLayout, boolean allowControlsHide) {
     /*int viewWidth = mediaView.getMeasuredWidth();
@@ -2650,6 +2675,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     if (viewHeight == 0 || viewWidth == 0 || pipItem == null) {
       return;
     }
+    checkPipLayoutSize(viewWidth, viewHeight);
 
     int mediaWidth = pipItem.getWidth();
     int mediaHeight = pipItem.getHeight();
@@ -2943,11 +2969,12 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     targetYFactor = targetY == topY ? -1f : 1f;
 
-    if (pipPositionAnimator == null) {
-      pipPositionAnimator = new FactorAnimator(ANIMATOR_PIP_POSITION, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 180);
-    } else {
-      pipPositionAnimator.forceFactor(0f);
+    if (pipPositionAnimator != null) {
+      pipPositionAnimator.cancel();
     }
+    // forceFactor(0) dispatches both update and finish callbacks, replaying the
+    // previous drag's pixel offsets before this drag has captured its origin.
+    pipPositionAnimator = new FactorAnimator(ANIMATOR_PIP_POSITION, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 180);
 
     fromPipAddX = pipAddX;
     fromPipAddY = pipAddY;
@@ -2966,6 +2993,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     pipYFactor = toPipYFactor;
     pipAddX = pipAddY = 0;
     savePipFactors();
+    updatePipLayout(mediaView.getMeasuredWidth(), mediaView.getMeasuredHeight(), false, false);
   }
 
   private void restorePipFactors () {
@@ -6923,13 +6951,19 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private TooltipOverlayView.TooltipInfo brushToneHint;
 
   private void hidePaintEditor () {
-    paintView.setEditorVisible(false);
-    if (paintingItem.setPaintState(paintingItem.getPaintState(), false)) {
-      mediaView.getBaseReceiver().invalidate();
+    if (paintView != null) {
+      paintView.setEditorVisible(false);
     }
-    paintView.pause();
-    paintView.setScaleX(1f);
-    paintView.setScaleY(1f);
+    if (paintingItem != null && paintingItem.setPaintState(paintingItem.getPaintState(), false)) {
+      if (mediaView != null) {
+        mediaView.getBaseReceiver().invalidate();
+      }
+    }
+    if (paintView != null) {
+      paintView.pause();
+      paintView.setScaleX(1f);
+      paintView.setScaleY(1f);
+    }
     showDefaultBrushHint();
   }
 

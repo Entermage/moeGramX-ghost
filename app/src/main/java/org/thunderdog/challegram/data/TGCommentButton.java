@@ -590,7 +590,7 @@ public final class TGCommentButton implements FactorAnimator.Target, TextColorSe
       int newHeight = context.getHeight();
       if (newHeight != oldHeight) {
         context.onBubbleHasChanged();
-        context.manager().onMessageHeightChanged(context.getChatId(), context.getId(), oldHeight, newHeight);
+        context.manager().onMessageHeightChanged(context, oldHeight, newHeight);
         context.requestLayout();
       }
     } else {
@@ -598,7 +598,7 @@ public final class TGCommentButton implements FactorAnimator.Target, TextColorSe
       int newHeight = context.computeHeight();
       if (newHeight != oldHeight) {
         context.height = newHeight;
-        context.manager().onMessageHeightChanged(context.getChatId(), context.getId(), oldHeight, newHeight);
+        context.manager().onMessageHeightChanged(context, oldHeight, newHeight);
         context.requestLayout();
       }
     }

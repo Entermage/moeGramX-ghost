@@ -429,6 +429,15 @@ public class StickersListController extends ViewController<StickersListControlle
     recyclerView.setLayoutManager(manager = new RtlGridLayoutManager(context, spanCount).setAlignOnly(true));
     recyclerView.setAdapter(adapter = new MediaStickersAdapter(this, this, false, this, offsetProvider, true, null) {
       @Override
+      public StickerHolder onCreateViewHolder (@NonNull ViewGroup parent, int viewType) {
+        StickerHolder holder = super.onCreateViewHolder(parent, viewType);
+        if (viewType == StickerHolder.TYPE_STICKER) {
+          holder.itemView.getLayoutParams().width = ViewGroup.LayoutParams.MATCH_PARENT;
+        }
+        return holder;
+      }
+
+      @Override
       protected void onToggleCollapseRecentStickers (TextView collapseView, TGStickerSetInfo recentSet) {
         int existingIndex = getStickerSetSectionIndexById(recentSet.getId());
         if (existingIndex == -1) return;

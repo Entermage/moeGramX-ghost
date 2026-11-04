@@ -45,6 +45,7 @@ import org.thunderdog.challegram.navigation.HeaderView;
 import org.thunderdog.challegram.navigation.MenuMoreWrap;
 import org.thunderdog.challegram.navigation.MenuMoreWrapAbstract;
 import org.thunderdog.challegram.navigation.OptionsLayout;
+import org.thunderdog.challegram.navigation.PopupPaneBounds;
 import org.thunderdog.challegram.navigation.RootDrawable;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
 import org.thunderdog.challegram.navigation.ViewController;
@@ -673,6 +674,10 @@ public class PopupLayout extends RootFrameLayout implements FactorAnimator.Targe
       revealAnimationLaunched = true;
       switch (animationType) {
         case ANIMATION_TYPE_SIMPLE: {
+          if (boundView instanceof PopupPaneBounds.Provider && popupHeightProvider == null) {
+            currentHeight = boundView.getMeasuredHeight();
+            boundView.setTranslationY(currentHeight * (1f - factor));
+          }
           animateRevealFactor(1f);
           break;
         }
@@ -841,6 +846,16 @@ public class PopupLayout extends RootFrameLayout implements FactorAnimator.Targe
     return null;
   }
 
+  @Override
+  protected void onLayout (boolean changed, int left, int top, int right, int bottom) {
+    super.onLayout(changed, left, top, right, bottom);
+    if (boundView instanceof PopupPaneBounds.Provider) {
+      // The dim View has unchanged bounds, but its recorded clip depends on the
+      // menu's final bounds. Re-record it after layout, also when returning to full width.
+      backgroundView.invalidate();
+    }
+  }
+
   private BackgroundView backgroundView;
 
   private class BackgroundView extends View {
@@ -851,11 +866,18 @@ public class PopupLayout extends RootFrameLayout implements FactorAnimator.Targe
 
     @Override
     public void draw (Canvas c) {
+      int restoreTo = c.save();
+      PopupPaneBounds paneBounds = boundView instanceof PopupPaneBounds.Provider ? ((PopupPaneBounds.Provider) boundView).getPopupPaneBounds() : null;
+      if (paneBounds != null && paneBounds.isConstrained()) {
+        int popupWidth = getParent() instanceof View ? ((View) getParent()).getWidth() : getWidth();
+        c.clipRect(paneBounds.getLeftInset() - getLeft(), 0, popupWidth - paneBounds.getRightInset() - getLeft(), getHeight());
+      }
       super.draw(c);
       if (useStatusBar) {
         final int color = ColorUtils.color((int) (255f * .3f), 0);
         c.drawRect(0, 0, getMeasuredWidth(), HeaderView.getTopOffset(), Paints.fillingPaint(color));
       }
+      c.restoreToCount(restoreTo);
     }
 
     @Override

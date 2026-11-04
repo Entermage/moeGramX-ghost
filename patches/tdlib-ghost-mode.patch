@@ -1,5 +1,159 @@
+diff --git a/td/telegram/ForumTopic.cpp b/td/telegram/ForumTopic.cpp
+index 113b7bb..3d31c5c 100644
+--- a/td/telegram/ForumTopic.cpp
++++ b/td/telegram/ForumTopic.cpp
+@@ -39,6 +39,8 @@ ForumTopic::ForumTopic(Td *td, telegram_api::object_ptr<telegram_api::ForumTopic
+   last_message_id_ = MessageId(ServerMessageId(forum_topic->top_message_));
+   unread_count_ = forum_topic->unread_count_;
+   last_read_inbox_message_id_ = MessageId(ServerMessageId(forum_topic->read_inbox_max_id_));
++  server_last_read_inbox_message_id_ = last_read_inbox_message_id_;
++  server_unread_count_ = unread_count_;
+   last_read_outbox_message_id_ = MessageId(ServerMessageId(forum_topic->read_outbox_max_id_));
+   unread_mention_count_ = forum_topic->unread_mentions_count_;
+   unread_reaction_count_ = forum_topic->unread_reactions_count_;
+@@ -53,17 +55,95 @@ bool ForumTopic::update_last_read_outbox_message_id(MessageId last_read_outbox_m
+   return true;
+ }
+ 
+-bool ForumTopic::update_last_read_inbox_message_id(MessageId last_read_inbox_message_id, int32 unread_count) {
++vector<int64> ForumTopic::get_local_read_state() const {
++  if (last_read_inbox_message_id_ <= server_last_read_inbox_message_id_) {
++    return {};
++  }
++  return {1, last_read_inbox_message_id_.get(), unread_count_, server_last_read_inbox_message_id_.get(),
++          server_unread_count_, last_message_id_.get()};
++}
++
++void ForumTopic::preserve_local_read(const vector<int64> &state) {
++  if (state.size() != 6 || state[0] != 1 || state[1] <= 0 || state[2] < 0 || state[2] > 2147483647 ||
++      state[3] < 0 || state[4] < 0 || state[4] > 2147483647 || state[5] < 0) {
++    return;
++  }
++  ForumTopic previous;
++  previous.last_read_inbox_message_id_ = MessageId(state[1]);
++  previous.unread_count_ = static_cast<int32>(state[2]);
++  previous.server_last_read_inbox_message_id_ = MessageId(state[3]);
++  previous.server_unread_count_ = static_cast<int32>(state[4]);
++  previous.last_message_id_ = MessageId(state[5]);
++  preserve_local_read(previous);
++}
++
++void ForumTopic::preserve_local_read(const ForumTopic &previous) {
++  if (previous.last_read_inbox_message_id_ <= last_read_inbox_message_id_) {
++    return;
++  }
++  if (last_message_id_.is_valid() && previous.last_read_inbox_message_id_ >= last_message_id_) {
++    unread_count_ = 0;
++  } else if (server_last_read_inbox_message_id_ == previous.server_last_read_inbox_message_id_) {
++    // With an unchanged server frontier, new arrivals change the server count by
++    // the same amount. Never subtract the same local reads twice on refresh.
++    auto locally_read_count = max(0, previous.server_unread_count_ - previous.unread_count_);
++    unread_count_ = max(0, server_unread_count_ - locally_read_count);
++  } else if (last_message_id_ <= previous.last_message_id_) {
++    unread_count_ = min(server_unread_count_, previous.unread_count_);
++  }
++  // If another device moved the server frontier AND newer messages arrived,
++  // the exact overlap is unknown. Keep the server count until viewing history
++  // refines it, rather than marking unseen messages read by guessing a delta.
++  // A deleted locally-read message and a new arrival can cancel each other in
++  // the server count. Do not turn an unviewed, still-unread tail into zero merely
++  // because the aggregate delta is zero. History will refine this lower bound.
++  if (unread_count_ == 0 && server_unread_count_ > 0 &&
++      last_message_id_ > previous.last_read_inbox_message_id_) {
++    unread_count_ = 1;
++  }
++  last_read_inbox_message_id_ = previous.last_read_inbox_message_id_;
++}
++
++bool ForumTopic::read_inbox_messages(MessageId last_read_inbox_message_id, int32 newly_read_count) {
+   if (last_read_inbox_message_id <= last_read_inbox_message_id_) {
+     return false;
+   }
+   last_read_inbox_message_id_ = last_read_inbox_message_id;
+-  if (unread_count >= 0) {
+-    unread_count_ = unread_count;
++  if (last_message_id_.is_valid() && last_read_inbox_message_id >= last_message_id_) {
++    unread_count_ = 0;
++  } else {
++    unread_count_ = max(0, unread_count_ - max(0, newly_read_count));
+   }
+   return true;
+ }
+ 
++bool ForumTopic::update_last_read_inbox_message_id(MessageId last_read_inbox_message_id, int32 unread_count,
++                                                    MessageId last_message_id) {
++  if (last_read_inbox_message_id < server_last_read_inbox_message_id_) {
++    return false;
++  }
++  ForumTopic previous;
++  previous.last_read_inbox_message_id_ = last_read_inbox_message_id_;
++  previous.last_message_id_ = last_message_id_;
++  previous.unread_count_ = unread_count_;
++  previous.server_last_read_inbox_message_id_ = server_last_read_inbox_message_id_;
++  previous.server_unread_count_ = server_unread_count_;
++  update_last_message_id(last_message_id);
++  server_last_read_inbox_message_id_ = last_read_inbox_message_id;
++  if (unread_count >= 0) {
++    server_unread_count_ = unread_count;
++  } else if (last_message_id_.is_valid() && last_read_inbox_message_id >= last_message_id_) {
++    server_unread_count_ = 0;
++  }
++  last_read_inbox_message_id_ = server_last_read_inbox_message_id_;
++  unread_count_ = server_unread_count_;
++  preserve_local_read(previous);
++  return last_read_inbox_message_id_ != previous.last_read_inbox_message_id_ ||
++         unread_count_ != previous.unread_count_ ||
++         server_last_read_inbox_message_id_ != previous.server_last_read_inbox_message_id_ ||
++         server_unread_count_ != previous.server_unread_count_ || last_message_id_ != previous.last_message_id_;
++}
++
+ bool ForumTopic::update_unread_mention_count(int32 count, bool is_relative) {
+   auto new_unread_mention_count = is_relative ? unread_mention_count_ + count : count;
+   if (new_unread_mention_count < 0) {
+diff --git a/td/telegram/ForumTopic.h b/td/telegram/ForumTopic.h
+index 9266693..97413bd 100644
+--- a/td/telegram/ForumTopic.h
++++ b/td/telegram/ForumTopic.h
+@@ -25,6 +25,9 @@ class ForumTopic {
+   bool is_short_ = false;
+   bool is_pinned_ = false;
+   int32 unread_count_ = 0;
++  // Keep the server snapshot separate from reads performed only on this device.
++  int32 server_unread_count_ = 0;
++  MessageId server_last_read_inbox_message_id_;
+   MessageId last_message_id_;
+   MessageId last_read_inbox_message_id_;
+   MessageId last_read_outbox_message_id_;
+@@ -48,7 +51,26 @@ class ForumTopic {
+ 
+   bool update_last_read_outbox_message_id(MessageId last_read_outbox_message_id);
+ 
+-  bool update_last_read_inbox_message_id(MessageId last_read_inbox_message_id, int32 unread_count);
++  bool update_last_read_inbox_message_id(MessageId last_read_inbox_message_id, int32 unread_count,
++                                         MessageId last_message_id = MessageId());
++
++  bool read_inbox_messages(MessageId last_read_inbox_message_id, int32 newly_read_count);
++
++  void preserve_local_read(const ForumTopic &previous);
++
++  vector<int64> get_local_read_state() const;
++
++  void preserve_local_read(const vector<int64> &state);
++
++  MessageId get_last_read_inbox_message_id() const {
++    return last_read_inbox_message_id_;
++  }
++
++  void update_last_message_id(MessageId last_message_id) {
++    if (last_message_id.is_valid()) {
++      last_message_id_ = last_message_id;
++    }
++  }
+ 
+   bool update_unread_mention_count(int32 count, bool is_relative);
+ 
 diff --git a/td/telegram/ForumTopicManager.cpp b/td/telegram/ForumTopicManager.cpp
-index 25b1ca9..30bfc9b 100644
+index 25b1ca9..a4750dd 100644
 --- a/td/telegram/ForumTopicManager.cpp
 +++ b/td/telegram/ForumTopicManager.cpp
 @@ -27,6 +27,7 @@
@@ -10,7 +164,31 @@ index 25b1ca9..30bfc9b 100644
  #include "td/telegram/Td.h"
  #include "td/telegram/TdDb.h"
  #include "td/telegram/telegram_api.h"
-@@ -605,7 +606,9 @@ void ForumTopicManager::read_forum_topic_messages(DialogId dialog_id, ForumTopic
+@@ -592,20 +593,31 @@ void ForumTopicManager::edit_forum_topic(DialogId dialog_id, ForumTopicId forum_
+ }
+ 
+ void ForumTopicManager::read_forum_topic_messages(DialogId dialog_id, ForumTopicId forum_topic_id,
+-                                                  MessageId last_read_inbox_message_id) {
++                                                  MessageId last_read_inbox_message_id,
++                                                  const vector<MessageId> &viewed_message_ids) {
+   CHECK(!td_->auth_manager_->is_bot());
+   auto topic = get_topic(dialog_id, forum_topic_id);
+   if (topic == nullptr || topic->topic_ == nullptr) {
+     return;
+   }
+ 
++  auto previous_read_id = topic->topic_->get_last_read_inbox_message_id();
++  int32 newly_read_count = 0;
++  auto is_unread = td_->messages_manager_->get_is_counted_as_unread(dialog_id, MessageType::Server);
++  for (auto message_id : viewed_message_ids) {
++    if (message_id > previous_read_id && message_id <= last_read_inbox_message_id && is_unread(message_id)) {
++      newly_read_count++;
++    }
++  }
+   bool need_update = false;
+-  if (topic->topic_->update_last_read_inbox_message_id(last_read_inbox_message_id, -1)) {
++  if (topic->topic_->read_inbox_messages(last_read_inbox_message_id, newly_read_count)) {
+     need_update = true;
      auto max_message_id = last_read_inbox_message_id.get_prev_server_message_id();
      LOG(INFO) << "Send read topic history request in topic of " << forum_topic_id << " in " << dialog_id << " up to "
                << max_message_id;
@@ -21,6 +199,126 @@ index 25b1ca9..30bfc9b 100644
    }
    if (need_update) {
      on_forum_topic_changed(dialog_id, topic);
+@@ -628,7 +640,7 @@ void ForumTopicManager::on_update_forum_topic_unread(DialogId dialog_id, ForumTo
+   if (topic->topic_->update_last_read_outbox_message_id(last_read_outbox_message_id)) {
+     need_update = true;
+   }
+-  if (topic->topic_->update_last_read_inbox_message_id(last_read_inbox_message_id, unread_count)) {
++  if (topic->topic_->update_last_read_inbox_message_id(last_read_inbox_message_id, unread_count, last_message_id)) {
+     need_update = true;
+   }
+   if (need_update) {
+@@ -1046,11 +1058,15 @@ void ForumTopicManager::on_delete_forum_topic(DialogId dialog_id, ForumTopicId f
+     dialog_topics->topics_.erase(forum_topic_id);
+     dialog_topics->deleted_topic_ids_.insert(forum_topic_id);
+   }
++  // The local read state lives in the binlog key/value store, not in the disabled topic table.
++  G()->td_db()->get_binlog_pmc()->erase(PSTRING() << "moex_topic_read:" << dialog_id.get() << ':'
++                                                  << forum_topic_id.get());
+   delete_topic_from_database(dialog_id, forum_topic_id, std::move(promise));
+ }
+ 
+ void ForumTopicManager::delete_all_dialog_topics(DialogId dialog_id) {
+   dialog_topics_.erase(dialog_id);
++  G()->td_db()->get_binlog_pmc()->erase_by_prefix(PSTRING() << "moex_topic_read:" << dialog_id.get() << ':');
+ 
+   auto message_thread_db = G()->td_db()->get_message_thread_db_async();
+   if (message_thread_db == nullptr) {
+@@ -1175,7 +1191,13 @@ ForumTopicId ForumTopicManager::on_get_forum_topic_impl(DialogId dialog_id,
+         LOG(ERROR) << "Receive short forum topic";
+         return ForumTopicId();
+       }
+-      if (topic->topic_ == nullptr || true) {
++      if (topic->topic_ != nullptr) {
++        forum_topic_full->preserve_local_read(*topic->topic_);
++      } else if (!topic->stored_local_read_.empty()) {
++        forum_topic_full->preserve_local_read(topic->stored_local_read_);
++        topic->stored_local_read_.clear();
++      }
++      {
+         auto old_file_ids = get_topic_file_ids(topic);
+         topic->topic_ = std::move(forum_topic_full);
+         topic->need_save_to_database_ = true;  // TODO temporary
+@@ -1289,6 +1311,7 @@ ForumTopicManager::DialogTopics *ForumTopicManager::add_dialog_topics(DialogId d
+   auto *dialog_topics = dialog_topics_.get_pointer(dialog_id);
+   if (dialog_topics == nullptr) {
+     auto new_dialog_topics = make_unique<DialogTopics>();
++    new_dialog_topics->dialog_id_ = dialog_id;
+     dialog_topics = new_dialog_topics.get();
+     dialog_topics_.set(dialog_id, std::move(new_dialog_topics));
+   }
+@@ -1306,6 +1329,16 @@ ForumTopicManager::Topic *ForumTopicManager::add_topic(DialogTopics *dialog_topi
+       return nullptr;
+     }
+     auto new_topic = make_unique<Topic>();
++    // The upstream topic table is disabled in this TDLib revision. The existing
++    // per-account binlog key/value store is available and read from memory here.
++    auto key = PSTRING() << "moex_topic_read:" << dialog_topics->dialog_id_.get() << ':' << forum_topic_id.get();
++    auto saved = G()->td_db()->get_binlog_pmc()->get(key);
++    if (!saved.empty() && saved.size() <= 128) {
++      auto status = log_event_parse(new_topic->stored_local_read_, saved);
++      if (status.is_error()) {
++        new_topic->stored_local_read_.clear();
++      }
++    }
+     topic = new_topic.get();
+     CHECK(forum_topic_id.is_valid());
+     dialog_topics->topics_.set(forum_topic_id, std::move(new_topic));
+@@ -1400,6 +1433,15 @@ void ForumTopicManager::save_topic_to_database(DialogId dialog_id, const Topic *
+   }
+   topic->need_save_to_database_ = false;
+ 
++  if (topic->topic_ != nullptr) {
++    auto key = PSTRING() << "moex_topic_read:" << dialog_id.get() << ':' << topic->info_->get_forum_topic_id().get();
++    auto local_read = topic->topic_->get_local_read_state();
++    if (local_read.empty()) {
++      G()->td_db()->get_binlog_pmc()->erase(key);
++    } else {
++      G()->td_db()->get_binlog_pmc()->set(key, log_event_store(local_read).as_slice().str());
++    }
++  }
+   auto message_thread_db = G()->td_db()->get_message_thread_db_async();
+   if (message_thread_db == nullptr) {
+     return;
+diff --git a/td/telegram/ForumTopicManager.h b/td/telegram/ForumTopicManager.h
+index 2432a54..476c4e8 100644
+--- a/td/telegram/ForumTopicManager.h
++++ b/td/telegram/ForumTopicManager.h
+@@ -101,7 +101,8 @@ class ForumTopicManager final : public Actor {
+ 
+   void delete_all_dialog_topics(DialogId dialog_id);
+ 
+-  void read_forum_topic_messages(DialogId dialog_id, ForumTopicId forum_topic_id, MessageId last_read_inbox_message_id);
++  void read_forum_topic_messages(DialogId dialog_id, ForumTopicId forum_topic_id, MessageId last_read_inbox_message_id,
++                                 const vector<MessageId> &viewed_message_ids);
+ 
+   void on_update_forum_topic_unread(DialogId dialog_id, ForumTopicId forum_topic_id, MessageId last_message_id,
+                                     MessageId last_read_inbox_message_id, MessageId last_read_outbox_message_id,
+@@ -151,6 +152,7 @@ class ForumTopicManager final : public Actor {
+   struct Topic {
+     unique_ptr<ForumTopicInfo> info_;
+     unique_ptr<ForumTopic> topic_;
++    vector<int64> stored_local_read_;
+     int32 receive_date_ = 0;
+     int32 message_count_ = 0;
+     mutable bool need_save_to_database_ = true;
+@@ -165,6 +167,7 @@ class ForumTopicManager final : public Actor {
+   };
+ 
+   struct DialogTopics {
++    DialogId dialog_id_;
+     WaitFreeHashMap<ForumTopicId, unique_ptr<Topic>, ForumTopicIdHash> topics_;
+     WaitFreeHashSet<ForumTopicId, ForumTopicIdHash> deleted_topic_ids_;
+   };
+@@ -177,7 +180,7 @@ class ForumTopicManager final : public Actor {
+ 
+   DialogTopics *get_dialog_topics(DialogId dialog_id);
+ 
+-  static Topic *add_topic(DialogTopics *dialog_topics, ForumTopicId forum_topic_id);
++  Topic *add_topic(DialogTopics *dialog_topics, ForumTopicId forum_topic_id);
+ 
+   static Topic *get_topic(DialogTopics *dialog_topics, ForumTopicId forum_topic_id);
+ 
 diff --git a/td/telegram/MessageQueryManager.cpp b/td/telegram/MessageQueryManager.cpp
 index 537d6e4..3219b99 100644
 --- a/td/telegram/MessageQueryManager.cpp
@@ -155,7 +453,7 @@ index e05f763..c299d87 100644
    static uint64 save_unpin_all_dialog_messages_on_server_log_event(DialogId dialog_id);
  
 diff --git a/td/telegram/MessagesManager.cpp b/td/telegram/MessagesManager.cpp
-index 0669e9c..c511966 100644
+index 0669e9c..86db65b 100644
 --- a/td/telegram/MessagesManager.cpp
 +++ b/td/telegram/MessagesManager.cpp
 @@ -120,6 +120,7 @@
@@ -265,6 +563,15 @@ index 0669e9c..c511966 100644
    if (source == MessageSource::MessageThreadHistory) {
      if (!top_thread_message_id.is_valid() || !max_message_id.is_valid()) {
        return Status::OK();
+@@ -17015,7 +17087,7 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
+       return Status::OK();
+     }
+ 
+-    td_->forum_topic_manager_->read_forum_topic_messages(dialog_id, forum_topic_id, max_message_id);
++    td_->forum_topic_manager_->read_forum_topic_messages(dialog_id, forum_topic_id, max_message_id, message_ids);
+     return Status::OK();
+   }
+   if (source == MessageSource::MonoforumHistory) {
 @@ -17035,6 +17107,26 @@ Status MessagesManager::view_messages(DialogId dialog_id, vector<MessageId> mess
    return Status::OK();
  }

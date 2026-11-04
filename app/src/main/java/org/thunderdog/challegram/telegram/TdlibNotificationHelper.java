@@ -168,10 +168,42 @@ public class TdlibNotificationHelper implements Iterable<TdlibNotificationGroup>
 
   private boolean haveRebuilt;
 
+  // Topic settings are separate from the chat mute state used by this TDLib's local notifications.
+  // Returns how many of the added notifications were dropped.
+  private int dropMutedTopicNotifications (TdApi.UpdateNotificationGroup update) {
+    if (update.addedNotifications == null || update.addedNotifications.length == 0) return 0;
+    final boolean mentionGroup = update.type instanceof TdApi.NotificationGroupTypeMentions;
+    List<TdApi.Notification> kept = null;
+    for (int i = 0; i < update.addedNotifications.length; i++) {
+      TdApi.Notification notification = update.addedNotifications[i];
+      boolean muted = notification.type instanceof TdApi.NotificationTypeNewMessage &&
+        moe.kirao.mgx.topics.XgramTopicMute.dropsNotification(tdlib, ((TdApi.NotificationTypeNewMessage) notification.type).message, mentionGroup);
+      if (muted) {
+        if (kept == null) {
+          kept = new ArrayList<>();
+          for (int j = 0; j < i; j++) kept.add(update.addedNotifications[j]);
+        }
+        tdlib.client().send(new TdApi.RemoveNotification(update.notificationGroupId, notification.id), tdlib.silentHandler());
+      } else if (kept != null) {
+        kept.add(notification);
+      }
+    }
+    if (kept == null) return 0;
+    int dropped = update.addedNotifications.length - kept.size();
+    update.addedNotifications = kept.toArray(new TdApi.Notification[0]);
+    return dropped;
+  }
+
   public void updateGroup (TdApi.UpdateNotificationGroup update) {
     if (!accept(update.type))
       return;
-    boolean isSilent = update.notificationSoundId == 0;
+    final int droppedCount = dropMutedTopicNotifications(update);
+    if (droppedCount > 0) {
+      // TDLib still counts the dropped notifications until it handles their RemoveNotification.
+      update.totalCount = Math.max(0, update.totalCount - droppedCount);
+    }
+    // Nothing that was added is left to alert about: no sound, no re-shown dismissed group.
+    boolean isSilent = update.notificationSoundId == 0 || (droppedCount > 0 && update.addedNotifications.length == 0);
     if (!isSilent && update.notificationSettingsChatId != 0 && ChatId.isUserChat(update.notificationSettingsChatId) && tdlib.settings().needMuteNonContacts()) {
       TdApi.User user = tdlib.chatUser(update.notificationSettingsChatId);
       if (user != null && !user.isContact) {

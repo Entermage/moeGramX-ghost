@@ -473,7 +473,7 @@ public class FileProvider extends ContentProvider {
       Map.Entry<String, File> mostSpecific = null;
       for (Map.Entry<String, File> root : mRoots.entrySet()) {
         final String rootPath = root.getValue().getPath();
-        if (path.startsWith(rootPath) && (mostSpecific == null
+        if (belongsToRoot(path, rootPath) && (mostSpecific == null
           || rootPath.length() > mostSpecific.getValue().getPath().length())) {
           mostSpecific = root;
         }
@@ -527,11 +527,19 @@ public class FileProvider extends ContentProvider {
         throw new IllegalArgumentException("Failed to resolve canonical path for " + file);
       }
 
-      if (!file.getPath().startsWith(root.getPath())) {
+      if (!belongsToRoot(file.getPath(), root.getPath())) {
         throw new SecurityException("Resolved path jumped beyond configured root");
       }
 
       return file;
+    }
+
+    // "/files/vcf" must not contain "/files/vcf_backup": compare whole path segments.
+    static boolean belongsToRoot (String path, String rootPath) {
+      if (rootPath.endsWith("/")) {
+        return path.startsWith(rootPath);
+      }
+      return path.equals(rootPath) || path.startsWith(rootPath + "/");
     }
 
     private static final String PREFIX_INTERNAL = "internal_";

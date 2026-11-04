@@ -2985,15 +2985,15 @@ public class TD {
     return waveform;*/
   }
 
-  public static void processAlbum (Tdlib tdlib, long chatId, TdApi.MessageSendOptions options, List<TdApi.Function<?>> functions, List<TdApi.InputMessageContent> album) {
+  public static void processAlbum (Tdlib tdlib, long chatId, @Nullable TdApi.MessageTopic topicId, TdApi.MessageSendOptions options, List<TdApi.Function<?>> functions, List<TdApi.InputMessageContent> album) {
     if (album == null || album.isEmpty())
       return;
     if (album.size() == 1) {
-      processSingle(tdlib, chatId, options, functions, album.get(0));
+      processSingle(tdlib, chatId, topicId, options, functions, album.get(0));
     } else {
       TdApi.InputMessageContent[] array = new TdApi.InputMessageContent[album.size()];
       album.toArray(array);
-      functions.add(new TdApi.SendMessageAlbum(chatId, null, null, options, array));
+      functions.add(new TdApi.SendMessageAlbum(chatId, topicId, null, options, array));
     }
     album.clear();
   }
@@ -3050,8 +3050,8 @@ public class TD {
     return functions;
   }
 
-  public static void processSingle (Tdlib tdlib, long chatId, TdApi.MessageSendOptions options, List<TdApi.Function<?>> functions, TdApi.InputMessageContent content) {
-    functions.add(new TdApi.SendMessage(chatId, null, null, options, null, content));
+  public static void processSingle (Tdlib tdlib, long chatId, @Nullable TdApi.MessageTopic topicId, TdApi.MessageSendOptions options, List<TdApi.Function<?>> functions, TdApi.InputMessageContent content) {
+    functions.add(new TdApi.SendMessage(chatId, topicId, null, options, null, content));
   }
 
   public static boolean withinDistance (TdApi.File file, long offset) {
@@ -4585,7 +4585,8 @@ public class TD {
       return;
     }
     String extension = U.getExtension(sourceFile.getName());
-    final File destFile = StringUtils.isEmpty(extension) ? U.newFile(destDir, sourceFile.getName(), TGMimeType.mimeTypeForExtension(extension)) : U.newFile(destDir, sourceFile.getName());
+    // A name without an extension takes one from the file's MIME type.
+    final File destFile = StringUtils.isEmpty(extension) ? U.newFile(destDir, sourceFile.getName(), TGMimeType.extensionForMimeType(sourceMimeType)) : U.newFile(destDir, sourceFile.getName());
     if (!FileCopyUtils.copy(sourceFile, destFile))
       return;
     UI.post(() -> {

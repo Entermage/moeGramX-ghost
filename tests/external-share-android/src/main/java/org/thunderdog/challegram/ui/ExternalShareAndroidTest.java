@@ -1,8 +1,12 @@
 package org.thunderdog.challegram.ui;
 
 import android.content.ClipData;
+import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.PatternMatcher;
 
@@ -42,6 +46,9 @@ public final class ExternalShareAndroidTest {
     testMimeSelection();
     testViewDocumentClassification();
     testSharedFilePaths();
+    testOwnProvidersAndPrivateDirectories();
+    testContextPolicyRoots();
+    org.thunderdog.challegram.util.OfferedUrisCheck.run();
     System.out.println("PASS: " + assertions + " assertions; manifest filters=" + filters.size());
   }
 
@@ -455,6 +462,8 @@ public final class ExternalShareAndroidTest {
       Path siblingFile = Files.writeString(prefixSibling.resolve("allowed.txt"), "allowed");
 
       String privateCanonical = privateDirectory.toFile().getCanonicalPath();
+      ExternalShareUtils.SharePolicy policy = ExternalShareUtils.SharePolicy.create("com.ayx.mgx",
+        List.of(), List.of(privateCanonical), List.of());
       check(ExternalShareUtils.isPathWithinDirectory(privateCanonical, privateCanonical),
         "private directory must include itself");
       check(ExternalShareUtils.isPathWithinDirectory(privateFile.toFile().getCanonicalPath(), privateCanonical),
@@ -463,49 +472,214 @@ public final class ExternalShareAndroidTest {
         "a path with the same string prefix must not count as private");
 
       checkEquals(externalFile.toFile().getCanonicalPath(),
-        ExternalShareUtils.validateSharedFilePath(Uri.fromFile(externalFile.toFile()), privateCanonical));
+        ExternalShareUtils.validateSharedFilePath(Uri.fromFile(externalFile.toFile()), policy));
       checkEquals(siblingFile.toFile().getCanonicalPath(),
-        ExternalShareUtils.validateSharedFilePath(Uri.fromFile(siblingFile.toFile()), privateCanonical));
+        ExternalShareUtils.validateSharedFilePath(Uri.fromFile(siblingFile.toFile()), policy));
       Path missing = root.resolve("missing.txt");
       checkEquals(missing.toFile().getCanonicalPath(),
-        ExternalShareUtils.validateSharedFilePath(Uri.fromFile(missing.toFile()), privateCanonical));
+        ExternalShareUtils.validateSharedFilePath(Uri.fromFile(missing.toFile()), policy));
       checkEquals("content://provider/item/1?token=opaque",
-        ExternalShareUtils.validateSharedFilePath(Uri.parse("content://provider/item/1?token=opaque"), privateCanonical));
+        ExternalShareUtils.validateSharedFilePath(Uri.parse("content://provider/item/1?token=opaque"), policy));
 
       expectThrows(IOException.class,
-        () -> ExternalShareUtils.validateSharedFilePath(Uri.fromFile(privateFile.toFile()), privateCanonical),
+        () -> ExternalShareUtils.validateSharedFilePath(Uri.fromFile(privateFile.toFile()), policy),
         "a direct private file must be rejected");
 
       File escaped = new File(privateDirectory.toFile(), "../outside.txt");
       checkEquals(externalFile.toFile().getCanonicalPath(),
-        ExternalShareUtils.validateSharedFilePath(Uri.fromFile(escaped), privateCanonical));
+        ExternalShareUtils.validateSharedFilePath(Uri.fromFile(escaped), policy));
 
       Path publicDirectory = Files.createDirectory(root.resolve("public"));
       File traversedIntoPrivate = new File(publicDirectory.toFile(), "../app-private/secret.txt");
       expectThrows(IOException.class,
-        () -> ExternalShareUtils.validateSharedFilePath(Uri.fromFile(traversedIntoPrivate), privateCanonical),
+        () -> ExternalShareUtils.validateSharedFilePath(Uri.fromFile(traversedIntoPrivate), policy),
         "dot-dot traversal into the private directory must be rejected");
 
       Path privateLink = root.resolve("private-link.txt");
       Files.createSymbolicLink(privateLink, privateFile);
       expectThrows(IOException.class,
-        () -> ExternalShareUtils.validateSharedFilePath(Uri.fromFile(privateLink.toFile()), privateCanonical),
+        () -> ExternalShareUtils.validateSharedFilePath(Uri.fromFile(privateLink.toFile()), policy),
         "a symlink into the private directory must be rejected after canonicalization");
 
       checkEquals(externalFile.toFile().getCanonicalPath(),
-        ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(externalFile.toFile()), privateCanonical));
+        ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(externalFile.toFile()), policy));
       expectThrows(IOException.class,
-        () -> ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(missing.toFile()), privateCanonical),
+        () -> ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(missing.toFile()), policy),
         "the worker-stage resolver must reject a missing file");
       expectThrows(IOException.class,
-        () -> ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(publicDirectory.toFile()), privateCanonical),
+        () -> ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(publicDirectory.toFile()), policy),
         "the worker-stage resolver must reject a directory");
       expectThrows(IOException.class,
-        () -> ExternalShareUtils.validateSharedFilePath(Uri.parse("https://example.com/a"), privateCanonical),
+        () -> ExternalShareUtils.validateSharedFilePath(Uri.parse("https://example.com/a"), policy),
         "remote URIs must not pass file validation");
     } finally {
       deleteTree(root);
     }
+  }
+
+  private static void testOwnProvidersAndPrivateDirectories () throws Exception {
+    Path root = Files.createTempDirectory("external-share-own-");
+    try {
+      Path data = Files.createDirectories(root.resolve("data/user/0/com.ayx.mgx"));
+      Path storage = Files.createDirectories(root.resolve("storage/emulated/0"));
+      Path appFiles = Files.createDirectories(storage.resolve("Android/data/com.ayx.mgx/files"));
+      Path appMedia = Files.createDirectories(storage.resolve("Android/media/com.ayx.mgx"));
+      Path appObb = Files.createDirectories(storage.resolve("Android/obb/com.ayx.mgx"));
+      Path otherApp = Files.createDirectories(storage.resolve("Android/data/com.ayx.mgx.other/files"));
+      Path download = Files.createDirectories(storage.resolve("Download"));
+      ExternalShareUtils.SharePolicy policy = ExternalShareUtils.SharePolicy.create("com.ayx.mgx",
+        Arrays.asList("com.ayx.mgx.provider", "com.ayx.mgx.sync.provider;com.example.alias", null),
+        List.of(data.toString()), Arrays.asList(appFiles.toFile(), storage.resolve("Android/data/com.ayx.mgx/cache").toFile(),
+          appMedia.toFile(), appObb.toFile(), null, download.resolve("no-package").toFile()));
+
+      for (String own : new String[] {
+        "content://com.ayx.mgx.provider/logs/tdlib_log.txt",
+        "content://com.ayx.mgx.provider/internal_secret/1.jpg",
+        "content://com.ayx.mgx.provider/internal_2_documents/a.pdf",
+        "content://0@com.ayx.mgx.provider/logs/tdlib_log.txt",
+        "content://10@com.ayx.mgx.provider/internal_0_documents/a.pdf",
+        "content://0%40com.ayx.mgx.provider/logs/tdlib_log.txt",
+        "content://0@COM.AYX.MGX.PROVIDER/logs/tdlib_log.txt",
+        "content://0@com.example.alias/x",
+        "content://0@com.ayx.mgx.sync.provider/x",
+        "content://COM.AYX.MGX.PROVIDER/logs/tdlib_log.txt",
+        "content://com.ayx.mgx.sync.provider/x",
+        "content://com.example.alias/x",
+        "content://com.ayx.mgx.androidx-startup/x",
+        "content://com.ayx.mgx/x",
+        "content:///logs/tdlib_log.txt"}) {
+        expectThrows(IOException.class, () -> ExternalShareUtils.validateSharedFilePath(Uri.parse(own), policy),
+          "this app's own provider must not be read for an outside app: " + own);
+      }
+      Uri offered = Uri.parse("content://com.ayx.mgx.provider/internal_0_documents/report.pdf");
+      expectThrows(IOException.class, () -> ExternalShareUtils.validateSharedFilePath(offered, policy),
+        "an own URI that was never offered is refused");
+      org.thunderdog.challegram.util.OfferedUris.remember(offered);
+      checkEquals(offered.toString(), ExternalShareUtils.validateSharedFilePath(offered, policy));
+      expectThrows(IOException.class, () -> ExternalShareUtils.validateSharedFilePath(
+          Uri.parse("content://0@com.ayx.mgx.provider/internal_0_documents/report.pdf"), policy),
+        "only the exact offered URI comes back, not a userId-prefixed variant");
+      Uri prefixed = Uri.parse("content://0@com.ayx.mgx.provider/logs/tdlib_log.txt");
+      check("0@com.ayx.mgx.provider".equals(prefixed.getAuthority()) && "0".equals(prefixed.getUserInfo()) &&
+        "com.ayx.mgx.provider".equals(prefixed.getHost()), "the framework keeps the userId in the authority");
+      expectThrows(IOException.class, () -> ExternalShareUtils.validateSharedFilePath(
+          Uri.parse("content://com.ayx.mgx.provider/internal_0_documents/other.pdf"), policy),
+        "offering one file does not open its directory");
+      for (String foreign : new String[] {
+        "content://com.android.providers.downloads.documents/document/42",
+        "content://media/external/images/media/7",
+        "content://com.ayx.mgxother.provider/a",
+        "content://0@com.android.providers.downloads.documents/document/42",
+        "content://0@media/external/images/media/7",
+        "content://10@com.ayx.mgxother.provider/a"}) {
+        checkEquals(foreign, ExternalShareUtils.validateSharedFilePath(Uri.parse(foreign), policy));
+      }
+
+      Files.createDirectories(data.resolve("files/logs"));
+      Path inData = Files.writeString(data.resolve("files/logs/tdlib_log.txt"), "log");
+      Path inFiles = Files.writeString(appFiles.resolve("x.jpg"), "x");
+      Path inMedia = Files.writeString(appMedia.resolve("y.jpg"), "y");
+      Path inObb = Files.writeString(appObb.resolve("main.obb"), "z");
+      for (Path privateFile : new Path[] {inData, inFiles, inMedia, inObb}) {
+        expectThrows(IOException.class, () -> ExternalShareUtils.validateSharedFilePath(Uri.fromFile(privateFile.toFile()), policy),
+          "a file URI into this app's private storage is refused: " + privateFile);
+      }
+      File traversal = new File(download.toFile(), "../Android/data/com.ayx.mgx/files/x.jpg");
+      expectThrows(IOException.class, () -> ExternalShareUtils.validateSharedFilePath(Uri.fromFile(traversal), policy),
+        "dot-dot traversal into app-specific external storage is refused");
+      Path other = Files.writeString(otherApp.resolve("ok.jpg"), "ok");
+      Path publicFile = Files.writeString(download.resolve("public.pdf"), "pdf");
+      checkEquals(other.toFile().getCanonicalPath(), ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(other.toFile()), policy));
+      checkEquals(publicFile.toFile().getCanonicalPath(), ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(publicFile.toFile()), policy));
+      check(ExternalShareUtils.appSpecificRoot(appFiles.toFile(), "com.ayx.mgx").toPath().equals(storage.resolve("Android/data/com.ayx.mgx")),
+        "app-specific root");
+      check(ExternalShareUtils.appSpecificRoot(download.toFile(), "com.ayx.mgx") == null, "no package directory");
+      checkEquals(String.join(",", List.of(data.toFile().getCanonicalPath(),
+        storage.resolve("Android/data/com.ayx.mgx").toFile().getCanonicalPath(), appMedia.toFile().getCanonicalPath(),
+        appObb.toFile().getCanonicalPath())), String.join(",", policy.privateDirectories));
+    } finally {
+      deleteTree(root);
+    }
+  }
+
+  /**
+   * The production SharePolicy.forContext on a framework ContextWrapper: the credential-protected data
+   * directory and, since Android 7, the device-protected one (/data/user_de/<user>/<package>) are both
+   * private. Only harmless marker files in a temporary directory are used.
+   */
+  private static void testContextPolicyRoots () throws Exception {
+    Path root = Files.createTempDirectory("external-share-context-");
+    try {
+      Path ce = Files.createDirectories(root.resolve("data/user/0/com.ayx.mgx"));
+      Path de = Files.createDirectories(root.resolve("data/user_de/0/com.ayx.mgx"));
+      Path deSibling = Files.createDirectories(root.resolve("data/user_de/0/com.ayx.mgx.other"));
+      Path storage = Files.createDirectories(root.resolve("storage/emulated/0"));
+      Path appFiles = Files.createDirectories(storage.resolve("Android/data/com.ayx.mgx/files"));
+      Path download = Files.createDirectories(storage.resolve("Download"));
+      Path ceFile = Files.writeString(Files.createDirectories(ce.resolve("files")).resolve("marker.txt"), "marker");
+      Path deFile = Files.writeString(Files.createDirectories(de.resolve("shared_prefs")).resolve("marker.xml"), "marker");
+      Path deRootFile = Files.writeString(de.resolve("marker.txt"), "marker");
+      Path siblingFile = Files.writeString(deSibling.resolve("ok.txt"), "ok");
+      Path publicFile = Files.writeString(download.resolve("public.txt"), "ok");
+
+      ExternalShareUtils.SharePolicy policy = ExternalShareUtils.SharePolicy.forContext(fakeContext(ce, de, appFiles, false), true);
+      expectThrows(IOException.class, () -> ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(ceFile.toFile()), policy),
+        "a file URI into this app's credential-protected storage is refused");
+      for (Path privateFile : new Path[] {deFile, deRootFile}) {
+        expectThrows(IOException.class, () -> ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(privateFile.toFile()), policy),
+          "a file URI into this app's device-protected storage is refused: " + privateFile);
+      }
+      File traversal = new File(download.toFile(), "../../../../data/user_de/0/com.ayx.mgx/shared_prefs/marker.xml");
+      check(traversal.getCanonicalFile().equals(deFile.toFile().getCanonicalFile()), "traversal fixture");
+      expectThrows(IOException.class, () -> ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(traversal), policy),
+        "a file URI into this app's device-protected storage is refused through dot-dot");
+      expectThrows(IOException.class, () -> ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(appFiles.resolve("x").toFile()), policy),
+        "app-specific external storage is still private");
+      checkEquals(siblingFile.toFile().getCanonicalPath(), ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(siblingFile.toFile()), policy));
+      checkEquals(publicFile.toFile().getCanonicalPath(), ExternalShareUtils.resolveSharedFilePath(Uri.fromFile(publicFile.toFile()), policy));
+      check(policy.privateDirectories.contains(ce.toFile().getCanonicalPath()) &&
+        policy.privateDirectories.contains(de.toFile().getCanonicalPath()), "both private data roots: " + policy.privateDirectories);
+      expectThrows(IOException.class, () -> ExternalShareUtils.validateSharedFilePath(
+          Uri.parse("content://0@com.ayx.mgx.provider/logs/tdlib_log.txt"), policy),
+        "the package prefix refuses a userId-prefixed own provider even without the provider list");
+
+      // Before Android 7 there is no device-protected storage to look up.
+      ExternalShareUtils.SharePolicy legacy = ExternalShareUtils.SharePolicy.forContext(fakeContext(ce, de, appFiles, true), false);
+      check(!legacy.privateDirectories.contains(de.toFile().getCanonicalPath()), "no device-protected root before Android 7");
+      // A device-protected root that cannot be located refuses every file instead of allowing it.
+      expectThrows(IOException.class, () -> ExternalShareUtils.SharePolicy.forContext(fakeContext(ce, de, appFiles, true), true),
+        "an unknown device-protected root must fail closed");
+    } finally {
+      deleteTree(root);
+    }
+  }
+
+  private static Context fakeContext (Path ce, Path de, Path appFiles, boolean failDeviceProtected) throws Exception {
+    ApplicationInfo info = allocateApplicationInfo();
+    info.dataDir = ce.toString();
+    return new ContextWrapper(null) {
+      @Override public String getPackageName () { return "com.ayx.mgx"; }
+      @Override public PackageManager getPackageManager () { return null; } // Provider list unavailable.
+      @Override public ApplicationInfo getApplicationInfo () { return info; }
+      @Override public File[] getExternalFilesDirs (String type) { return new File[] {appFiles.toFile()}; }
+      @Override public File[] getExternalCacheDirs () { return new File[0]; }
+      @SuppressWarnings("deprecation") @Override public File[] getExternalMediaDirs () { return new File[0]; }
+      @Override public File[] getObbDirs () { return new File[0]; }
+      @Override public Context createDeviceProtectedStorageContext () {
+        if (failDeviceProtected) throw new IllegalStateException("no device-protected storage");
+        return new ContextWrapper(null) {
+          @Override public File getDataDir () { return de.toFile(); }
+        };
+      }
+    };
+  }
+
+  // The framework constructor reads a native clock that a plain JVM lacks.
+  private static ApplicationInfo allocateApplicationInfo () throws Exception {
+    java.lang.reflect.Field field = Class.forName("sun.misc.Unsafe").getDeclaredField("theUnsafe");
+    field.setAccessible(true);
+    Object unsafe = field.get(null);
+    return (ApplicationInfo) unsafe.getClass().getMethod("allocateInstance", Class.class).invoke(unsafe, ApplicationInfo.class);
   }
 
   private static void deleteTree (Path root) throws IOException {

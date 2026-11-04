@@ -86,10 +86,21 @@ public class NavigationController implements Future<View>, ThemeChangeListener, 
 
   private ArrayList<ViewController<?>> childWrappers;
   private final Context context;
+  private final boolean ownsGlobalOngoingBar;
 
   public NavigationController (Context context) {
+    this(context, true);
+  }
+
+  /** Auxiliary navigation panes share the primary navigation's global player/call bar. */
+  public NavigationController (Context context, boolean ownsGlobalOngoingBar) {
     this.context = context;
+    this.ownsGlobalOngoingBar = ownsGlobalOngoingBar;
     processor = new NavigationProcessor(this);
+  }
+
+  public boolean ownsGlobalOngoingBar () {
+    return ownsGlobalOngoingBar;
   }
 
   public Context getContext () {
@@ -237,6 +248,7 @@ public class NavigationController implements Future<View>, ThemeChangeListener, 
       contentWrapper.addView(controller.getValue());
     }
     controller.attachNavigationController(this);
+    syncKeyboardState(controller);
     controller.onPrepareToShow();
     controller.onAttachStateChanged(this, true);
     checkDisallowScreenshots();
@@ -254,9 +266,16 @@ public class NavigationController implements Future<View>, ThemeChangeListener, 
       contentWrapper.addView(controller.getValue(), index);
     }
     controller.attachNavigationController(this);
+    syncKeyboardState(controller);
     controller.onPrepareToShow();
     controller.onAttachStateChanged(this, true);
     checkDisallowScreenshots();
+  }
+
+  private void syncKeyboardState (ViewController<?> controller) {
+    if (controller.getKeyboardState() && !UI.getContext(context).isKeyboardVisible()) {
+      controller.onKeyboardStateChanged(false);
+    }
   }
 
   public void removeChildWrapper (ViewController<?> controller) {
@@ -615,10 +634,10 @@ public class NavigationController implements Future<View>, ThemeChangeListener, 
     }
   }
 
-  private static final int TRANSLATION_HORIZONTAL = 1;
-  private static final int TRANSLATION_VERTICAL = 2;
-  private static final int TRANSLATION_FADE = 3;
-  private static final int TRANSLATION_NONE = 4;
+  private static final int TRANSLATION_HORIZONTAL = HeaderView.MODE_HORIZONTAL;
+  private static final int TRANSLATION_VERTICAL = HeaderView.MODE_VERTICAL;
+  private static final int TRANSLATION_FADE = HeaderView.MODE_FADE;
+  private static final int TRANSLATION_NONE = HeaderView.MODE_NONE;
 
   private int translationMode;
   private boolean translatingForward;
@@ -927,6 +946,14 @@ public class NavigationController implements Future<View>, ThemeChangeListener, 
       }
     }
 
+    ViewController<?> from = forward ? getStack().getPrevious() : getStack().getCurrent();
+    moe.kirao.mgx.layout.MoexTwoPane panes = UI.getContext(context).moexTwoPane();
+    if ((mode & MODE_FADE) == 0 && !fastAnimation && panes != null &&
+        from != null && !from.usePopupMode() && !controller.usePopupMode() &&
+        panes.switchesContentImmediately(this, from, controller, forward)) {
+      direction = TRANSLATION_NONE;
+    }
+
     int rebase = 0;
 
     if ((mode & MODE_REBASE) == MODE_REBASE) {
@@ -936,7 +963,7 @@ public class NavigationController implements Future<View>, ThemeChangeListener, 
       }
     }
 
-    if (USE_ASYNC_IN_STEP_2 || !controller.needAsynchronousAnimation() || !isAttachedToWindow) {
+    if (direction == TRANSLATION_NONE || USE_ASYNC_IN_STEP_2 || !controller.needAsynchronousAnimation() || !isAttachedToWindow) {
       controller.executeAnimationReadyListeners();
       animateNavigate(controller, direction, forward, rebase, fastAnimation);
     } else {
@@ -982,6 +1009,10 @@ public class NavigationController implements Future<View>, ThemeChangeListener, 
     final boolean[] isDone = new boolean[1];
     Runnable onDone = () -> {
       setFactor(forward ? 0f : 1f);
+      if (direction == TRANSLATION_NONE) {
+        // No content translation frames run, but header buttons/menus still need their final state.
+        headerView.setTranslation(forward ? 0f : 1f);
+      }
       isDone[0] = true;
       if (forward) {
         removeFadeView();
@@ -1002,7 +1033,8 @@ public class NavigationController implements Future<View>, ThemeChangeListener, 
       }
     };
 
-    if (!isAttachedToWindow) {
+    if (!isAttachedToWindow || direction == TRANSLATION_NONE) {
+      animatorRunning = false;
       onDone.run();
       return;
     }

@@ -124,6 +124,12 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
       adapter.updateValuedSettingById(viewId);
     } else if (viewId == R.id.btn_hideMessagePanelButtons) {
       showHideMessagePanelOptions();
+    } else if (viewId == R.id.btn_moexTwoPaneLayout) {
+      MoexConfig.instance().toggleTwoPaneLayout();
+      adapter.updateValuedSettingById(viewId);
+      if (context.moexTwoPane() != null) {
+        context.moexTwoPane().update();
+      }
     } else if (viewId == R.id.btn_hideBottomBar) {
       MoexConfig.instance().toggleHideBottomBar();
       adapter.updateValuedSettingById(viewId);
@@ -204,8 +210,16 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
   }
 
   private void refreshChatListFilter () {
-    if (navigationController() == null) return;
-    for (ViewController<?> controller : navigationController().getStack().getAll()) {
+    refreshChatListFilter(context.navigation());
+    MainController left = context.moexTwoPane() != null ? context.moexTwoPane().leftMain() : null;
+    if (left != null && left.navigationController() != context.navigation()) {
+      refreshChatListFilter(left.navigationController());
+    }
+  }
+
+  private void refreshChatListFilter (org.thunderdog.challegram.navigation.NavigationController navigation) {
+    if (navigation == null) return;
+    for (ViewController<?> controller : navigation.getStack().getAll()) {
       if (controller.tdlib() != tdlib) continue;
       if (controller instanceof MainController) {
         ((MainController) controller).refreshMessageFilter();
@@ -476,6 +490,8 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
           }
 
           view.setData(b.length() == 0 ? Lang.getString(R.string.BioNone) : b.toString());
+        } else if (itemId == R.id.btn_moexTwoPaneLayout) {
+          view.getToggler().setRadioEnabled(MoexConfig.twoPaneLayout, isUpdate);
         } else if (itemId == R.id.btn_hideBottomBar) {
           view.getToggler().setRadioEnabled(MoexConfig.hideBottomBar, isUpdate);
         } else if (itemId == R.id.btn_disableStickerTimestamp) {
@@ -563,6 +579,12 @@ public class SettingsMoexController extends RecyclerViewController<SettingsMoexC
         items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
         break;
       case CATEGORY_INTERFACE:
+        items.add(new ListItem(ListItem.TYPE_HEADER, 0, 0, R.string.MoexWideScreens));
+        items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
+        items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_moexTwoPaneLayout, 0, R.string.MoexTwoPaneLayout));
+        items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
+        items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.MoexTwoPaneLayoutInfo));
+
         items.add(new ListItem(ListItem.TYPE_HEADER, 0, 0, R.string.DrawerOptions));
         items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
         items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_blurDrawer, 0, R.string.MoexBlurDrawer));

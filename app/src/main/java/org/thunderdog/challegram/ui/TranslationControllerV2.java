@@ -554,6 +554,7 @@ public class TranslationControllerV2 extends BottomSheetViewController.BottomShe
     public Wrapper (Context context, Tdlib tdlib, ViewController<?> parent) {
       super(context, tdlib);
       this.parent = parent;
+      setPopupSourceController(parent);
       translationControllerFragment = new TranslationControllerV2(context, tdlib, this);
     }
 
@@ -765,6 +766,7 @@ public class TranslationControllerV2 extends BottomSheetViewController.BottomShe
         }
       };
       languageRecyclerWrap.init(null, null);
+      languageRecyclerWrap.setSourceController(themeProvider);
       languageRecyclerWrap.addView(languageRecyclerView, FrameLayoutFix.newParams(Screen.dp(WIDTH), Screen.dp(HEIGHT)));
       languageRecyclerWrap.setAnchorMode(MenuMoreWrap.ANCHOR_MODE_HEADER);
     }

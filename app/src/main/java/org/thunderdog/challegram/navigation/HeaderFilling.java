@@ -81,6 +81,7 @@ import tgx.td.Td;
 public class HeaderFilling extends Drawable implements TGLegacyAudioManager.PlayListener, FactorAnimator.Target, CallManager.CurrentCallListener, TdlibCache.CallStateChangeListener, Runnable, TGPlayerController.TrackChangeListener, TGPlayerController.TrackListener, ClickHelper.Delegate, Destroyable, TGLegacyManager.EmojiLoadListener {
   private HeaderView headerView; // Header that holds the filling
   private final @Nullable NavigationController navigationController;
+  private final boolean ongoingBarEnabled;
 
   // Filling
 
@@ -137,6 +138,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
   public HeaderFilling (HeaderView parent, @Nullable NavigationController navigationController) {
     this.headerView = parent;
     this.navigationController = navigationController;
+    this.ongoingBarEnabled = navigationController == null || navigationController.ownsGlobalOngoingBar();
 
     if (headerView != null) {
       helper = new ClickHelper(this);
@@ -155,7 +157,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
 
     this.textLeft = Screen.dp(72f);
 
-    if (navigationController != null) {
+    if (navigationController != null && ongoingBarEnabled) {
       this.speedCounter = new Counter.Builder()
         .noBackground()
         .allBold(true)
@@ -1155,6 +1157,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
   private FactorAnimator barShowAnimator;
 
   private void setShowOngoingSection (int section, boolean isShowing, boolean needRebuild, boolean force) {
+    if (!ongoingBarEnabled) return;
     if (BitwiseUtils.hasFlag(ongoingSections, section) != isShowing) {
       this.ongoingSections = BitwiseUtils.setFlag(ongoingSections, section, isShowing);
       if (isShowing) {
@@ -1557,6 +1560,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
 
     playbackSpeedPopup = new PopupLayout(headerView.getContext());
     playbackSpeedLayout = new PlaybackSpeedLayout(headerView.getContext());
+    playbackSpeedLayout.setSourceNavigation(navigationController);
     playbackSpeedLayout.init(navigationController != null ? navigationController.getThemeListeners() : null, (speed, needClose) -> {
       TdlibManager.instance().player().setPlaybackSpeed(speed);
       if (needClose) {

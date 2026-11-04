@@ -52,6 +52,8 @@ import java.util.List;
 import java.util.TreeMap;
 
 import moe.kirao.mgx.MoexMessageFilter;
+import moe.kirao.mgx.MoexShadowUnreadManager;
+import moe.kirao.mgx.topics.XgramForums;
 
 import me.vkryl.core.DateUtils;
 import me.vkryl.core.MathUtils;
@@ -96,8 +98,276 @@ public class MessagesLoader implements Client.ResultHandler {
   private boolean canLoadBottom;
 
   private boolean isLoading;
+  private volatile boolean historyPreviewShown, historyPublished;
+  private boolean historyPreviewAttempted;
+  private volatile boolean retainingHistory;
+  private boolean retainedCanLoadTop, retainedCanLoadBottom;
+  private int retainedScrollActions;
+
+  public boolean isRetainingHistory () { return retainingHistory; }
+
+  private boolean cancelRetainedHistoryOnScroll () {
+    if (!retainingHistory || manager.getUserScrollActionsCount() == retainedScrollActions) return false;
+    synchronized (lock) {
+      restoreRetainedHistory();
+      contextId++;
+      lastHandler = null;
+      isLoading = false;
+    }
+    manager.controller().setHistoryLoading(false, false);
+    return true;
+  }
+
+  private void restoreRetainedHistory () {
+    if (retainingHistory) {
+      canLoadTop = retainedCanLoadTop;
+      canLoadBottom = retainedCanLoadBottom;
+      retainingHistory = false;
+    }
+  }
+
+  public boolean isShowingHistoryPreview () { return historyPreviewShown; }
+
+  // A shown snapshot stays read-only until an authoritative page replaces it. When that request
+  // is cancelled or fails, reload it: a few delayed retries, then user actions. The pending retry is
+  // a real Handler callback, removed when the page blurs or is reused, so it never keeps the page.
+  static final int MAX_HISTORY_PREVIEW_RETRIES = 3;
+  private int historyPreviewFailures;
+  private @Nullable Runnable historyPreviewRetry;
+  private long historyPreviewRetryContext;
+  // End of a server FLOOD_WAIT (elapsedRealtime). Survives blur, focus and reuse: nothing reloads earlier.
+  private long historyPreviewAllowedAt;
+  // The arrow asked for the latest messages: the replacement request starts at the history end.
+  private boolean historyPreviewToEnd;
+
+  static long historyPreviewRetryDelay (int failures, @Nullable TdApi.Error error) {
+    long fallback = 2000L << Math.min(Math.max(failures - 1, 0), 4);
+    return error != null ? XgramForums.retryAfterMs(error, fallback) : fallback;
+  }
+
+  long historyPreviewWaitMs () {
+    return Math.max(0, historyPreviewAllowedAt - SystemClock.elapsedRealtime());
+  }
+
+  private void continueHistoryPreview (long context, @Nullable TdApi.Error error) {
+    if (contextId != context) return;
+    if (error != null) {
+      long serverWait = XgramForums.retryAfterMs(error, 0);
+      if (serverWait > 0) historyPreviewAllowedAt = Math.max(historyPreviewAllowedAt, SystemClock.elapsedRealtime() + serverWait);
+    }
+    if (!historyPreviewShown || historyPublished || (historyPreviewRetry != null && historyPreviewRetryContext == context)) return;
+    long delay = 0;
+    if (error != null) {
+      if (++historyPreviewFailures > MAX_HISTORY_PREVIEW_RETRIES) return; // Focus, a drag or the arrow retries.
+      delay = historyPreviewRetryDelay(historyPreviewFailures, error);
+    }
+    if (manager.isFocused()) scheduleHistoryPreviewReload(context, delay); // A blurred page resumes on focus.
+  }
+
+  private void scheduleHistoryPreviewReload (long context, long delay) {
+    cancelHistoryPreviewRetry();
+    Runnable retry = new Runnable() {
+      @Override
+      public void run () {
+        if (historyPreviewRetry != this) return;
+        historyPreviewRetry = null;
+        if (contextId == context && manager.isFocused()) reloadHistoryPreview();
+      }
+    };
+    historyPreviewRetry = retry;
+    historyPreviewRetryContext = context;
+    tdlib.ui().postDelayed(retry, Math.max(delay, historyPreviewWaitMs()));
+  }
+
+  private void cancelHistoryPreviewRetry () {
+    Runnable retry = historyPreviewRetry;
+    if (retry != null) {
+      historyPreviewRetry = null;
+      tdlib.ui().removeCallbacks(retry);
+    }
+  }
+
+  /** The page lost focus: drop the pending reload. Focus resumes it, still after any server wait. */
+  public void pauseHistoryPreview () {
+    cancelHistoryPreviewRetry();
+  }
+
+  /** An explicit user action re-arms a stalled snapshot, unless a delayed retry is pending. */
+  public boolean resumeHistoryPreview () {
+    if ((historyPreviewRetry != null && historyPreviewRetryContext == contextId) || !canReloadHistoryPreview()) return false;
+    historyPreviewFailures = 0;
+    return reloadHistoryPreview();
+  }
+
+  /** A drag reads the snapshot rows: a pending request for the history end gives way to one around them. */
+  public void onHistoryPreviewDragged () {
+    if (historyPreviewToEnd && historyPreviewShown && !historyPublished) {
+      historyPreviewToEnd = false;
+      historyPreviewFailures = 0;
+      cancelHistoryPreviewRetry();
+      replaceHistoryPreviewRequest();
+    } else {
+      resumeHistoryPreview();
+    }
+  }
+
+  /** The arrow on a snapshot: keep its rows on screen and replace them with the history end, once. */
+  public void showHistoryPreviewEnd () {
+    if (!historyPreviewShown || historyPublished || getChatId() == 0) return;
+    boolean pending;
+    synchronized (lock) {
+      pending = isLoading || lastHandler != null || hiddenUsersCallback != null;
+    }
+    historyPreviewFailures = 0;
+    if (historyPreviewToEnd && pending) return; // Repeated taps share the pending end request.
+    historyPreviewToEnd = true;
+    // Supersedes a reload around the visible rows; its late answer is dropped by contextId.
+    cancelHistoryPreviewRetry();
+    replaceHistoryPreviewRequest();
+  }
+
+  private boolean canReloadHistoryPreview () {
+    synchronized (lock) {
+      return historyPreviewShown && !historyPublished && !isLoading && lastHandler == null && getChatId() != 0;
+    }
+  }
+
+  private boolean reloadHistoryPreview () {
+    return canReloadHistoryPreview() && replaceHistoryPreviewRequest();
+  }
+
+  private boolean replaceHistoryPreviewRequest () {
+    long wait = historyPreviewWaitMs();
+    if (wait > 0) {
+      scheduleHistoryPreviewReload(contextId, wait); // Never ask again before the server's wait ends.
+      return false;
+    }
+    if (historyPreviewToEnd) {
+      MessageId end = new MessageId(getChatId(), 0);
+      reuse();
+      historyPreviewShown = true; // Read-only until the end page replaces it, like a reload around a row.
+      historyPreviewToEnd = true;
+      canLoadTop = true;
+      scrollMessageId = end;
+      scrollHighlightMode = MessagesManager.HIGHLIGHT_MODE_NONE;
+      load(end, 0, CHUNK_SIZE_SMALL, MODE_REPEAT_INITIAL, true, true, true);
+      return true;
+    }
+    MessageId anchor = manager.findHistoryPreviewAnchor();
+    if (anchor == null) return false;
+    // Same request as a filter refresh: the snapshot stays and is replaced around this row.
+    loadFromMessage(anchor, MessagesManager.HIGHLIGHT_MODE_POSITION_RESTORE, false);
+    return true;
+  }
+
+  public boolean supportsHistoryPreview () {
+    return chat != null && !ChatId.isSecret(chat.id) && specialMode == SPECIAL_MODE_NONE &&
+      messageThread == null && searchFilter == null &&
+      (topicId == null || topicId instanceof TdApi.MessageTopicForum) &&
+      !manager.controller().inPreviewMode() && !manager.controller().isInForceTouchMode();
+  }
+
+  public long historyPreviewTopic () {
+    return topicId instanceof TdApi.MessageTopicForum ? ((TdApi.MessageTopicForum) topicId).forumTopicId : 0;
+  }
+
+  private void showHistoryLoading (long context, boolean loading) {
+    UI.post(() -> {
+      if (contextId == context && supportsHistoryPreview())
+        manager.controller().setHistoryLoading(loading, manager.getAdapter().getMessageCount() > 0);
+    });
+  }
+
+  private void tryHistoryPreview (MessageId from, int mode) {
+    if (historyPreviewAttempted || historyPublished || mode != MODE_INITIAL ||
+        !supportsHistoryPreview() || manager.getAdapter().getMessageCount() != 0) return;
+    historyPreviewAttempted = true;
+    boolean unreadEntry = scrollHighlightMode == MessagesManager.HIGHLIGHT_MODE_UNREAD ||
+      scrollHighlightMode == MessagesManager.HIGHLIGHT_MODE_UNREAD_NEXT;
+    if (!unreadEntry && scrollHighlightMode != MessagesManager.HIGHLIGHT_MODE_NONE &&
+        scrollHighlightMode != MessagesManager.HIGHLIGHT_MODE_POSITION_RESTORE) return;
+    final MessageHistoryPreview.Window window = MessageHistoryPreview.get(tdlib, getChatId(),
+      historyPreviewTopic(), from.getMessageId(), from.isHistoryEnd(), unreadEntry);
+    if (window == null) {
+      tryLocalTopicPreview(from, unreadEntry);
+      return;
+    }
+    final long context = contextId;
+    Background.instance().post(() -> {
+      if (contextId == context && !historyPublished && MessageHistoryPreview.isValid(tdlib, window))
+        processMessages(context, window.messages, -1, null, 0, true, null, window);
+    });
+  }
+
+  // Topic history is always a server query, while ordinary chats open from their stored history.
+  // Without a recent window, show the topic's messages already stored for the chat until it arrives.
+  private void tryLocalTopicPreview (MessageId from, boolean unreadEntry) {
+    if (!(topicId instanceof TdApi.MessageTopicForum) || chat == null) return;
+    requestLocalTopicPage(contextId, new LocalTopicHistory(chat.id, historyPreviewTopic(), from.getMessageId(), unreadEntry), from, unreadEntry);
+  }
+
+  private void requestLocalTopicPage (long context, LocalTopicHistory scan, MessageId from, boolean unreadEntry) {
+    tdlib.send(new TdApi.GetChatHistory(scan.chatId, scan.nextFromMessageId(), 0, LocalTopicHistory.PAGE_SIZE, true), (result, error) -> {
+      if (contextId != context || historyPublished) return;
+      TdApi.Chat current = chat;
+      long chatLastMessageId = current != null && current.lastMessage != null ? current.lastMessage.id : 0;
+      if (result != null && scan.accept(result.messages, chatLastMessageId)) {
+        requestLocalTopicPage(context, scan, from, unreadEntry);
+        return;
+      }
+      if (!scan.publish(tdlib)) return;
+      // Same acceptance as a remembered window: an end entry needs the topic's tail, a position its row.
+      final MessageHistoryPreview.Window window = MessageHistoryPreview.get(tdlib, scan.chatId, scan.topicId,
+        from.getMessageId(), from.isHistoryEnd(), unreadEntry);
+      if (window == null) return;
+      Background.instance().post(() -> {
+        if (contextId == context && !historyPublished && MessageHistoryPreview.isValid(tdlib, window))
+          processMessages(context, window.messages, -1, null, 0, true, null, window);
+      });
+    });
+  }
   private int loadingMode;
   private int filteredPageContinuationCount;
+  private MoexShadowUnreadManager.HiddenUsersCallback hiddenUsersCallback;
+  private Runnable retryHiddenUsersLoad;
+
+  public boolean isWaitingForHiddenUsers () {
+    return hiddenUsersCallback != null;
+  }
+
+  public void retryHiddenUsersOnFocus () {
+    MoexShadowUnreadManager.refreshHiddenUsers(tdlib, false);
+    Runnable retry = retryHiddenUsersLoad;
+    retryHiddenUsersLoad = null;
+    if (retry != null) retry.run();
+  }
+
+  private boolean awaitHiddenUsers (MessageId fromMessageId, int offset, int limit, int mode,
+                                    boolean onlyLocal, boolean allowMoreTop, boolean allowMoreBottom) {
+    if (MoexShadowUnreadManager.areHiddenUsersReady(tdlib)) {
+      retryHiddenUsersLoad = null;
+      return false;
+    }
+    final long currentContextId = contextId;
+    isLoading = true;
+    hiddenUsersCallback = ready -> {
+      if (contextId != currentContextId || hiddenUsersCallback == null) return;
+      hiddenUsersCallback = null;
+      isLoading = false;
+      if (ready) {
+        load(fromMessageId, offset, limit, mode, onlyLocal, allowMoreTop, allowMoreBottom);
+      } else {
+        // Keep an existing visible page. A missing blacklist is never an empty blacklist.
+        retryHiddenUsersLoad = () -> load(fromMessageId, offset, limit, mode, onlyLocal,
+          allowMoreTop, allowMoreBottom);
+        if (supportsHistoryPreview()) manager.controller().setHistoryLoadingError();
+        manager.onNetworkRequestSent();
+        UI.showToast(R.string.Error, Toast.LENGTH_SHORT);
+      }
+    };
+    MoexShadowUnreadManager.ensureHiddenUsers(tdlib, hiddenUsersCallback);
+    return true;
+  }
 
   // A raw read cursor is a search boundary, not necessarily a visible message.
   private @Nullable VisibleUnreadAnchor visibleUnreadAnchor;
@@ -247,6 +517,15 @@ public class MessagesLoader implements Client.ResultHandler {
     return messageThread != null ? messageThread.getMessageTopicId() : null;
   }
 
+  /** XGram: the topic this history belongs to: the thread's, or the open forum topic (scroll positions and live filters). */
+  @Nullable
+  public TdApi.MessageTopic xgramTopicKey () {
+    if (messageThread != null) {
+      return messageThread.getMessageTopicId();
+    }
+    return topicId instanceof TdApi.MessageTopicForum ? topicId : null;
+  }
+
   @Nullable
   public TdApi.MessageTopic getTopicId () {
     return topicId;
@@ -281,36 +560,7 @@ public class MessagesLoader implements Client.ResultHandler {
 
         if (object.getConstructor() == TdApi.Error.CONSTRUCTOR) {
           Log.w(Log.TAG_MESSAGES_LOADER, "Received error: %s", TD.toErrorString(object));
-          TdApi.Message[] unreadFallback = null;
-          synchronized (lock) {
-            if (contextId != currentContextId || lastHandler != this) {
-              return;
-            }
-            lastHandler = null;
-            isLoading = false;
-            mergeMode = MERGE_MODE_NONE;
-            mergeChunk = null;
-            filteredPageContinuationCount = 0;
-            if (unreadNavigationPending) {
-              TdApi.Message[] fallback = finishVisibleUnreadPage(false);
-              if (fallback.length > 0 && !unreadAnchorUnavailable) {
-                unreadFallback = fallback;
-                isLoading = true;
-              } else {
-                unreadNavigationPending = false;
-                unreadAnchorMessages.clear();
-              }
-            }
-          }
-          if (unreadFallback != null) {
-            processMessages(currentContextId, unreadFallback, -1, null, 0, true, null);
-          }
-          UI.post(() -> {
-            if (contextId != currentContextId) return;
-            manager.onNetworkRequestSent();
-            if (unreadAnchorUnavailable) manager.onUnreadAnchorUnavailable();
-            UI.showError(object);
-          });
+          onHistoryError(currentContextId, this, (TdApi.Error) object);
           return;
         }
 
@@ -567,14 +817,14 @@ public class MessagesLoader implements Client.ResultHandler {
             mergeChunk = messages;
             Log.i(Log.TAG_MESSAGES_LOADER, "Loading more groupped messages on the top, count: %d, fromMessageId: %d", loadMoreTopCount, oldestMessage.id);
             Log.ensureReturnType(TdApi.GetChatHistory.class, TdApi.Messages.class);
-            tdlib.client().send(new TdApi.GetChatHistory(messages[0].chatId, oldestMessage.id, 0, loadMoreTopCount, true), this);
+            tdlib.client().send(albumHistoryChunk(messages[0].chatId, oldestMessage.id, 0, loadMoreTopCount), this);
             return;
           } else if (loadMoreBottomCount > 0) {
             mergeMode = MERGE_MODE_BOTTOM;
             mergeChunk = messages;
             Log.i(Log.TAG_MESSAGES_LOADER, "Loading more groupped messages on the bottom, count: %d, fromMessageId: %d", loadMoreBottomCount + 1, newestMessage.id);
             Log.ensureReturnType(TdApi.GetChatHistory.class, TdApi.Messages.class);
-            tdlib.client().send(new TdApi.GetChatHistory(messages[0].chatId, newestMessage.id, -loadMoreBottomCount, loadMoreBottomCount + 1, true), this);
+            tdlib.client().send(albumHistoryChunk(messages[0].chatId, newestMessage.id, -loadMoreBottomCount, loadMoreBottomCount + 1), this);
             return;
           }
         }
@@ -605,7 +855,67 @@ public class MessagesLoader implements Client.ResultHandler {
     }
   }
 
+  private void onHistoryError (long currentContextId, Client.ResultHandler handler, TdApi.Error error) {
+    TdApi.Message[] unreadFallback = null;
+    final int failedMode;
+    synchronized (lock) {
+      if (contextId != currentContextId || lastHandler != handler) {
+        return;
+      }
+      failedMode = loadingMode;
+      lastHandler = null;
+      isLoading = false;
+      mergeMode = MERGE_MODE_NONE;
+      mergeChunk = null;
+      filteredPageContinuationCount = 0;
+      restoreRetainedHistory();
+      if (unreadNavigationPending) {
+        TdApi.Message[] fallback = finishVisibleUnreadPage(false);
+        if (fallback.length > 0 && !unreadAnchorUnavailable) {
+          unreadFallback = fallback;
+          isLoading = true;
+        } else {
+          unreadNavigationPending = false;
+          unreadAnchorMessages.clear();
+        }
+      }
+    }
+    if (unreadFallback != null) {
+      processMessages(currentContextId, unreadFallback, -1, null, 0, true, null);
+    }
+    final boolean hasFallback = unreadFallback != null;
+    UI.post(() -> {
+      if (contextId != currentContextId) return;
+      // A failed page load leaves the shown history intact; only an initial load or snapshot reports it.
+      boolean initialLoad = failedMode == MODE_INITIAL || failedMode == MODE_REPEAT_INITIAL;
+      if (supportsHistoryPreview() && (initialLoad || historyPreviewShown)) manager.controller().setHistoryLoadingError();
+      manager.onNetworkRequestSent();
+      if (unreadAnchorUnavailable) manager.onUnreadAnchorUnavailable();
+      UI.showError(error);
+      if (!hasFallback) continueHistoryPreview(currentContextId, error);
+    });
+  }
+
+  // XGram: completing an album at a page edge must not pull messages from other forum topics.
+  private TdApi.Function<TdApi.Messages> albumHistoryChunk (long chatId, long fromMessageId, int offset, int limit) {
+    if (topicId instanceof TdApi.MessageTopicForum) {
+      return new TdApi.GetForumTopicHistory(chatId, ((TdApi.MessageTopicForum) topicId).forumTopicId, fromMessageId, offset, limit);
+    }
+    return new TdApi.GetChatHistory(chatId, fromMessageId, offset, limit, true);
+  }
+
   public void reuse () {
+    restoreRetainedHistory();
+    historyPreviewShown = historyPublished = historyPreviewAttempted = false;
+    // Closing or renavigating removes the pending reload itself; historyPreviewAllowedAt stays.
+    cancelHistoryPreviewRetry();
+    historyPreviewToEnd = false;
+    manager.controller().setHistoryLoading(false, false);
+    if (hiddenUsersCallback != null) {
+      MoexShadowUnreadManager.cancelHiddenUsers(tdlib, hiddenUsersCallback);
+      hiddenUsersCallback = null;
+    }
+    retryHiddenUsersLoad = null;
     synchronized (lock) {
       contextId = contextId == Long.MAX_VALUE ? 1 : contextId + 1;
       visibleUnreadAnchor = null;
@@ -1130,20 +1440,33 @@ public class MessagesLoader implements Client.ResultHandler {
   }
 
   public void loadFromStart (MessageId startMessageId) {
-    reuse();
+    loadFromStart(startMessageId, false);
+  }
 
+  public void loadFromStart (MessageId startMessageId, boolean retain) {
+    // Repeated arrow taps share the pending tail request instead of restarting it.
+    if (retain && retainingHistory && (isLoading || hiddenUsersCallback != null)) return;
+    boolean previousTop = canLoadTop();
+    boolean previousBottom = canLoadBottom();
+    reuse();
+    retainingHistory = retain;
+    retainedScrollActions = manager.getUserScrollActionsCount();
+    retainedCanLoadTop = previousTop;
+    retainedCanLoadBottom = previousBottom;
     canLoadTop = true;
     canLoadBottom = false;
     scrollMessageId = startMessageId;
     scrollHighlightMode = MessagesManager.HIGHLIGHT_MODE_NONE;
 
-    load(startMessageId, 0, CHUNK_SIZE_SMALL, MODE_INITIAL, true, true, true);
+    load(startMessageId, 0, CHUNK_SIZE_SMALL, retain ? MODE_REPEAT_INITIAL : MODE_INITIAL, true, true, true);
   }
 
   public void loadFromMessage (MessageId messageId, final int highlightMode, boolean force) {
     boolean previousCanLoadTop = canLoadTop;
     boolean previousCanLoadBottom = canLoadBottom;
+    boolean keepPreview = !force && historyPreviewShown;
     reuse();
+    historyPreviewShown = keepPreview;
 
     // A repeat navigation keeps the existing list until a usable page arrives.
     canLoadTop = force || previousCanLoadTop;
@@ -1172,9 +1495,11 @@ public class MessagesLoader implements Client.ResultHandler {
   }
 
   public void cancelUnreadNavigation () {
+    final long context;
     synchronized (lock) {
       if (!unreadNavigationPending) return;
       contextId++;
+      context = contextId;
       resumeUnreadOnFocus = manager.getAdapter().getMessageCount() == 0;
       visibleUnreadAnchor = null;
       unreadAnchorMessages.clear();
@@ -1186,11 +1511,22 @@ public class MessagesLoader implements Client.ResultHandler {
       canLoadTop = unreadPreviousCanLoadTop;
       canLoadBottom = unreadPreviousCanLoadBottom;
     }
+    UI.post(() -> {
+      if (contextId != context) return;
+      if (historyPreviewShown && !historyPublished) {
+        // The dropped request was the snapshot's only way out; keep its rows and reload around them.
+        continueHistoryPreview(context, null);
+      } else {
+        manager.controller().setHistoryLoading(false, false); // Nothing is being updated anymore.
+      }
+    });
   }
 
   public void resumeUnreadNavigation () {
     if (resumeUnreadOnFocus) {
       loadFromMessage(new MessageId(getChatId(), unreadNavigationBoundary), MessagesManager.HIGHLIGHT_MODE_UNREAD, true);
+    } else {
+      resumeHistoryPreview();
     }
   }
 
@@ -1252,6 +1588,7 @@ public class MessagesLoader implements Client.ResultHandler {
         if (contextId != currentContextId) return;
         manager.onUnreadAnchorUnavailable();
         UI.showToast(R.string.MessageNotFound, Toast.LENGTH_SHORT);
+        continueHistoryPreview(currentContextId, null);
       });
       return null;
     }
@@ -1318,6 +1655,10 @@ public class MessagesLoader implements Client.ResultHandler {
         return;
       }
 
+      if (mode == MODE_INITIAL || mode == MODE_REPEAT_INITIAL) showHistoryLoading(contextId, true);
+      if (awaitHiddenUsers(fromMessageId, offset, limit, mode, onlyLocal, allowMoreTop, allowMoreBottom)) return;
+      tryHistoryPreview(fromMessageId, mode);
+
       final long sourceChatId = fromMessageId.getChatId() != 0 ? fromMessageId.getChatId() : messageThread != null ? messageThread.getChatId() : getChatId();
 
       isLoading = true;
@@ -1362,6 +1703,12 @@ public class MessagesLoader implements Client.ResultHandler {
               !manager.controller().isInForceTouchMode();
             Log.ensureReturnType(TdApi.GetMessageThreadHistory.class, TdApi.Messages.class);
             function = new TdApi.GetMessageThreadHistory(sourceChatId, messageThread.getOldestMessageId(), (lastFromMessageId = fromMessageId).getMessageId(), lastOffset = offset, lastLimit = limit);
+          } else if (topicId instanceof TdApi.MessageTopicForum) {
+            loadingLocal = false;
+            loadingSupportsFilteredContinuation = !manager.controller().inPreviewMode() &&
+              !manager.controller().isInForceTouchMode();
+            function = new TdApi.GetForumTopicHistory(sourceChatId, ((TdApi.MessageTopicForum) topicId).forumTopicId,
+              (lastFromMessageId = fromMessageId).getMessageId(), lastOffset = offset, lastLimit = limit);
           } else {
             loadingSupportsFilteredContinuation = !manager.controller().inPreviewMode() &&
               !manager.controller().isInForceTouchMode();
@@ -1404,7 +1751,7 @@ public class MessagesLoader implements Client.ResultHandler {
   }
 
   private boolean loadMore (boolean fromTop, int count, boolean onlyLocal) {
-    if (isLoading || getChatId() == 0 || lastHandler != null) {
+    if (isLoading || historyPreviewShown || retainingHistory || getChatId() == 0 || lastHandler != null) {
       return false;
     }
     if (unreadNavigationStopped && manager.getUserScrollActionsCount() == unreadNavigationScrollActions) {
@@ -1525,13 +1872,24 @@ public class MessagesLoader implements Client.ResultHandler {
   private void processMessages (final long currentContextId, TdApi.Message[] messages, int knownTotalMessageCount,
                                 String nextSearchOffset, long nextSearchFromMessageId,
                                 boolean needFindUnread, @Nullable List<List<TdApi.Message>> missingAlbums) {
+    processMessages(currentContextId, messages, knownTotalMessageCount, nextSearchOffset,
+      nextSearchFromMessageId, needFindUnread, missingAlbums, null);
+  }
+
+  private void processMessages (final long currentContextId, TdApi.Message[] messages, int knownTotalMessageCount,
+                                String nextSearchOffset, long nextSearchFromMessageId,
+                                boolean needFindUnread, @Nullable List<List<TdApi.Message>> missingAlbums,
+                                @Nullable MessageHistoryPreview.Window preview) {
     if (contextId != currentContextId) return;
+    final int loadingMode = preview != null ? MODE_INITIAL : this.loadingMode;
+    final long filterRevision = MoexShadowUnreadManager.hiddenUsersRevision(tdlib);
+    if (chat != null && !MoexShadowUnreadManager.areHiddenUsersReady(tdlib)) return;
     if (Log.isEnabled(Log.TAG_MESSAGES_LOADER)) {
       Log.v(Log.TAG_MESSAGES_LOADER, "Processing %d messages...", messages.length);
     }
 
     final ArrayList<TGMessage> items = new ArrayList<>(messages.length);
-    final boolean unreadNavigationResult = unreadNavigationPending;
+    final boolean unreadNavigationResult = preview == null && unreadNavigationPending;
     final boolean stopUnreadPrefetch = unreadNavigationResult && unreadNavigationStopped;
     final boolean hasResolvedUnreadTarget = unreadNavigationResult && resolvedUnreadTarget;
 
@@ -1543,6 +1901,14 @@ public class MessagesLoader implements Client.ResultHandler {
       lastReadOutboxMessageId = messageThread.getLastReadOutboxMessageId();
       lastReadInboxMessageId = messageThread.getLastReadInboxMessageId();
       hasUnreadMessages = messageThread.hasUnreadMessages(chat);
+    } else if (chat != null && topicId instanceof TdApi.MessageTopicForum) {
+      // XGram: inside a forum topic the topic's own read positions; the chat's cover the whole forum
+      // (its unread count is the sum over all topics, so a read topic would show the separator at an old message).
+      TdApi.ForumTopic topic = manager.controller().xgramTopicReadState();
+      chatId = chat.id;
+      lastReadOutboxMessageId = Math.max(chat.lastReadOutboxMessageId, moe.kirao.mgx.topics.XgramTopicReadOutbox.get(tdlib, chat.id, ((TdApi.MessageTopicForum) topicId).forumTopicId));
+      lastReadInboxMessageId = topic != null ? moe.kirao.mgx.topics.XgramForums.topicReadInboxId(tdlib, chat.id, topic) : chat.lastReadInboxMessageId; // XGram: ghost mode, read up to what was viewed here
+      hasUnreadMessages = topic != null && topic.unreadCount > 0;
     } else if (chat != null) {
       chatId = chat.id;
       lastReadOutboxMessageId = chat.lastReadOutboxMessageId;
@@ -1738,7 +2104,7 @@ public class MessagesLoader implements Client.ResultHandler {
           }
         } else if (!unreadFound) {
           if (top != null && top.getBiggestId() >= lastReadInboxMessageId ||
-              (messageThread != null && cur.getBiggestId() > lastReadInboxMessageId)) {
+              ((messageThread != null || topicId instanceof TdApi.MessageTopicForum) && cur.getBiggestId() > lastReadInboxMessageId)) { // XGram: a topic page can start right after the read position, like a thread
             unreadFound = true;
             if (cur.isOutgoing()) {
               lookForInbox = true;
@@ -1840,6 +2206,23 @@ public class MessagesLoader implements Client.ResultHandler {
           break;
         }
       }
+    }
+
+    if (preview != null) {
+      UI.post(() -> {
+        if (contextId != currentContextId || historyPublished || !MessageHistoryPreview.isValid(tdlib, preview) ||
+            !MoexShadowUnreadManager.areHiddenUsersReady(tdlib) ||
+            MoexShadowUnreadManager.hiddenUsersRevision(tdlib) != filterRevision ||
+            manager.getAdapter().getMessageCount() != 0 || items.isEmpty()) {
+          for (TGMessage item : items) item.onDestroy();
+          return;
+        }
+        historyPreviewShown = true;
+        historyPreviewFailures = 0;
+        manager.displayHistoryPreview(items, preview.anchorId, preview.offset);
+        manager.controller().setHistoryLoading(true, true);
+      });
+      return;
     }
 
     boolean filteredOnlyPage = totalCount == 0 && filteredMessageCount > 0;
@@ -1974,6 +2357,7 @@ public class MessagesLoader implements Client.ResultHandler {
       canLoadBottom = false;
     }
 
+    final TdApi.Message[] rawHistory = messages;
     final int scrollPosition = scrollItemIndex == -1 ? 0 : scrollItemIndex;
     final MessageId scrollMessageId;
     if (!hasResolvedUnreadTarget && unreadBadged != null && !isLoadingFromThreadStart(this.scrollMessageId)) {
@@ -1986,7 +2370,13 @@ public class MessagesLoader implements Client.ResultHandler {
     boolean unreadFoundFinal = unreadFound;
 
     UI.post(() -> {
-      if (contextId != currentContextId || getChatId() != chatId) {
+      if (contextId != currentContextId || getChatId() != chatId ||
+          (chat != null && (!MoexShadowUnreadManager.areHiddenUsersReady(tdlib) ||
+            MoexShadowUnreadManager.hiddenUsersRevision(tdlib) != filterRevision))) {
+        return;
+      }
+      if (cancelRetainedHistoryOnScroll()) {
+        for (TGMessage item : items) item.onDestroy();
         return;
       }
       if (unreadNavigationResult && manager.getUserScrollActionsCount() != unreadNavigationScrollActions) {
@@ -2019,7 +2409,23 @@ public class MessagesLoader implements Client.ResultHandler {
 
       final int chunkSize = scrollItemIndexFinal == -1 ? CHUNK_SIZE_SMALL : CHUNK_SIZE_SEARCH;
       boolean willTryAgain = (loadingMode == MODE_INITIAL || loadingMode == MODE_REPEAT_INITIAL) && items.size() < chunkSize && items.size() > 0;
-      manager.displayMessages(items, loadingMode, scrollPosition, scrollItemView, scrollMessageId, scrollHighlightMode, willTryAgain && loadingLocal, canLoadTop);
+      historyPublished = true;
+      retainingHistory = false;
+      boolean replacingPreview = historyPreviewShown;
+      boolean previewToEnd = replacingPreview && historyPreviewToEnd;
+      historyPreviewShown = false;
+      historyPreviewToEnd = false;
+      if (replacingPreview && unreadNavigationResult) {
+        // The preview is not the unread target. Finish the original navigation with the
+        // resolved fresh page, using replacement semantics so rows are never duplicated.
+        manager.replaceUnreadHistoryPreview(items, scrollPosition, scrollItemView, scrollMessageId,
+          scrollHighlightMode, willTryAgain && loadingLocal, canLoadTop);
+      } else if (replacingPreview) {
+        manager.replaceHistoryPreview(items, rawHistory, willTryAgain && loadingLocal, canLoadTop, previewToEnd);
+      } else {
+        manager.displayMessages(items, loadingMode, scrollPosition, scrollItemView, scrollMessageId, scrollHighlightMode, willTryAgain && loadingLocal, canLoadTop);
+      }
+      manager.controller().setHistoryLoading(false, false);
       if (unreadNavigationResult) {
         synchronized (lock) {
           unreadNavigationPending = resolvedUnreadTarget = false;
@@ -2115,7 +2521,7 @@ public class MessagesLoader implements Client.ResultHandler {
   }
 
   public boolean canLoadTop () {
-    return canLoadTop;
+    return retainingHistory ? retainedCanLoadTop : canLoadTop;
   }
 
   @Nullable
@@ -2172,6 +2578,7 @@ public class MessagesLoader implements Client.ResultHandler {
   }
 
   public boolean canLoadBottom () {
+    if (retainingHistory) return retainedCanLoadBottom;
     if (canLoadBottom) {
       if (isEndReached()) {
         canLoadBottom = false;

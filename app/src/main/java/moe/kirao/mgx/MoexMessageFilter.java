@@ -49,7 +49,7 @@ public final class MoexMessageFilter {
   public static boolean isShadowBannedUser (Tdlib tdlib, long userId) {
     if (tdlib == null || userId == 0) return false;
     return MoexConfig.instance().isShadowBanned(tdlib.id(), userId) ||
-      tdlib.chatFullyBlocked(ChatId.fromUserId(userId));
+      MoexShadowUnreadManager.isMainBlocked(tdlib, userId);
   }
 
   public static boolean matches (Tdlib tdlib, TdApi.Message message) {

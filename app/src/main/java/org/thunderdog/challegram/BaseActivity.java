@@ -570,6 +570,11 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
     Lang.addLanguageListener(this);
 
     navigation.getStack().addChangeListener(navigationStackChangeListener);
+    moexTwoPane = new moe.kirao.mgx.layout.MoexTwoPane(this, navigation, contentView);
+    if (isPasscodeShowing) {
+      moexTwoPane.onActivityPause();
+    }
+    moexTwoPane.update();
     backPressedCallback.setEnabled(isBackPressActionAvailable(handleOnBackPress(false, false)));
     getOnBackPressedDispatcher().addCallback(backPressedCallback);
   }
@@ -1084,6 +1089,9 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
     if (isPasscodeShowing && passcodeController != null) {
       passcodeController.onActivityPause();
     }
+    if (moexTwoPane != null) {
+      moexTwoPane.onActivityPause();
+    }
     notifyActivityPause();
     if (!windows.isEmpty()) {
       for (PopupLayout window : windows) {
@@ -1134,6 +1142,9 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
       passcodeController.onActivityResume();
     }
     notifyActivityResume();
+    if (moexTwoPane != null && !isPasscodeShowing) {
+      moexTwoPane.onActivityResume();
+    }
     if (!windows.isEmpty()) {
       for (PopupLayout window : windows) {
         window.onActivityResume();
@@ -1208,6 +1219,10 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
       throw t;
     }
     setOrientationLockFlags(0);
+    if (moexTwoPane != null) {
+      moexTwoPane.destroy();
+      moexTwoPane = null;
+    }
     if (navigation != null) {
       navigation.getStack().removeChangeListener(navigationStackChangeListener);
       navigation.destroy();
@@ -1240,17 +1255,27 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
     TdlibManager.instance().player().removeTrackChangeListener(this);
   }
 
-  /*@Override
-  public void onMultiWindowModeChanged (boolean isInMultiWindowMode, Configuration newConfig) {
-    super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig);
-    navigation.onMultiWindowModeChanged(isInMultiWindowMode);
-    if (isPasscodeShowing) {
-      navigation.onMultiWindowModeChanged(isInMultiWindowMode);
+  // The framework's two-argument overload also dispatches this callback on API 26+.
+  @Override
+  @SuppressWarnings("deprecation")
+  public void onMultiWindowModeChanged (boolean isInMultiWindowMode) {
+    super.onMultiWindowModeChanged(isInMultiWindowMode);
+    if (navigation != null) {
+      for (ViewController<?> c : navigation.getStack().getAll()) {
+        c.onMultiWindowModeChanged(isInMultiWindowMode);
+      }
+    }
+    if (moexTwoPane != null) {
+      moexTwoPane.onMultiWindowModeChanged(isInMultiWindowMode);
+      moexTwoPane.update();
+    }
+    if (isPasscodeShowing && passcodeController != null) {
+      passcodeController.onMultiWindowModeChanged(isInMultiWindowMode);
     }
     if (camera != null) {
-      navigation.onMultiWindowModeChanged(isInMultiWindowMode);
+      camera.onMultiWindowModeChanged(isInMultiWindowMode);
     }
-  }*/
+  }
 
   private static final int SYSTEM_NIGHT_MODE_UNSPECIFIED = 0;
   private static final int SYSTEM_NIGHT_MODE_NO = 1;
@@ -1338,6 +1363,9 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
     super.onConfigurationChanged(newConfig);
     boolean needRecreate = Screen.checkDensity();
     navigation.configurationChanged(newConfig);
+    if (moexTwoPane != null) {
+      moexTwoPane.onConfigurationChanged(newConfig);
+    }
     if (isPasscodeShowing && passcodeController != null) {
       passcodeController.onConfigurationChanged(newConfig);
     }
@@ -1392,9 +1420,11 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
       @BackPressMode int mode = backPressMode;
       SystemBackEventListener target;
       switch (mode) {
-        case BackPressMode.NAVIGATE_BACK_IN_STACK:
-          target = navigation;
+        case BackPressMode.NAVIGATE_BACK_IN_STACK: {
+          NavigationController listTarget = moe.kirao.mgx.layout.MoexTwoPaneGestures.backTargetForEdge(BaseActivity.this, backEvent.getSwipeEdge());
+          target = listTarget != null ? listTarget : navigation;
           break;
+        }
         case BackPressMode.CLOSE_NAVIGATION_DRAWER:
           target = drawer;
           break;
@@ -1478,6 +1508,17 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
     if (isAnimating(false)) {
       return BackPressMode.CUSTOM_ACTION_PERFORMED;
     }
+    if (moe.kirao.mgx.layout.MoexTwoPaneGestures.closesDrawerFirst(this)) {
+      if (commit) {
+        drawer.close(0f, null);
+      }
+      return BackPressMode.CLOSE_NAVIGATION_DRAWER;
+    }
+    if (moexTwoPane != null && moexTwoPane.isHiddenRoot(navigation.getCurrentStackItem())) {
+      // The root on the right is only a placeholder. Back belongs to the visible list pane,
+      // including its search/selection mode, before the Activity may leave the app.
+      return moexTwoPane.performOnBackPressed(fromTop, commit);
+    }
     if (navigation.passBackPressToActivity(fromTop)) {
       return BackPressMode.SYSTEM_ACTION_REQUIRED;
     }
@@ -1512,6 +1553,10 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
   @Override
   public void onKeyboardStateChanged (boolean visible) {
     navigation.onKeyboardStateChanged(visible);
+    NavigationController list = moe.kirao.mgx.layout.MoexTwoPaneGestures.listNavigation(this);
+    if (list != null) {
+      list.onKeyboardStateChanged(visible);
+    }
     this.isKeyboardVisible = visible;
     if (statusBar != null) {
       statusBar.updateVisible();
@@ -1715,6 +1760,9 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
           // Navigation is still blurred, no need to call onBlur
         } else {
           navigation.onBlur();
+          if (moexTwoPane != null) {
+            moexTwoPane.onActivityPause();
+          }
         }
       } else {
         navigationFocusTask = new CancellableRunnable() {
@@ -1723,6 +1771,9 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
             if (navigationFocusTask == this) {
               navigationFocusTask = null;
               navigation.onFocus();
+              if (moexTwoPane != null && activityState == UI.State.RESUMED) {
+                moexTwoPane.onActivityResume();
+              }
             }
           }
         };
@@ -2067,6 +2118,13 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
 
   public View getContentView () {
     return contentView;
+  }
+
+  private moe.kirao.mgx.layout.MoexTwoPane moexTwoPane;
+
+  @Nullable
+  public moe.kirao.mgx.layout.MoexTwoPane moexTwoPane () {
+    return moexTwoPane;
   }
 
   public RootFrameLayout getRootView () {
@@ -2620,6 +2678,43 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
 
   public Permissions permissions () {
     return permissions;
+  }
+
+  // Automatic startup prompts belong to the Activity, not to either chat-list controller.
+  // Permission dialogs pause/resume this Activity; resume must never reopen a denied prompt.
+  private final ArrayList<Integer> startupNotificationAccounts = new ArrayList<>();
+  private boolean startupNotificationsRequested;
+  private @Nullable ArrayList<RunnableBool> startupNotificationCallbacks;
+
+  public void requestStartupPostNotifications (int accountId, @NonNull RunnableBool after) {
+    if (startupNotificationAccounts.contains(accountId)) {
+      return;
+    }
+    startupNotificationAccounts.add(accountId);
+    if (startupNotificationCallbacks != null) {
+      startupNotificationCallbacks.add(after);
+      return;
+    }
+    if (startupNotificationsRequested) {
+      after.runWithBool(Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || permissions.checkPermission(Manifest.permission.POST_NOTIFICATIONS));
+      return;
+    }
+    startupNotificationsRequested = true;
+    startupNotificationCallbacks = new ArrayList<>();
+    startupNotificationCallbacks.add(after);
+    if (!permissions.requestPostNotifications(this::finishStartupPostNotifications)) {
+      finishStartupPostNotifications(Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || permissions.checkPermission(Manifest.permission.POST_NOTIFICATIONS));
+    }
+  }
+
+  private void finishStartupPostNotifications (boolean granted) {
+    ArrayList<RunnableBool> callbacks = startupNotificationCallbacks;
+    startupNotificationCallbacks = null;
+    if (callbacks != null) {
+      for (RunnableBool callback : callbacks) {
+        callback.runWithBool(granted);
+      }
+    }
   }
 
   // Permissions
@@ -3880,7 +3975,11 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
   public void markActivityReady () {
     if (!activityReady) {
       activityReady = true;
-      reportFullyDrawn();
+      try {
+        reportFullyDrawn();
+      } catch (Throwable t) {
+        Log.i("Unable to call reportFullyDrawn()", t);
+      }
     }
   }
 }

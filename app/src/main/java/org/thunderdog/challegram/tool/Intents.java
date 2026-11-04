@@ -52,6 +52,7 @@ import org.thunderdog.challegram.receiver.TGShareBroadcastReceiver;
 import org.thunderdog.challegram.telegram.TdlibNotificationChannelGroup;
 import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
+import org.thunderdog.challegram.util.OfferedUris;
 import org.thunderdog.challegram.util.Permissions;
 
 import java.io.File;
@@ -410,6 +411,8 @@ public class Intents {
 
       if (intent.resolveActivity(pm) != null) {
         UI.startActivity(intent);
+        // Only once actually handed out: "Open with" may pick this app. Delivery is posted after this call returns.
+        OfferedUris.remember(uri);
         return true;
       }
     } catch (Throwable t) {

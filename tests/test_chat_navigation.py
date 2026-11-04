@@ -58,7 +58,7 @@ public class FilteredAnchorHarness {
             java.write_text(harness, encoding="utf-8")
             subprocess.run(["javac", "-d", directory, str(java)], check=True)
             subprocess.run(["java", "-cp", directory, "FilteredAnchorHarness"], check=True)
-        process = block(LOADER, "private void processMessages (")
+        process = block(LOADER, "@Nullable MessageHistoryPreview.Window preview)")
         self.assertIn("canContinueFilteredHistory(loadingMode, lastOffset, previousRawCursor, continuationRawMessage.id)", process)
         self.assertIn("continueTowardBottom ? FILTERED_PAGE_BOTTOM_OFFSET : 0", process)
 
@@ -99,6 +99,7 @@ public class ChatAnchorHarness {
     long getNewestMessageId() { return 100; }
     boolean hasUnreadMessages(TdApi.Chat c) { return true; }
     TdApi.MessageTopic getMessageTopicId() { return topic; }
+    TdApi.MessageTopic xgramTopicKey() { return topic; }
   }
   static class Settings {
     static Settings INSTANCE=new Settings();
@@ -153,6 +154,7 @@ public class ChatAnchorHarness {
     boolean moreBottom, moreTop=true; TdApi.MessageTopic topic;
     long getChatId() { return -1002462267293L; }
     TdApi.MessageTopic getMessageTopicId() { return topic; }
+    TdApi.MessageTopic xgramTopicKey() { return topic; }
     boolean canLoadBottom() { return moreBottom; }
     boolean canLoadTop() { return moreTop; }
   }
@@ -247,7 +249,7 @@ public class ChatAnchorHarness {
         self.assertIn("unreadNavigationStopped && manager.getUserScrollActionsCount() == unreadNavigationScrollActions", load_more)
 
     def test_resolved_target_not_advanced_again_or_cleared(self):
-        process = block(LOADER, "private void processMessages (")
+        process = block(LOADER, "@Nullable MessageHistoryPreview.Window preview)")
         self.assertIn("if (!hasResolvedUnreadTarget && scrollItemIndex > 0)", process)
         self.assertIn("if (!hasResolvedUnreadTarget && unreadBadged != null", process)
         self.assertIn("!unreadNavigationResult && filteredOnlyPage", process)

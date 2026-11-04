@@ -207,6 +207,10 @@ public class TdlibSettingsManager implements CleanupStartupDelegate {
     remoteToLocalChatIds.clear();
     localToRemoteChatIds.clear();
 
+    // XGram: slot-keyed local lists and layouts, not part of the upstream preferences above.
+    moe.kirao.mgx.MoexConfig.instance().clearAccountData(accountId);
+    moe.kirao.mgx.topics.ForumSettings.instance().clearAccount(accountId);
+
     unregisterDevice(tdlib.id());
 
     load();

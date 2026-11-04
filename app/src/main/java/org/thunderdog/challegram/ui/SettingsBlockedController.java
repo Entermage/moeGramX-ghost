@@ -14,6 +14,8 @@
  */
 package org.thunderdog.challegram.ui;
 
+import moe.kirao.mgx.MoexShadowUnreadManager;
+
 import android.content.Context;
 import android.view.View;
 import android.widget.LinearLayout;
@@ -122,6 +124,9 @@ public class SettingsBlockedController extends RecyclerViewController<TdApi.Bloc
   @Override
   public void onFocus () {
     super.onFocus();
+    if (getArgumentsStrict() instanceof TdApi.BlockListMain) {
+      MoexShadowUnreadManager.refreshHiddenUsers(tdlib, true);
+    }
     if (senderToBlock != null) {
       tdlib.blockSender(senderToBlock, getArgumentsStrict(), tdlib.okHandler());
       senderToBlock = null;

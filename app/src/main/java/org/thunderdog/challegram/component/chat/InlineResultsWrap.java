@@ -70,6 +70,8 @@ import org.thunderdog.challegram.widget.ShadowView;
 
 import java.util.ArrayList;
 
+import moe.kirao.mgx.layout.MoexTwoPane;
+
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.animator.BoolAnimator;
 import me.vkryl.android.animator.FactorAnimator;
@@ -839,6 +841,9 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
   }
 
   public void updatePosition (boolean needTranslate) {
+    if (moexUpdatePaneMargins()) {
+      requestLayout();
+    }
     if (offsetProvider != null) {
       setBottomMargin(offsetProvider.provideOffset(this));
     } else {
@@ -880,13 +885,56 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
     return false;
   }
 
+  private int moexPaneLeft, moexPaneRight;
+  private @Nullable View moexWatchedPane;
+  private final Runnable moexRelayout = () -> {
+    if (this.rootView != null) {
+      // The pane can move to its default position and back in one layout pass.
+      // updatePosition requests another pass only if the final margins changed.
+      updatePosition(false);
+    }
+  };
+  private final View.OnLayoutChangeListener moexPaneListener = (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+    if (left != oldLeft || right != oldRight) {
+      removeCallbacks(moexRelayout);
+      post(moexRelayout);
+    }
+  };
+
+  /** The room left and right of the chat pane in the root view; true when it changed. */
+  private boolean moexUpdatePaneMargins () {
+    int left = 0, right = 0;
+    final RootFrameLayout root = rootView;
+    if (offsetProvider == null && root != null) {
+      final org.thunderdog.challegram.BaseActivity context = UI.getContext(getContext());
+      final MoexTwoPane twoPane = context.moexTwoPane();
+      final NavigationController navigation = context.navigation();
+      final View pane = navigation != null ? navigation.getValue() : null;
+      if (twoPane != null && twoPane.isActive() && pane != null && pane.getWidth() > 0 && pane.getParent() instanceof View && root.getMeasuredWidth() > 0) {
+        // the pane's layout bounds in the root (Views.getLocationInWindow shares one array: copied right away)
+        final int containerX = Views.getLocationInWindow((View) pane.getParent())[0];
+        final int rootX = Views.getLocationInWindow(root)[0];
+        final int paneLeft = containerX - rootX + pane.getLeft();
+        left = Math.max(0, paneLeft);
+        right = Math.max(0, root.getMeasuredWidth() - (paneLeft + pane.getWidth()));
+      }
+    }
+    if (moexPaneLeft != left || moexPaneRight != right) {
+      moexPaneLeft = left;
+      moexPaneRight = right;
+      return true;
+    }
+    return false;
+  }
+
   @Override
   public void onApplyMarginInsets (View child, LayoutParams params, Rect legacyInsets, Rect insets, Rect insetsWithoutIme) {
     boolean changed;
+    moexUpdatePaneMargins();
     changed = Views.setMargins(params,
-      legacyInsets.left,
+      Math.max(legacyInsets.left, moexPaneLeft),
       legacyInsets.top,
-      legacyInsets.right,
+      Math.max(legacyInsets.right, moexPaneRight),
       insets.bottom + lastBottomMargin
     );
     changed = setInsets(insets.top, insets.bottom) || changed;
@@ -901,11 +949,21 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
   protected void onAttachedToWindow () {
     super.onAttachedToWindow();
     rootView = Views.findAncestor(this, RootFrameLayout.class, true);
+    NavigationController navigation = UI.getContext(getContext()).navigation();
+    if (offsetProvider == null && navigation != null && !navigation.isDestroyed()) {
+      moexWatchedPane = navigation.getValue();
+      moexWatchedPane.addOnLayoutChangeListener(moexPaneListener);
+    }
   }
 
   @Override
   protected void onDetachedFromWindow () {
     super.onDetachedFromWindow();
+    if (moexWatchedPane != null) {
+      moexWatchedPane.removeOnLayoutChangeListener(moexPaneListener);
+      moexWatchedPane = null;
+    }
+    removeCallbacks(moexRelayout);
     rootView = null;
   }
 

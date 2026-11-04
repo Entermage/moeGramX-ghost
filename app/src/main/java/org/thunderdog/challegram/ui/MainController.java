@@ -146,6 +146,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import moe.kirao.mgx.layout.MoexTwoPane;
+
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.ViewUtils;
 import me.vkryl.android.animator.BoolAnimator;
@@ -632,7 +634,8 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     int viewWidth = headerCell.getTopView().getItemWidth(view);
     float translationX = x - menuWidth / 2 + viewWidth / 2;
     int dx = displayTabsAtBottom ? 0 : Screen.dp(7f);
-    menu.setTranslationX(MathUtils.clamp(translationX, dx, Screen.currentWidth() - menuWidth - dx));
+    int paneWidth = pagerWrap != null && pagerWrap.getMeasuredWidth() > 0 ? pagerWrap.getMeasuredWidth() : Screen.currentWidth();
+    menu.setTranslationX(MathUtils.clamp(translationX, dx, Math.max(dx, paneWidth - menuWidth - dx)));
     int cornerCenterX = menuWidth / 2 + Math.round(translationX - menu.getTranslationX());
     menu.setCornerCenterX(MathUtils.clamp(cornerCenterX, Screen.dp(18f), menuWidth - Screen.dp(18f)));
   }
@@ -776,7 +779,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
   public void onActivityResume () {
     super.onActivityResume();
     UI.startNotificationService();
-    showAnnoyingAlertsForCompliance(true);
+    showAnnoyingAlertsForCompliance();
   }
 
   private void makeStartupChecks () {
@@ -1282,6 +1285,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     if (isFocused() && hasFolders() && Settings.instance().hasPendingFeatureAddedNotification(FeatureAvailability.Feature.CHAT_FOLDERS) && !foldersAlertShown) {
       foldersAlertShown = true;
       ChatFoldersFeatureController c = new ChatFoldersFeatureController(context(), tdlib());
+      c.setPopupSourceController(this);
       c.show();
       c.setDismissListener(popup -> {
         if (!isNavigationAnimating()) {
@@ -1331,7 +1335,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
       oneShot = true;
       ((MainActivity) context()).getMessagesController(tdlib, true);
     }
-    showAnnoyingAlertsForCompliance(false);
+    showAnnoyingAlertsForCompliance();
   }
 
   private boolean syncContactsInitiated;
@@ -1358,9 +1362,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     }
   }
 
-  private boolean notificationsRequested;
-
-  private void showAnnoyingAlertsForCompliance (boolean fromAppResume) {
+  private void showAnnoyingAlertsForCompliance () {
     if (Config.ENABLE_BASELINE_PROFILE_HOOKS) {
       addStartupMarker();
     }
@@ -1369,18 +1371,15 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     }
     tdlib.checkDeadlocks(() -> runOnUiThreadOptional(() -> {
       if (isFocused() && context.getActivityState() == UI.State.RESUMED) {
-        boolean needNotifications = fromAppResume || !notificationsRequested;
-        if (needNotifications && !notificationsRequested) {
-          notificationsRequested = true;
-        }
-        if (needNotifications && !context().permissions().requestPostNotifications(granted -> {
+        context().requestStartupPostNotifications(tdlib.id(), granted -> {
+          if (isDestroyed()) {
+            return;
+          }
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && granted) {
             tdlib.notifications().onNotificationPermissionGranted();
           }
           syncContacts(null);
-        })) {
-          syncContacts(null);
-        }
+        });
       }
     }, null, 1000L));
     attachRecentChannelsHaptic();
@@ -1420,12 +1419,18 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
 
   @Override
   protected int getBackButton () {
-    return BackHeaderButton.TYPE_MENU;
+    return moexIsHiddenRoot() ? BackHeaderButton.TYPE_NONE : BackHeaderButton.TYPE_MENU;
+  }
+
+  // The right pane retains its root for normal navigation, behind the empty-chat placeholder.
+  private boolean moexIsHiddenRoot () {
+    MoexTwoPane twoPane = context.moexTwoPane();
+    return twoPane != null && twoPane.isHiddenRoot(this);
   }
 
   @Override
   protected boolean useDrawer () {
-    return true;
+    return !moexIsHiddenRoot();
   }
 
   @Override
@@ -2028,7 +2033,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
 
   @Override
   protected int getMenuId () {
-    return R.id.menu_main;
+    return moexIsHiddenRoot() ? 0 : R.id.menu_main;
   }
 
   @Override
@@ -2111,7 +2116,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
       activity.addPasscodeListener(new BaseActivity.PasscodeListener() {
         @Override
         public void onPasscodeShowing (BaseActivity context, boolean isShowing) {
-          if (isShowing) {
+          if (!isShowing) { // Unlocked
             activity.removePasscodeListener(this);
             shareIntentImpl();
           }
@@ -2132,10 +2137,12 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
       return;
     }
     boolean needsStoragePermission = false;
+    ExternalShareUtils.SharePolicy sharePolicy = null;
     for (Uri uri : sharedUris) {
       if ("file".equals(uri.getScheme())) {
         try {
-          String path = ExternalShareUtils.validateSharedFilePath(uri, context().getApplicationInfo().dataDir);
+          if (sharePolicy == null) sharePolicy = ExternalShareUtils.SharePolicy.forContext(context());
+          String path = ExternalShareUtils.validateSharedFilePath(uri, sharePolicy);
           if (!U.canReadFile(path)) {
             needsStoragePermission = true;
             break;
@@ -2195,6 +2202,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     // Entry semantics (data URI only for VIEW) are independent of the content's media type.
     ArrayList<Uri> uris = ExternalShareUtils.collectUris(intent, originalAction);
     final ArrayList<TdApi.InputMessageContent> out = new ArrayList<>();
+    final ExternalShareUtils.SharePolicy policy = ExternalShareUtils.SharePolicy.forContext(UI.getAppContext());
 
     if (!fromView && !mergeAlbum && uris.size() == 1 &&
         ContactsContract.Contacts.CONTENT_VCARD_TYPE.equals(ExternalShareUtils.resolveMimeType(UI.getContext().getContentResolver(), uris.get(0), type))) {
@@ -2202,7 +2210,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
       if (U.isInternalUri(uri)) {
         throw new IllegalArgumentException("Tried to share internal file");
       }
-      ExternalShareUtils.resolveSharedFilePath(uri, UI.getAppContext().getApplicationInfo().dataDir);
+      ExternalShareUtils.resolveSharedFilePath(uri, policy);
       ContentResolver cr = UI.getContext().getContentResolver();
       try (InputStream stream = cr.openInputStream(uri)) {
         if (stream == null) {
@@ -2292,7 +2300,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
         try {
           String mimeType = ExternalShareUtils.resolveMimeType(UI.getContext().getContentResolver(), uri, type);
           boolean asDocument = ExternalShareUtils.shouldSendAsDocument(originalAction, mimeType);
-          if (addShareUri(tdlib, out, mimeType, uri, sendingText, asDocument)) {
+          if (addShareUri(tdlib, policy, out, mimeType, uri, sendingText, asDocument)) {
             sendingText = null;
           }
         } catch (Throwable t) {
@@ -2348,13 +2356,13 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
    *
    * @return true if provided caption parameter has been used as caption
    */
-  private static boolean addShareUri (Tdlib tdlib, ArrayList<TdApi.InputMessageContent> out, String mimeType, Uri uri, final @Nullable String rawCaption, boolean asDocument) throws java.io.IOException {
+  private static boolean addShareUri (Tdlib tdlib, ExternalShareUtils.SharePolicy policy, ArrayList<TdApi.InputMessageContent> out, String mimeType, Uri uri, final @Nullable String rawCaption, boolean asDocument) throws java.io.IOException {
     if (!ExternalShareUtils.isLocalFileUri(uri) || U.isInternalUri(uri)) {
       throw new IllegalArgumentException("Unsupported or internal shared URI");
     }
 
     // Content providers remain the authority for bytes and names; local paths must stay outside app data.
-    String filePath = ExternalShareUtils.resolveSharedFilePath(uri, UI.getAppContext().getApplicationInfo().dataDir);
+    String filePath = ExternalShareUtils.resolveSharedFilePath(uri, policy);
 
     if (StringUtils.isEmpty(filePath)) {
       throw new IllegalArgumentException("filePath cannot be resolved for type " + mimeType + ", uri: " + uri);
@@ -2473,6 +2481,33 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     return caption != null;
   }
 
+  // Every shared item goes to the topic picked for the chat, like the comment sent with them.
+  static void generateSharedFunctions (Tdlib tdlib, long chatId, @Nullable TdApi.MessageTopic topicId, TdApi.MessageSendOptions sendOptions,
+                                       List<TdApi.InputMessageContent> contents, boolean mergeAlbum, ArrayList<TdApi.Function<?>> functions) {
+    List<TdApi.InputMessageContent> album = null;
+    for (TdApi.InputMessageContent content : contents) {
+      content = tdlib.filegen().createThumbnail(content, ChatId.isSecret(chatId));
+      if (mergeAlbum) {
+        int combineMode = TD.getCombineMode(content);
+        if (combineMode == TD.COMBINE_MODE_MEDIA) {
+          if (album == null)
+            album = new ArrayList<>();
+          album.add(content);
+          if (album.size() == TdConstants.MAX_MESSAGE_GROUP_SIZE)
+            TD.processAlbum(tdlib, chatId, topicId, sendOptions, functions, album);
+        } else {
+          TD.processAlbum(tdlib, chatId, topicId, sendOptions, functions, album);
+          TD.processSingle(tdlib, chatId, topicId, sendOptions, functions, content);
+        }
+      } else {
+        TD.processSingle(tdlib, chatId, topicId, sendOptions, functions, content);
+      }
+    }
+    if (mergeAlbum) {
+      TD.processAlbum(tdlib, chatId, topicId, sendOptions, functions, album);
+    }
+  }
+
   private void shareContents (final Tdlib tdlib, final String type, final ArrayList<TdApi.InputMessageContent> contents, boolean mergeAlbum) {
     if (contents.isEmpty()) {
       throw new IllegalArgumentException("Unsupported content type: " + type);
@@ -2482,29 +2517,8 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
 
       ShareController.ShareProviderDelegate shareDelegate = new ShareController.ShareProviderDelegate() {
         @Override
-        public void generateFunctionsForChat (long chatId, TdApi.Chat chat, TdApi.MessageSendOptions sendOptions, ArrayList<TdApi.Function<?>> functions) {
-          List<TdApi.InputMessageContent> album = null;
-          for (TdApi.InputMessageContent content : contents) {
-            content = tdlib.filegen().createThumbnail(content, ChatId.isSecret(chatId));
-            if (mergeAlbum) {
-              int combineMode = TD.getCombineMode(content);
-              if (combineMode == TD.COMBINE_MODE_MEDIA) {
-                if (album == null)
-                  album = new ArrayList<>();
-                album.add(content);
-                if (album.size() == TdConstants.MAX_MESSAGE_GROUP_SIZE)
-                  TD.processAlbum(tdlib, chatId, sendOptions, functions, album);
-              } else {
-                TD.processAlbum(tdlib, chatId, sendOptions, functions, album);
-                TD.processSingle(tdlib, chatId, sendOptions, functions, content);
-              }
-            } else {
-              TD.processSingle(tdlib, chatId, sendOptions, functions, content);
-            }
-          }
-          if (mergeAlbum) {
-            TD.processAlbum(tdlib, chatId, sendOptions, functions, album);
-          }
+        public void generateFunctionsForChat (long chatId, TdApi.Chat chat, @Nullable TdApi.MessageTopic topicId, TdApi.MessageSendOptions sendOptions, ArrayList<TdApi.Function<?>> functions) {
+          generateSharedFunctions(tdlib, chatId, topicId, sendOptions, contents, mergeAlbum, functions);
         }
 
         @Override
@@ -2537,7 +2551,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
       SyncAdapter.turnOnSync(context, tdlib, true);
     }).setDismissListener(popup -> {
       syncAlertWrap = null;
-      showAnnoyingAlertsForCompliance(false);
+      showAnnoyingAlertsForCompliance();
     }).setOnActionButtonClick((wrap, view, isCancel) -> {
       if (isCancel) {
         int i = wrap.adapter.indexOfViewById(R.id.btn_neverAllow);
@@ -3437,6 +3451,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     globalFilterLayout.setNeedRootInsets();
     globalFilterLayout.setOverlayStatusBar(true);
     globalFilterLayout.setDismissListener((popup) -> globalFilterLayout = null);
+    menu.setSourceController(this);
     globalFilterLayout.showMoreView(menu);
   }
 

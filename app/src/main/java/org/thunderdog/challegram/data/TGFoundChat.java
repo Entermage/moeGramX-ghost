@@ -28,6 +28,7 @@ import org.thunderdog.challegram.util.text.Highlight;
 
 import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.StringUtils;
+import moe.kirao.mgx.topics.ForumUnreadBadges;
 import tgx.td.ChatId;
 import tgx.td.Td;
 
@@ -360,6 +361,10 @@ public class TGFoundChat {
   }
 
   public int getUnreadCount () {
+    if ((flags & FLAG_NO_UNREAD) == 0 && chat != null && ForumUnreadBadges.usesTopics(tdlib, chat.id)) {
+      // As in the chat list: the unread topics, known once a row of the forum was shown there.
+      return ForumUnreadBadges.badgeCount(tdlib, chat);
+    }
     return (flags & FLAG_NO_UNREAD) != 0 ? 0 : chat != null ? (chat.unreadCount > 0 ? chat.unreadCount : chat.isMarkedAsUnread ? Tdlib.CHAT_MARKED_AS_UNREAD : 0) : 0;
   }
 

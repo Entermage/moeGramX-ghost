@@ -1602,10 +1602,6 @@ public abstract class SharedBaseController <T extends MessageSourceProvider> ext
     if (view != null) {
       int viewTop = view.getTop();
       int viewBottom = view.getBottom();
-      int top = viewTop + recyclerView.getTop() + HeaderView.getSize(true);
-      int bottom = top + view.getMeasuredHeight();
-      int left = view.getLeft();
-      int right = view.getRight();
 
       if (alternateParent == null) {
         viewTop -= SettingHolder.measureHeightForType(ListItem.TYPE_FAKE_PAGER_TOPVIEW);
@@ -1613,13 +1609,14 @@ public abstract class SharedBaseController <T extends MessageSourceProvider> ext
       int clipTop = viewTop < 0 ? -viewTop : 0;
       int clipBottom = viewBottom < 0 ? -viewBottom : 0;
 
-      location.set(left, top, right, bottom);
+      location.set(0, 0, view.getMeasuredWidth(), view.getMeasuredHeight());
       location.setClip(0, clipTop, 0, clipBottom);
 
       if (!setThumbLocation(location, view, item)) {
         return null;
       }
 
+      location.offsetToWindow(view);
       return location;
     }
 

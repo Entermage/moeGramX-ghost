@@ -475,7 +475,6 @@ JNIEXPORT jboolean Java_org_thunderdog_challegram_N_loadWebpImage (JNIEnv *env, 
 
     int count = snprintf(NULL, 0, fmt, code);
     char buffer[count + 1];
-    buffer[count + 1] = '\0';
     snprintf(buffer, count + 1, fmt, code);
 
     (*env)->ThrowNew(env, jclass_RuntimeException, buffer);

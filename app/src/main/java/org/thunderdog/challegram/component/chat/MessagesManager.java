@@ -94,6 +94,7 @@ import tgx.td.MessageId;
 import tgx.td.Td;
 
 import moe.kirao.mgx.MoexMessageFilter;
+import moe.kirao.mgx.MoexShadowUnreadManager;
 
 public class MessagesManager implements Client.ResultHandler, MessagesSearchManager.Delegate,
   MessageListener, MessageEditListener, MessageThreadListener, Comparator<TGMessage>, TGPlayerController.PlayListBuilder, BaseActivity.PasscodeListener, TdlibCache.ChatMemberStatusChangeListener, TdlibSettingsManager.DismissMessageListener {
@@ -131,6 +132,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
         if (newState == RecyclerView.SCROLL_STATE_DRAGGING) {
           clearMessageLinkTarget();
           loader.cancelUnreadNavigation();
+          loader.onHistoryPreviewDragged();
           controller.collapsePinnedMessagesBar(true);
           if (Settings.instance().needHideChatKeyboardOnScroll()) {
             controller.hideAllKeyboards();
@@ -542,6 +544,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   public void destroy (ViewController<?> context) {
+    rememberHistoryPreview();
     clearMessageLinkTarget();
     resetScroll();
     returnToMessageIds = null;
@@ -604,11 +607,16 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   // Search
 
   public void openSearch (TdApi.Chat chat, String query, TdApi.MessageSender sender, TdApi.SearchMessagesFilter filter) {
-    loader.setChat(chat, null, null, MessagesLoader.SPECIAL_MODE_SEARCH, filter);
+    openSearch(chat, null, query, sender, filter);
+  }
+
+  // XGram: topicId narrows the search to one topic (Saved Messages by chat).
+  public void openSearch (TdApi.Chat chat, @Nullable TdApi.MessageTopic topicId, String query, TdApi.MessageSender sender, TdApi.SearchMessagesFilter filter) {
+    loader.setChat(chat, null, topicId, MessagesLoader.SPECIAL_MODE_SEARCH, filter);
     loader.setSearchParameters(query, sender, filter);
     adapter.setChatType(chat.type);
     if (filter != null && Td.isPinnedFilter(filter)) {
-      initPinned(chat.id, 1, 1);
+      initPinned(chat.id, null, 1, 1);
     }
     if (highlightMessageId != null) {
       loadFromMessage(highlightMessageId, highlightMode, true);
@@ -699,8 +707,9 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     }
   }
 
-  private void initPinned (long chatId, int initialLoadCount, int loadCount) {
-    this.pinnedMessages = new MessageListManager(tdlib, initialLoadCount, loadCount, pinnedMessageListener, chatId, 0, null, null, null, new TdApi.SearchMessagesFilterPinned());
+  private void initPinned (long chatId, @Nullable TdApi.MessageTopic topicId, int initialLoadCount, int loadCount) {
+    // XGram: inside a forum topic, only the topic's pinned messages.
+    this.pinnedMessages = new MessageListManager(tdlib, initialLoadCount, loadCount, pinnedMessageListener, chatId, 0, topicId instanceof TdApi.MessageTopicForum ? topicId : null, null, null, new TdApi.SearchMessagesFilterPinned());
     this.pinnedMessages.addMaxMessageIdListener(pinnedMessageAvailabilityChangeListener);
     this.pinnedMessages.addChangeListener(new MessageListManager.ChangeListener() {
       @Override
@@ -725,7 +734,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
       // readOneShot = true;
     }
     if (chat.id != 0 && messageThread == null && !areScheduled && needPinnedMessages) {
-      initPinned(chat.id, 10, 50);
+      initPinned(chat.id, topicId, 10, 50);
     } else {
       this.pinnedMessages = null;
     }
@@ -769,7 +778,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
       @Override
       public boolean onMessageViewed (TdlibMessageViewer.Viewport viewport, View view, TdApi.Message message, long flags, long viewId, boolean allowRequest) {
-        if (inSpecialMode() || !allowRequest)
+        if (inSpecialMode() || readMessagesDisabled() || !allowRequest)
           return false;
         MessageProvider provider = (MessageProvider) view;
         TGMessage msg = provider.getMessage();
@@ -815,6 +824,24 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
   public void loadFromStart () {
     loadFromStart(new MessageId(loader.getChatId(), 0), null);
+  }
+
+  /** Re-filter an open chat without clearing its surviving ordinary messages on a load failure. */
+  public void refreshMessageFilter () {
+    if (loader.getChatId() == 0 || loader.isWaitingForHiddenUsers()) return;
+    int visibleIndex = Math.max(0, manager.findFirstVisibleItemPosition());
+    for (int i = adapter.getMessageCount() - 1; i >= 0; i--) {
+      TGMessage item = adapter.getMessage(i);
+      if (MoexMessageFilter.shouldHideInChat(tdlib, item.getMessage(), tdlib.isChannel(loader.getChatId()))) {
+        adapter.removeItem(i);
+      }
+    }
+    TGMessage anchor = adapter.getMessage(Math.min(visibleIndex, adapter.getMessageCount() - 1));
+    if (anchor != null) {
+      loader.loadFromMessage(new MessageId(anchor.getChatId(), anchor.getId()), HIGHLIGHT_MODE_POSITION_RESTORE, false);
+    } else {
+      loader.loadFromStart(new MessageId(loader.getChatId(), 0));
+    }
   }
 
   public boolean hasReturnMessage () {
@@ -877,7 +904,11 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     }
 
     stopScroll();
-    if (loader.canLoadBottom()) {
+    if (loader.isShowingHistoryPreview()) {
+      // The snapshot may be older than the chat: keep it on screen and replace it with the history end.
+      scrollToBottom(true);
+      loader.showHistoryPreviewEnd();
+    } else if (loader.canLoadBottom()) {
       loadFromStart();
     } else {
       scrollToBottom(true);
@@ -894,7 +925,11 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   public TGMessage findBottomMessage () {
-    int i = manager.findFirstCompletelyVisibleItemPosition();
+    return findBottomMessage(false);
+  }
+
+  public TGMessage findBottomMessage (boolean includePartiallyVisible) {
+    int i = includePartiallyVisible ? manager.findFirstVisibleItemPosition() : manager.findFirstCompletelyVisibleItemPosition();
     if (i == -1) {
       i = manager.findFirstVisibleItemPosition();
     }
@@ -1107,10 +1142,13 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   // Private Loaders
 
   private void loadFromStart (MessageId fromId, TGMessage startMessage) {
-    adapter.reset(startMessage);
-    scrollToPositionWithOffsetImpl(0, 0);
-    loader.loadFromStart(fromId);
-    viewMessages(false);
+    boolean retain = startMessage == null && loader.supportsHistoryPreview() && adapter.getMessageCount() > 0;
+    if (!retain) {
+      adapter.reset(startMessage);
+      scrollToPositionWithOffsetImpl(0, 0);
+    }
+    loader.loadFromStart(fromId, retain);
+    if (!retain) viewMessages(false);
   }
 
   private void loadFromMessage (MessageId messageId, int highlightMode, boolean force) {
@@ -1123,6 +1161,103 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
   private void loadPreviewMessages () {
     loader.loadPreviewMessages();
+  }
+
+  // Display-only snapshots do not mark messages read or change loader pagination.
+  private void rememberHistoryPreview () {
+    if (!loader.supportsHistoryPreview() || loader.isShowingHistoryPreview() || adapter.getMessageCount() == 0) return;
+    int first = Math.max(0, manager.findFirstVisibleItemPosition());
+    int start = Math.max(0, first - 12);
+    ArrayList<TdApi.Message> messages = new ArrayList<>();
+    for (int i = start; i < adapter.getMessageCount(); i++) {
+      TGMessage row = adapter.getMessage(i);
+      if (row.isSponsoredMessage() || row.isThreadHeader() || row.getChatId() != loader.getChatId()) continue;
+      TdApi.Message[] raw = row.getAllMessages();
+      if (messages.size() + raw.length > MessageHistoryPreview.MAX_MESSAGES) break;
+      Collections.addAll(messages, raw);
+    }
+    messages.sort((a,b) -> Long.compare(b.id, a.id));
+    TGMessage anchor = adapter.getMessage(first);
+    View view = manager.findViewByPosition(first);
+    int offset = view != null && view.getParent() != null ? calculateOffsetInPixels(view, 0) : 0;
+    MessageHistoryPreview.put(tdlib, loader.getChatId(), loader.historyPreviewTopic(),
+      messages.toArray(new TdApi.Message[0]), anchor != null ? anchor.getBiggestId() : 0,
+      offset, start == 0 && !loader.canLoadBottom());
+  }
+
+  /** The visible snapshot row to reload around, so an authoritative page replaces it in place. */
+  public @Nullable MessageId findHistoryPreviewAnchor () {
+    for (int i = Math.max(0, manager.findFirstVisibleItemPosition()); i < adapter.getMessageCount(); i++) {
+      TGMessage row = adapter.getMessage(i);
+      if (row != null && !row.isSponsoredMessage() && !row.isThreadHeader() && row.getChatId() == loader.getChatId())
+        return new MessageId(row.getChatId(), row.getId());
+    }
+    return null;
+  }
+
+  public void displayHistoryPreview (ArrayList<TGMessage> items, long anchorId, int offset) {
+    adapter.resetMessages(items);
+    int position = adapter.indexOfMessageContainer(anchorId);
+    if (position >= 0 && offset == MessageHistoryPreview.OFFSET_TOP) {
+      // As scrollToMessage places an unread entry, so the history replacing this opens at the same place.
+      TGMessage anchor = adapter.getMessage(position);
+      anchor.buildLayout(getRecyclerWidth());
+      offset = getTargetHeight() - anchor.getHeight();
+    }
+    scrollToPositionWithOffsetImpl(Math.max(0, position), position >= 0 ? offset : 0);
+    if (!items.isEmpty()) onChatAwaitFinish();
+  }
+
+  public void replaceUnreadHistoryPreview (ArrayList<TGMessage> fresh, int scrollPosition,
+                                           TGMessage scrollMessage, MessageId scrollMessageId,
+                                           int highlightMode, boolean willRepeat, boolean canLoadTop) {
+    ArrayList<TGMessage> oldRows = new ArrayList<>();
+    for (int i = 0; i < adapter.getMessageCount(); i++) oldRows.add(adapter.getMessage(i));
+    displayMessages(fresh, MessagesLoader.MODE_REPEAT_INITIAL, scrollPosition, scrollMessage,
+      scrollMessageId, highlightMode, willRepeat, canLoadTop);
+    for (TGMessage row : oldRows) if (!fresh.contains(row)) row.onDestroy();
+  }
+
+  public void replaceHistoryPreview (ArrayList<TGMessage> fresh, TdApi.Message[] raw,
+                                     boolean willRepeat, boolean canLoadTop, boolean toEnd) {
+    int first = manager.findFirstVisibleItemPosition();
+    TGMessage anchor = adapter.getMessage(first);
+    long anchorId = anchor != null ? anchor.getBiggestId() : 0;
+    View view = manager.findViewByPosition(first);
+    int offset = view != null && view.getParent() != null ? calculateOffsetInPixels(view, 0) : 0;
+    boolean followBottom = isAtVeryBottom();
+    long newest = 0, oldest = Long.MAX_VALUE;
+    boolean overlap = false;
+    for (TdApi.Message message : raw) {
+      newest = Math.max(newest, message.id); oldest = Math.min(oldest, message.id);
+      overlap |= adapter.indexOfMessageContainer(message.id) >= 0;
+    }
+    ArrayList<TGMessage> oldRows = new ArrayList<>();
+    for (int i=0; i<adapter.getMessageCount(); i++) oldRows.add(adapter.getMessage(i));
+    // A shared message proves continuity. Never join disjoint history windows.
+    if (overlap) {
+      for (TGMessage row : oldRows) {
+        if (row.isSponsoredMessage() || row.isThreadHeader()) continue;
+        boolean visible = true;
+        for (TdApi.Message message : row.getAllMessages())
+          visible &= !MoexMessageFilter.shouldHideInChat(tdlib, message, isChannel());
+        if (visible && (row.getBiggestId() < oldest || row.getSmallestId() > newest)) fresh.add(row);
+      }
+      fresh.sort((a,b) -> Long.compare(b.getBiggestId(), a.getBiggestId()));
+    }
+    TGMessage previous = null;
+    for (int i=fresh.size()-1; i>=0; i--) {
+      TGMessage row = fresh.get(i); row.mergeWith(previous, i==0); row.prepareLayout(); previous=row;
+    }
+    adapter.resetMessages(fresh);
+    for (TGMessage row : oldRows) if (!fresh.contains(row)) row.onDestroy();
+    int position = adapter.indexOfMessageContainer(anchorId);
+    if (followBottom || toEnd) scrollToPositionWithOffsetImpl(0, 0); // toEnd: the arrow asked for the latest page
+    else if (position >= 0) scrollToPositionWithOffsetImpl(position, offset);
+    else scrollToPositionWithOffsetImpl(Math.min(Math.max(first,0), Math.max(fresh.size()-1,0)), offset);
+    checkTopEndReached(fresh, willRepeat, canLoadTop);
+    if (!willRepeat) onChatAwaitFinish();
+    viewMessages(false);
   }
 
   // Displays
@@ -1195,7 +1330,9 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
   public void updateAlbum (List<TdApi.Message> prevItems, Tdlib.Album album) {
     TdApi.Message prevNewestMessage = prevItems.get(0);
-    if (loader.getChatId() != prevNewestMessage.chatId) {
+    if (loader.getChatId() != prevNewestMessage.chatId ||
+        !MoexShadowUnreadManager.areHiddenUsersReady(tdlib) ||
+        MoexMessageFilter.shouldHideInChat(tdlib, prevNewestMessage, tdlib.isChannel(prevNewestMessage.chatId))) {
       return;
     }
     TdApi.Message prevOldestMessage = prevItems.get(prevItems.size() - 1);
@@ -1212,10 +1349,16 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
         }
       }
       for (int i = newerCount - 1; i >= 0; i--) {
-        targetAlbum.combineWith(album.messages.get(i), true);
+        TdApi.Message message = album.messages.get(i);
+        if (!MoexMessageFilter.shouldHideInChat(tdlib, message, tdlib.isChannel(message.chatId))) {
+          targetAlbum.combineWith(message, true);
+        }
       }
       for (int i = album.messages.size() - olderCount; i < album.messages.size(); i++) {
-        targetAlbum.combineWith(album.messages.get(i), false);
+        TdApi.Message message = album.messages.get(i);
+        if (!MoexMessageFilter.shouldHideInChat(tdlib, message, tdlib.isChannel(message.chatId))) {
+          targetAlbum.combineWith(message, false);
+        }
       }
       targetAlbum.invalidateContent(targetAlbum);
     }
@@ -1367,7 +1510,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
         topEndReached = true;
       } else if (!items.isEmpty()) {
         final int accountId = tdlib.id();
-        Settings.SavedMessageId messageId = Settings.instance().getScrollMessageId(accountId, loader.getChatId(), loader.getMessageTopicId());
+        Settings.SavedMessageId messageId = Settings.instance().getScrollMessageId(accountId, loader.getChatId(), loader.xgramTopicKey()); // XGram: per forum topic
         if (messageId != null && messageId.topEndMessageId != 0) {
           TGMessage topMessage = items.get(items.size() - 1);
           topEndReached = topMessage.isDescendantOrSelf(messageId.topEndMessageId);
@@ -1830,7 +1973,12 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     }
   }
 
-  public void onMessageHeightChanged (final long chatId, final long messageId, final int oldHeight, final int newHeight) {
+  public void onMessageHeightChanged (final TGMessage source, final int oldHeight, final int newHeight) {
+    final long chatId = source.getChatId(), messageId = source.getId();
+    final View boundView = findMessageView(chatId, messageId);
+    // A freshly parsed replacement can share an ID with the old visible container.
+    // Its initial measurement must never compensate the old container's scroll.
+    if (!(boundView instanceof MessageProvider) || ((MessageProvider) boundView).getMessage() != source) return;
     final long playingRoundVideoId = TdlibManager.instance().player().getMessageId();
     final boolean isPlayingRoundVideo = playingRoundVideoId == messageId;
     if (isPlayingRoundVideo) {
@@ -1887,6 +2035,9 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
   private void scrollCompensation (View view, int offset) {
     ScrollJumpCompensator listener = new ScrollJumpCompensator(controller.getMessagesView(), view, offset);
+    TGMessage source = view instanceof MessageProvider ? ((MessageProvider) view).getMessage() : null;
+    listener.setValidityCheck(() -> source != null && !source.isDestroyed() &&
+      view instanceof MessageProvider && ((MessageProvider) view).getMessage() == source);
     listener.add();
   }
 
@@ -1917,6 +2068,11 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     }
     TdApi.MessageTopic topicId = loader.getMessageTopicId();
     if (!Td.matchesTopic(message.getMessageTopicId(), topicId)) {
+      return;
+    }
+    // XGram: inside a forum topic only its own messages (getMessageTopicId is null there, which matches everything).
+    TdApi.MessageTopic xgramTopic = loader.xgramTopicKey();
+    if (topicId == null && xgramTopic != null && message.getMessageTopicId() != null && !Td.matchesTopic(message.getMessageTopicId(), xgramTopic)) {
       return;
     }
     ThreadInfo messageThread = loader.getMessageThread();
@@ -2558,13 +2714,15 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   private void onBlur () {
+    rememberHistoryPreview();
     clearMessageLinkTarget();
     loader.cancelUnreadNavigation();
+    loader.pauseHistoryPreview();
     saveScrollPosition();
   }
 
   public boolean readMessagesDisabled () {
-    return controller.isInForceTouchMode() || Settings.instance().dontReadMessages();
+    return loader.isShowingHistoryPreview() || loader.isRetainingHistory() || controller.isInForceTouchMode() || Settings.instance().dontReadMessages();
   }
 
   private boolean canRead () {
@@ -2648,7 +2806,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     if (scrollChatId != 0) {
       final int accountId = tdlib.id();
       final long chatId = loader.getChatId();
-      final TdApi.MessageTopic topicId = loader.getMessageTopicId();
+      final TdApi.MessageTopic topicId = loader.xgramTopicKey(); // XGram: a forum topic keeps its own position, apart from the merged history
       Settings.SavedMessageId savedMessageId = new Settings.SavedMessageId(
         new MessageId(scrollMessageChatId, scrollMessageId, scrollMessageOtherIds),
         scrollOffsetInPixels,
@@ -2672,6 +2830,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   private void onFocus () {
+    loader.retryHiddenUsersOnFocus();
     loader.resumeUnreadNavigation();
     viewMessages(false);
     saveScrollPosition();
@@ -2707,6 +2866,12 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
         return;
       }
     }
+    if (!isLoaded && loader.supportsHistoryPreview()) {
+      view.setText("");
+      view.setVisibility(View.INVISIBLE);
+      return;
+    }
+    view.setVisibility(View.VISIBLE);
     if (!isEventLog()) {
       view.setText(Lang.getString(loader.isUnreadAnchorUnavailable() ? R.string.MessageNotFound :
         isLoaded ? R.string.NoMessages : R.string.LoadingMessages));
@@ -3073,7 +3238,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     }
     if (highlightMode == HIGHLIGHT_MODE_POSITION_RESTORE) {
       final int accountId = tdlib.id();
-      Settings.SavedMessageId messageId = Settings.instance().getScrollMessageId(accountId, loader.getChatId(), loader.getMessageTopicId());
+      Settings.SavedMessageId messageId = Settings.instance().getScrollMessageId(accountId, loader.getChatId(), loader.xgramTopicKey()); // XGram: per forum topic
       int offset = messageId != null ? messageId.offsetPixels - scrollMessage.getExtraPadding() : 0;
       this.returnToMessageIds = messageId != null ? messageId.returnToMessageIds : null;
       scrollToPositionWithOffset(index, offset, false);
@@ -3481,6 +3646,11 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
   @Override
   public void onNewMessage (final TdApi.Message message) {
+    TdApi.MessageTopic openTopic = loader.xgramTopicKey();
+    if (openTopic instanceof TdApi.MessageTopicForum &&
+      !moe.kirao.mgx.topics.XgramForums.isInTopic(message, ((TdApi.MessageTopicForum) openTopic).forumTopicId)) return;
+    // The pending initial history (or the ready notification) will include these messages.
+    if (!MoexShadowUnreadManager.areHiddenUsersReady(tdlib)) return;
     final ThreadInfo messageThread = loader.getMessageThread();
     if (TD.isScheduled(message) == areScheduled()) {
       final TdApi.Chat chat = tdlib.chatStrict(message.chatId);
@@ -3499,7 +3669,9 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   private void showMessage (final long chatId, final TGMessage message) {
     message.prepareLayout();
     tdlib.ui().post(() -> {
-      if (loader.getChatId() == chatId) {
+      if (loader.getChatId() == chatId && MoexShadowUnreadManager.areHiddenUsersReady(tdlib) &&
+          !MoexMessageFilter.shouldHideInChat(tdlib, message.getMessage(), tdlib.isChannel(chatId))) {
+        controller.xgramOnNewTopicMessage(message.getMessage());
         updateNewMessage(message);
       }
     });
@@ -3718,7 +3890,40 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     }
   }
 
+  /** Visible topic reads update the badge immediately, using this topic's loaded messages only. */
+  private void checkForumTopicUnreadCounter (int firstVisibleItemPosition) {
+    if (!isFocused || !canRead() || firstVisibleItemPosition < 0 || controller.areScheduledOnly()) return;
+    TdApi.ForumTopic topic = controller.xgramTopicReadState();
+    if (topic == null) return;
+    View view = manager.findViewByPosition(firstVisibleItemPosition);
+    if (!(view instanceof MessageProvider)) return;
+    TGMessage message = ((MessageProvider) view).getMessage();
+    if (message == null || message.isFakeMessage() || message.isSponsoredMessage()) return;
+    long readId = Math.max(topic.lastReadInboxMessageId, message.getBiggestId());
+    if (readId == topic.lastReadInboxMessageId && loader.canLoadBottom()) return;
+    controller.xgramOnTopicRead(readId, forumUnreadAfterRead(topic, readId));
+  }
+
+  public int forumUnreadAfterRead (TdApi.ForumTopic topic, long readId) {
+    if (adapter == null || getActiveMessageCount() == 0) return topic.unreadCount;
+    boolean completeTail = !loader.canLoadBottom();
+    int remaining = 0, newlyRead = 0;
+    for (int index = 0; index < getActiveMessageCount(); index++) {
+      TGMessage container = adapter.getMessage(index);
+      if (container == null || container.isFakeMessage() || container.isSponsoredMessage()) continue;
+      if (container.getBiggestId() <= (completeTail ? readId : topic.lastReadInboxMessageId)) break;
+      for (TdApi.Message message : container.getAllMessages()) {
+        if (moe.kirao.mgx.topics.ForumTopicCounters.isIncomingAfter(message, topic.info.chatId,
+            topic.info.forumTopicId, topic.lastReadInboxMessageId)) {
+          if (message.id > readId) remaining++; else newlyRead++;
+        }
+      }
+    }
+    return completeTail ? remaining : Math.max(0, topic.unreadCount - newlyRead);
+  }
+
   private void checkMessageThreadUnreadCounter (int firstVisibleItemPosition) {
+    checkForumTopicUnreadCounter(firstVisibleItemPosition);
     ThreadInfo messageThread = loader.getMessageThread();
     if (messageThread == null || inSpecialMode() || !isFocused || firstVisibleItemPosition == -1)
       return;

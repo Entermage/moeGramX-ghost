@@ -35,6 +35,7 @@ class EmptyCommentThreadTest(unittest.TestCase):
         ))
         entries = '\n'.join(block(LOADER, signature) for signature in (
             'public void loadFromStart (MessageId startMessageId)',
+            'public void loadFromStart (MessageId startMessageId, boolean retain)',
             'public void loadFromMessage (MessageId messageId, final int highlightMode, boolean force)',
         ))
         harness = r'''
@@ -105,6 +106,11 @@ public class EmptyCommentHarness {
     MessagesManager manager=new MessagesManager();
     boolean canLoadTop,canLoadBottom,unreadNavigationPending,
       unreadPreviousCanLoadTop,unreadPreviousCanLoadBottom;
+    // Snapshot/retained-history state used by the production entry methods.
+    boolean historyPreviewShown,retainingHistory,isLoading,retainedCanLoadTop,retainedCanLoadBottom;
+    Object hiddenUsersCallback; int retainedScrollActions;
+    boolean canLoadTop() { return canLoadTop; }
+    boolean canLoadBottom() { return canLoadBottom; }
     int scrollHighlightMode,unreadNavigationScrollActions;
     long unreadNavigationBoundary; MessageId scrollMessageId;
     VisibleUnreadAnchor visibleUnreadAnchor;
@@ -189,8 +195,10 @@ public class EmptyCommentHarness {
         self.assertIn('MessagesManager.resolveDefaultAnchor(tdlib.id(), chat, messageThread)', opening)
         self.assertIn('UI.showToast(TD.isChannel(chatFinal.type) ? R.string.PostNotFound : R.string.MessageNotFound', opening)
         handler = block(LOADER, 'private Client.ResultHandler newHandler (')
-        self.assertIn('UI.showError(object);', handler)
-        self.assertNotIn('getReplyCount()', handler)
+        self.assertIn('onHistoryError(currentContextId, this, (TdApi.Error) object);', handler)
+        errors = block(LOADER, 'private void onHistoryError (')
+        self.assertIn('UI.showError(error);', errors)
+        self.assertNotIn('getReplyCount()', handler + errors)
 
 
 if __name__ == '__main__':

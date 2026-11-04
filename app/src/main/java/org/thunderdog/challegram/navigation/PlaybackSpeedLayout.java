@@ -14,6 +14,9 @@
  */
 package org.thunderdog.challegram.navigation;
 
+import org.thunderdog.challegram.widget.RootFrameLayout;
+import androidx.annotation.Nullable;
+import android.widget.FrameLayout;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Path;
@@ -67,7 +70,32 @@ import me.vkryl.core.ColorUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.lambda.CancellableRunnable;
 
-public class PlaybackSpeedLayout extends MenuMoreWrapAbstract implements View.OnClickListener, FactorAnimator.Target {
+public class PlaybackSpeedLayout extends MenuMoreWrapAbstract implements View.OnClickListener, FactorAnimator.Target, RootFrameLayout.MarginModifier, PopupPaneBounds.Provider {
+  private @Nullable PopupPaneBounds popupPaneBounds;
+
+  public void setSourceNavigation (@Nullable NavigationController source) {
+    if (popupPaneBounds != null) popupPaneBounds.detach();
+    popupPaneBounds = source != null ? new PopupPaneBounds(this, UI.getContext(getContext()), source) : null;
+    if (popupPaneBounds != null && isAttachedToWindow()) popupPaneBounds.attach();
+  }
+
+  @Override
+  public @Nullable PopupPaneBounds getPopupPaneBounds () { return popupPaneBounds; }
+
+  @Override
+  public void onApplyMarginInsets (View child, FrameLayout.LayoutParams params, Rect legacyInsets, Rect insets, Rect insetsWithoutIme) {
+    if (popupPaneBounds != null) popupPaneBounds.update();
+    Views.setMargins(params,
+      Math.max(legacyInsets.left, popupPaneBounds != null ? popupPaneBounds.getLeftInset() : 0), legacyInsets.top,
+      Math.max(legacyInsets.right, popupPaneBounds != null ? popupPaneBounds.getRightInset() : 0), legacyInsets.bottom);
+  }
+
+  @Override
+  protected void onAttachedToWindow () {
+    super.onAttachedToWindow();
+    if (popupPaneBounds != null) popupPaneBounds.attach();
+  }
+
   private static final int MIN_SPEED = 20;
   private static final int MAX_SPEED = 300;
   private static final int FADE_ANIMATOR_ID = 0;
@@ -685,7 +713,9 @@ public class PlaybackSpeedLayout extends MenuMoreWrapAbstract implements View.On
         maxWidth = Math.max(maxWidth, (Integer) v.getTag());
       }
     }
-    return Math.max(getMinimumWidth(), maxWidth);
+    int width = Math.max(getMinimumWidth(), maxWidth);
+    return popupPaneBounds != null ? Math.min(width, Math.max(1,
+      popupPaneBounds.getAvailableWidth(Screen.currentWidth()) - (int) Math.ceil(Math.abs(getTranslationX())))) : width;
   }
 
   @Override
@@ -695,6 +725,7 @@ public class PlaybackSpeedLayout extends MenuMoreWrapAbstract implements View.On
 
   @Override
   protected void onDetachedFromWindow () {
+    if (popupPaneBounds != null) popupPaneBounds.detach();
     super.onDetachedFromWindow();
     setSeekRunnable.cancelIfScheduled();
     if (scheduledHideButtons != null) {

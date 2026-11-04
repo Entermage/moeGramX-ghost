@@ -58,6 +58,7 @@ import org.thunderdog.challegram.ui.MainController;
 import org.thunderdog.challegram.ui.MessagesController;
 import org.thunderdog.challegram.unsorted.Passcode;
 import org.thunderdog.challegram.unsorted.Settings;
+import org.thunderdog.challegram.util.FileCopyUtils;
 
 import java.io.File;
 import java.lang.annotation.ElementType;
@@ -69,7 +70,6 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
 import me.vkryl.core.BitwiseUtils;
-import me.vkryl.core.FileUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.leveldb.LevelDB;
 import tgx.td.ChatId;
@@ -995,7 +995,7 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
           outputFile = U.newFile(U.getRingtonesDir(), fileName, fileExtension);
         }
 
-        if ((fileAccessible && FileUtils.copy(new File(filePath), outputFile)) || U.copyFile(UI.getAppContext(), uri, outputFile)) {
+        if ((fileAccessible && FileCopyUtils.copy(new File(filePath), outputFile)) || U.copyFile(UI.getAppContext(), uri, outputFile)) {
           return FileProvider.getUriForFile(UI.getAppContext(), Config.FILE_PROVIDER_AUTHORITY, outputFile);
         }
       }

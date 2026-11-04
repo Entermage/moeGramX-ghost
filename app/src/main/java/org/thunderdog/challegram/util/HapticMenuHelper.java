@@ -12,6 +12,8 @@
  */
 package org.thunderdog.challegram.util;
 
+import org.thunderdog.challegram.navigation.PopupPaneBounds;
+import org.thunderdog.challegram.navigation.ViewController;
 import android.graphics.drawable.Drawable;
 import android.view.MotionEvent;
 import android.view.View;
@@ -188,6 +190,16 @@ public class HapticMenuHelper implements View.OnTouchListener, View.OnLongClickL
   @Nullable private OnItemMenuListener onHapticMenuListener;
   private MenuMoreWrap moreWrap;
   private View hapticView;
+  private @Nullable ViewController<?> sourceController;
+
+  public HapticMenuHelper setSourceController (@Nullable ViewController<?> source) {
+    sourceController = source;
+    return this;
+  }
+
+  private static int clampMenuCenter (int center, int size, int start, int end) {
+    return Math.max(start + size / 2, Math.min(end - (size + 1) / 2, center));
+  }
 
   public HapticMenuHelper (Provider provider, OnItemClickListener onItemClickListener, @Nullable ThemeListenerList themeListeners, @Nullable ThemeDelegate forcedTheme) {
     this.provider = provider;
@@ -283,6 +295,7 @@ public class HapticMenuHelper implements View.OnTouchListener, View.OnLongClickL
     }
 
     moreWrap = new MenuMoreWrap(view.getContext());
+    moreWrap.setSourceController(sourceController != null ? sourceController : ViewController.findRoot(view), false);
     moreWrap.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
       ViewParent parent = v.getParent();
       if (parent == null)
@@ -310,7 +323,12 @@ public class HapticMenuHelper implements View.OnTouchListener, View.OnLongClickL
       int centerX = out[0] + viewWidth / 2;
       int centerY = out[1] + viewHeight / 2;
 
-      int resultCenterX = Math.max(viewWidth / 2, Math.min(parentWidth - viewWidth / 2, targetCenterX));
+      int[] parentLocation = Views.getLocationInWindow((View) parent);
+      PopupPaneBounds bounds = moreWrap.getPopupPaneBounds();
+      if (bounds != null) bounds.update();
+      int paneLeft = parentLocation[0] + (bounds != null ? bounds.getLeftInset() : 0);
+      int paneRight = parentLocation[0] + parentWidth - (bounds != null ? bounds.getRightInset() : 0);
+      int resultCenterX = clampMenuCenter(targetCenterX + (anchorMode == MenuMoreWrap.ANCHOR_MODE_CENTER ? Screen.dp(8) : 0), viewWidth, paneLeft, paneRight);
       int resultCenterY;
       if (anchorMode == MenuMoreWrap.ANCHOR_MODE_HEADER) {
         resultCenterY = targetCenterY + targetHeight / 2 + viewHeight / 2 + anchorOffsetY;
@@ -318,11 +336,12 @@ public class HapticMenuHelper implements View.OnTouchListener, View.OnLongClickL
         resultCenterY = targetCenterY - targetHeight / 2 - (anchorMode == MenuMoreWrap.ANCHOR_MODE_CENTER ? Screen.dp(12) : viewHeight / 2) + anchorOffsetY;
       }
 
-      v.setTranslationX(resultCenterX - centerX + (anchorMode == MenuMoreWrap.ANCHOR_MODE_CENTER ? Screen.dp(8) : 0));
+      resultCenterY = clampMenuCenter(resultCenterY, viewHeight, parentLocation[1], parentLocation[1] + parentHeight);
+      v.setTranslationX(resultCenterX - centerX);
       v.setTranslationY(resultCenterY - centerY);
 
       if (anchorMode == MenuMoreWrap.ANCHOR_MODE_CENTER || anchorMode == MenuMoreWrap.ANCHOR_MODE_HEADER) {
-        moreWrap.setBubbleTailX(targetCenterX - (out[0] + resultCenterX - centerX));
+        moreWrap.setBubbleTailX(targetCenterX - (resultCenterX - viewWidth / 2));
       }
     });
     moreWrap.init(themeListeners, forcedTheme);

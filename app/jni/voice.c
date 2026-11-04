@@ -898,7 +898,13 @@ JNIEXPORT jbyteArray Java_org_thunderdog_challegram_N_getWaveform(JNIEnv *env, j
       return result;
     }
 
-    uint16_t *samples = malloc(100 * 2);
+    // Short or truncated files fill fewer than 100 samples; the rest must read as silence.
+    uint16_t *samples = calloc(100, sizeof(uint16_t));
+    if (samples == NULL) {
+      op_free(opusFile);
+      (*env)->ReleaseStringUTFChars(env, path, pathStr);
+      return result;
+    }
 
     size_t bufferSize = 1024 * 128;
     if (sampleBuffer == NULL) {
@@ -911,6 +917,9 @@ JNIEXPORT jbyteArray Java_org_thunderdog_challegram_N_getWaveform(JNIEnv *env, j
 
     while (1) {
         int readSamples = op_read(opusFile, sampleBuffer, bufferSize / 2, NULL);
+        if (readSamples < 0) {
+            break; // A decoding error repeats forever; keep what was read.
+        }
         for (int i = 0; i < readSamples; i++) {
             uint16_t sample = (uint16_t) abs(sampleBuffer[i]);
             if (sample > peakSample) {
@@ -969,7 +978,11 @@ JNIEXPORT jbyteArray Java_org_thunderdog_challegram_N_getWaveform2(JNIEnv *env, 
     jshort *sampleBuffer = (*env)->GetShortArrayElements(env, array, 0);
 
     const int32_t resultSamples = 100;
-    uint16_t *samples = malloc(100 * 2);
+    uint16_t *samples = calloc(100, sizeof(uint16_t)); // fewer than 100 input samples leave the rest silent
+    if (samples == NULL) {
+        (*env)->ReleaseShortArrayElements(env, array, sampleBuffer, 0);
+        return NULL;
+    }
     uint64_t sampleIndex = 0;
     uint16_t peakSample = 0;
     int32_t sampleRate = (int32_t) max(1, length / resultSamples);

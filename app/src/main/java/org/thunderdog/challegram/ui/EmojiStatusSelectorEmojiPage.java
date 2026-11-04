@@ -258,8 +258,8 @@ public class EmojiStatusSelectorEmojiPage extends BottomSheetViewController.Bott
 
 
   public void setHeaderPosition (float y) {
-    foregroundEmojiLayout.setTranslationY(y - Screen.getStatusBarHeight());
-    emojiCustomListLayout.setHeaderOffset(y - Screen.getStatusBarHeight());
+    foregroundEmojiLayout.setTranslationY(y - parent.getHeaderTopOffset());
+    emojiCustomListLayout.setHeaderOffset(y - parent.getHeaderTopOffset());
   }
 
   public HeaderView getHeaderView () {
@@ -376,7 +376,13 @@ public class EmojiStatusSelectorEmojiPage extends BottomSheetViewController.Bott
     inEmojiSelectMode = false;
     emojiSelectorVisibility.setValue(false, true);
     emojiSelectorButtonsVisibility.setValue(false, true);
-    openSearchMode();
+    headerView.openSearchMode(true, false);
+  }
+
+  @Override
+  protected void updateSearchMode (boolean inSearch, boolean needUpdateKeyboard) {
+    // Search transitions only expose the input. Tapping the input itself opens the keyboard.
+    super.updateSearchMode(inSearch, !inSearch && needUpdateKeyboard);
   }
 
   @Override
@@ -403,7 +409,6 @@ public class EmojiStatusSelectorEmojiPage extends BottomSheetViewController.Bott
     if (StringUtils.isEmpty(input)) {
       searchModeVisibility.setValue(true, true);
       getSearchHeaderView(headerView).editView().setEnabled(true);
-      Keyboard.show(getSearchHeaderView(headerView).editView());
       if (!StringUtils.isEmpty(emojiSearchRequest)) {
         emojiSearchRequest = null;
       }
@@ -436,6 +441,15 @@ public class EmojiStatusSelectorEmojiPage extends BottomSheetViewController.Bott
 
 
   /* Controller methods */
+
+  @Override
+  public void destroy () {
+    if (isDestroyed()) return;
+    // The custom layout only lends its header/recycler to this page, so tree cleanup cannot reach it.
+    if (emojiCustomListLayout != null) emojiCustomListLayout.destroy();
+    if (foregroundEmojiLayout != null) foregroundEmojiLayout.destroyEmojiLayout();
+    super.destroy();
+  }
 
   @Override
   public int getId () {
@@ -601,6 +615,10 @@ public class EmojiStatusSelectorEmojiPage extends BottomSheetViewController.Bott
       addView(foregroundEmojiLayout);
     }
 
+    public void destroyEmojiLayout () {
+      foregroundEmojiLayout.destroy();
+    }
+
     @Override
     protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
       int height = MeasureSpec.getSize(heightMeasureSpec);
@@ -655,6 +673,109 @@ public class EmojiStatusSelectorEmojiPage extends BottomSheetViewController.Bott
     private final ViewController<?> parent;
     private final FrameLayout foregroundView;
     private final AnimationsEmojiStatusSetDelegate animationDelegate;
+    private @Nullable View drawerAnchor;
+    private int drawerAnchorX, drawerAnchorY;
+    private int compactHeight;
+    private boolean wasCompact;
+    private float popupRevealFactor;
+
+    public void setDrawerAnchor (@NonNull View anchor, int x, int y) {
+      drawerAnchor = anchor;
+      drawerAnchorX = x;
+      drawerAnchorY = y;
+    }
+
+    private boolean isCompactPopup () {
+      moe.kirao.mgx.layout.MoexTwoPane panes = context().moexTwoPane();
+      return drawerAnchor != null && panes != null && panes.isActive();
+    }
+
+    @Override
+    protected boolean getPopupContentBounds (@NonNull View popup, @NonNull Rect available, @NonNull Rect out) {
+      if (!isCompactPopup() || available.width() <= 0 || available.height() <= 0) return false;
+      int[] popupLocation = new int[2];
+      popup.getLocationInWindow(popupLocation);
+      int visibleBottom = available.bottom;
+      org.thunderdog.challegram.widget.RootFrameLayout root = context().getRootView();
+      // Full-screen edge-to-edge sheets retain their old effective margins while IME is visible.
+      // Clamp to the raw window inset boundary; min avoids subtracting an already applied inset twice.
+      int bottomInset = root.getSystemInsets().bottom;
+      if (bottomInset > root.getSystemInsetsWithoutIme().bottom) {
+        int[] rootLocation = new int[2];
+        root.getLocationInWindow(rootLocation);
+        visibleBottom = Math.min(visibleBottom,
+          rootLocation[1] + root.getMeasuredHeight() - bottomInset - popupLocation[1]);
+      }
+      int gap = Screen.dp(8f);
+      int safeLeft = available.left + Math.min(gap, available.width() / 2);
+      int safeRight = available.right - Math.min(gap, available.width() / 2);
+      int safeTop = Math.min(visibleBottom, Math.max(available.top, HeaderView.getTopOffset()) + gap);
+      int safeBottom = Math.max(safeTop, visibleBottom - gap);
+      int width = Math.min(Screen.dp(300f), Math.max(1, safeRight - safeLeft));
+      int height = Math.min(Screen.dp(440f), Math.max(1, safeBottom - safeTop));
+      int[] anchorLocation = new int[2];
+      drawerAnchor.getLocationInWindow(anchorLocation);
+      int anchorX = anchorLocation[0] - popupLocation[0] + drawerAnchorX;
+      int anchorY = anchorLocation[1] - popupLocation[1] + drawerAnchorY;
+      int left = Lang.rtl() ? anchorX - Screen.dp(16f) : anchorX - width + Screen.dp(16f);
+      left = Math.max(safeLeft, Math.min(safeRight - width, left));
+      int top = Math.max(safeTop, Math.min(safeBottom - height, anchorY + gap));
+      out.set(left, top, left + width, top + height);
+      compactHeight = height;
+      return true;
+    }
+
+    @Override
+    protected int getTargetHeight () {
+      return isCompactPopup() ? (compactHeight > 0 ? compactHeight : Math.min(super.getTargetHeight(), Screen.dp(440f))) : super.getTargetHeight();
+    }
+
+    @Override
+    protected int getHeaderTopOffset () {
+      return isCompactPopup() ? 0 : super.getHeaderTopOffset();
+    }
+
+    @Override
+    protected float getContentClipTop () {
+      return headerTranslationY + getHeaderHeight();
+    }
+
+    @Override
+    protected int calculateTotalHeight () {
+      return isCompactPopup() ? 0 : super.calculateTotalHeight();
+    }
+
+    @Override
+    public int getCurrentPopupHeight () {
+      return isCompactPopup() ? 0 : super.getCurrentPopupHeight();
+    }
+
+    @Override
+    protected void onPopupContentLayout () {
+      boolean compact = isCompactPopup();
+      if (wasCompact != compact) {
+        wasCompact = compact;
+        setHeaderPosition(getContentOffset() + getHeaderTopOffset());
+        invalidateAllItemDecorations();
+      }
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+        wrapView.setClipToOutline(compact);
+        wrapView.setElevation(compact ? Screen.dp(8f) : 0f);
+      }
+      onPopupRevealFactorChanged(popupRevealFactor);
+    }
+
+    @Override
+    protected void onPopupRevealFactorChanged (float factor) {
+      popupRevealFactor = factor;
+      if (wrapView == null) return;
+      boolean compact = isCompactPopup();
+      wrapView.setAlpha(compact ? factor : 1f);
+      float scale = compact ? .96f + .04f * factor : 1f;
+      wrapView.setScaleX(scale);
+      wrapView.setScaleY(scale);
+      if (compact) wrapView.setTranslationY(0f);
+    }
 
     public Wrapper (Context context, Tdlib tdlib, ViewController<?> parent, AnimationsEmojiStatusSetDelegate delegate) {
       super(context, tdlib);
@@ -696,6 +817,16 @@ public class EmojiStatusSelectorEmojiPage extends BottomSheetViewController.Bott
     @Override
     protected void onAfterCreateView () {
       setLickViewColor(Theme.getColor(ColorId.headerLightBackground));
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+        wrapView.setOutlineProvider(new android.view.ViewOutlineProvider() {
+          @Override
+          public void getOutline (View view, android.graphics.Outline outline) {
+            outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), Screen.dp(12f));
+          }
+        });
+      }
+      wasCompact = isCompactPopup();
+      onPopupContentLayout();
     }
 
     @Override
@@ -719,9 +850,8 @@ public class EmojiStatusSelectorEmojiPage extends BottomSheetViewController.Bott
 
     @Override
     protected void setHeaderPosition (float y) {
-      int t = 0;
-      super.setHeaderPosition(y + t);
-      fragment.setHeaderPosition(y + t);
+      super.setHeaderPosition(y);
+      fragment.setHeaderPosition(headerTranslationY);
     }
 
     @Override
@@ -737,14 +867,14 @@ public class EmojiStatusSelectorEmojiPage extends BottomSheetViewController.Bott
     @Override
     protected ViewController<?> onCreatePagerItemForPosition (Context context, int position) {
       if (position != 0) return null;
-      setHeaderPosition(getContentOffset() + HeaderView.getTopOffset());
+      setHeaderPosition(getContentOffset() + getHeaderTopOffset());
       setDefaultListenersAndDecorators(fragment);
       return fragment;
     }
 
     @Override
     protected int getContentOffset () {
-      return (getTargetHeight() - getHeaderHeight(true)) / 3;
+      return isCompactPopup() ? 0 : (getTargetHeight() - getHeaderHeight(true)) / 3;
     }
 
     @Override

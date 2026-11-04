@@ -37,6 +37,7 @@ public final class MoexShadowUnreadManager {
   private static final long SCAN_INCOMPLETE_RETRY_DELAY_MS = 1500L;
   private static final long SCAN_FAILURE_COOLDOWN_MS = 15_000L;
   private static final long SCAN_REQUEST_TIMEOUT_MS = 30_000L;
+  private static final long HIDDEN_USERS_REFRESH_INTERVAL_MS = 60_000L;
   private static final long LOCAL_READ_DEDUP_DELAY_MS = 1500L;
   private static final Pattern RETRY_AFTER_PATTERN = Pattern.compile(
     "(?i)(?:retry(?:_|\\s+)after\\s*[:=_]?\\s*|flood(?:_[a-z]+)*_wait_)(\\d+)");
@@ -45,6 +46,147 @@ public final class MoexShadowUnreadManager {
 
   public interface Callback {
     void onResult (boolean success, int hiddenUnreadCount);
+  }
+
+  public interface HiddenUsersCallback {
+    void onResult (boolean ready);
+  }
+
+  public interface HiddenUsersListener {
+    void onHiddenUsersChanged (long revision);
+  }
+
+  /** Main blacklist membership must not depend on whether a private Chat was cached. */
+  public static boolean isMainBlocked (@NonNull Tdlib tdlib, long userId) {
+    AccountState state = accountState(tdlib);
+    synchronized (state) {
+      Boolean override = state.blockOverrides.get(userId);
+      if (override != null) return override;
+      if (state.hiddenUsersReady) return state.mainUserIds.contains(userId);
+    }
+    return tdlib.chatFullyBlocked(tgx.td.ChatId.fromUserId(userId));
+  }
+
+  public static boolean areHiddenUsersReady (@NonNull Tdlib tdlib) {
+    AccountState state = accountState(tdlib);
+    synchronized (state) { return state.hiddenUsersReady; }
+  }
+
+  public static long hiddenUsersRevision (@NonNull Tdlib tdlib) {
+    AccountState state = accountState(tdlib);
+    synchronized (state) { return state.hiddenUsersRevision; }
+  }
+
+  /** Uses the same account queue as unread scans, including its timeout and bounded retry. */
+  public static void ensureHiddenUsers (@NonNull Tdlib tdlib, @NonNull HiddenUsersCallback callback) {
+    AccountState state = accountState(tdlib);
+    final long requestId, generation;
+    final boolean ready;
+    final boolean failImmediately;
+    synchronized (state) {
+      requestId = ++state.nextHiddenUsersCallbackId;
+      generation = state.hiddenUsersGeneration;
+      ready = state.hiddenUsersReady;
+      failImmediately = !ready && state.apiAttemptTimedOut;
+      if (failImmediately) {
+        state.hiddenUsersDemandPending = true;
+      } else {
+        state.hiddenUsersCallbacks.put(callback, requestId);
+      }
+      if (!ready) state.hiddenUsersLoadFailed = false;
+    }
+    if (failImmediately) {
+      tdlib.ui().post(() -> callback.onResult(false));
+      scheduleHiddenUsersLoad(tdlib, state);
+      return;
+    }
+    if (ready) {
+      deliverHiddenUsers(tdlib, state, callback, requestId, generation, true);
+    } else {
+      scheduleHiddenUsersLoad(tdlib, state);
+    }
+  }
+
+  /** Reconcile other-client changes without discarding an already usable snapshot. */
+  public static void refreshHiddenUsers (@NonNull Tdlib tdlib, boolean force) {
+    if (!(tdlib.authorizationState() instanceof TdApi.AuthorizationStateReady)) return;
+    AccountState state = accountState(tdlib);
+    synchronized (state) {
+      if (state.hiddenUsersLoading || state.hiddenUsersLoadScheduled || state.hiddenUsersRefreshPending) return;
+      long now = SystemClock.uptimeMillis();
+      if (!force && (!state.hiddenUsersReady || now < state.nextHiddenUsersRefreshUptimeMillis)) return;
+      state.nextHiddenUsersRefreshUptimeMillis = now + HIDDEN_USERS_REFRESH_INTERVAL_MS;
+      state.hiddenUsersLoadFailed = false;
+      state.hiddenUsersLoadRetryCount = 0;
+      state.hiddenUsersRefreshPending = state.hiddenUsersReady;
+      state.hiddenUsersDemandPending = true;
+    }
+    scheduleHiddenUsersLoad(tdlib, state);
+  }
+
+  /** A successful local block may have no chat update when no private chat exists. */
+  public static long blockListGeneration (@NonNull Tdlib tdlib) {
+    AccountState state = accountState(tdlib);
+    synchronized (state) { return state.hiddenUsersGeneration; }
+  }
+
+  public static void onBlockListResult (@NonNull Tdlib tdlib, long generation,
+                                       TdApi.MessageSender sender, TdApi.BlockList blockList,
+                                       TdApi.Object result) {
+    if (!(result instanceof TdApi.Ok) || !(sender instanceof TdApi.MessageSenderUser)) return;
+    AccountState state = accountState(tdlib);
+    synchronized (state) {
+      if (state.hiddenUsersGeneration != generation) return;
+      onBlockListChanged(tdlib, ((TdApi.MessageSenderUser) sender).userId,
+        blockList instanceof TdApi.BlockListMain);
+    }
+  }
+
+  private static void deliverHiddenUsers (Tdlib tdlib, AccountState state,
+                                         HiddenUsersCallback callback, long requestId,
+                                         long generation, boolean ready) {
+    tdlib.ui().post(() -> {
+      final boolean result;
+      synchronized (state) {
+        Long pendingId = state.hiddenUsersCallbacks.get(callback);
+        if (state.hiddenUsersGeneration != generation || pendingId == null || pendingId != requestId) return;
+        state.hiddenUsersCallbacks.remove(callback);
+        result = ready && state.hiddenUsersReady;
+      }
+      callback.onResult(result);
+    });
+  }
+
+  public static void cancelHiddenUsers (@NonNull Tdlib tdlib, HiddenUsersCallback callback) {
+    AccountState state = accountState(tdlib);
+    synchronized (state) { state.hiddenUsersCallbacks.remove(callback); }
+  }
+
+  public static void addHiddenUsersListener (@NonNull Tdlib tdlib, HiddenUsersListener listener) {
+    AccountState state = accountState(tdlib);
+    synchronized (state) { state.hiddenUsersListeners.add(listener); }
+  }
+
+  public static void removeHiddenUsersListener (@NonNull Tdlib tdlib, HiddenUsersListener listener) {
+    AccountState state = accountState(tdlib);
+    synchronized (state) { state.hiddenUsersListeners.remove(listener); }
+  }
+
+  private static void notifyHiddenUsersChanged (Tdlib tdlib, AccountState state) {
+    final long revision;
+    final List<HiddenUsersListener> listeners;
+    synchronized (state) {
+      revision = state.hiddenUsersRevision;
+      listeners = new ArrayList<>(state.hiddenUsersListeners);
+    }
+    tdlib.ui().post(() -> {
+      for (HiddenUsersListener listener : listeners) {
+        synchronized (state) {
+          if (state.hiddenUsersRevision != revision || !state.hiddenUsersListeners.contains(listener)) continue;
+        }
+        listener.onHiddenUsersChanged(revision);
+      }
+    });
   }
 
   private interface ScanCallback {
@@ -342,6 +484,7 @@ public final class MoexShadowUnreadManager {
     List<Callback> staleCallbacks = null;
     boolean scheduleHiddenUsersLoad = false;
     boolean enqueueRequest = false;
+    boolean failWaiterImmediately = false;
     synchronized (accountState) {
       long now = SystemClock.uptimeMillis();
       chatRequest = accountState.chatRequests.get(chatId);
@@ -355,7 +498,8 @@ public final class MoexShadowUnreadManager {
           accountState.scanQueue.addFirst(chatRequest);
         }
       }
-      if (!accountState.hiddenUsersReady && accountState.hiddenUsersLoadFailed) {
+      if (!accountState.hiddenUsersReady && accountState.hiddenUsersLoadFailed &&
+          !accountState.apiAttemptTimedOut) {
         cachedFailure = true;
       } else if (sameSnapshot && chatRequest.valid) {
         cachedResult = chatRequest.hiddenUnreadCount;
@@ -363,6 +507,9 @@ public final class MoexShadowUnreadManager {
           now < chatRequest.failureRetryUptimeMillis && !promotedToHighPriority) {
         cachedFailure = true;
       } else {
+        if (accountState.apiAttemptTimedOut && !accountState.hiddenUsersReady) {
+          accountState.hiddenUsersLoadFailed = false;
+        }
         if (!sameSnapshot) {
           if (chatRequest != null) {
             staleCallbacks = new ArrayList<>(chatRequest.callbacks);
@@ -384,7 +531,8 @@ public final class MoexShadowUnreadManager {
           chatRequest.sentRequestCount = 0;
           chatRequest.failureRetryUptimeMillis = 0;
         }
-        chatRequest.callbacks.add(callback);
+        failWaiterImmediately = accountState.apiAttemptTimedOut;
+        if (!failWaiterImmediately) chatRequest.callbacks.add(callback);
         if (!chatRequest.started) {
           if (accountState.hiddenUsersReady) {
             chatRequest.started = true;
@@ -409,6 +557,7 @@ public final class MoexShadowUnreadManager {
       deliver(tdlib, callback, true, cachedResult);
       return;
     }
+    if (failWaiterImmediately) deliver(tdlib, callback, false, 0);
     if (scheduleHiddenUsersLoad) {
       scheduleHiddenUsersLoad(tdlib, accountState);
     }
@@ -439,7 +588,8 @@ public final class MoexShadowUnreadManager {
                                         @NonNull AccountState accountState) {
     long delayMillis;
     synchronized (accountState) {
-      if (accountState.activeScanRequest != null || accountState.scanPumpScheduled ||
+      if (accountState.activeApiAttemptId != 0 || accountState.activeScanRequest != null || accountState.scanPumpScheduled ||
+          accountState.hiddenUsersLoading || accountState.hiddenUsersRefreshPending ||
           accountState.scanQueue.isEmpty()) {
         return;
       }
@@ -457,7 +607,8 @@ public final class MoexShadowUnreadManager {
     boolean waitForCooldown = false;
     synchronized (accountState) {
       accountState.scanPumpScheduled = false;
-      if (accountState.activeScanRequest != null) return;
+      if (accountState.activeApiAttemptId != 0 || accountState.activeScanRequest != null ||
+          accountState.hiddenUsersLoading || accountState.hiddenUsersRefreshPending) return;
       long notBeforeUptimeMillis = Math.max(accountState.nextScanAllowedUptimeMillis,
         accountState.scanRetryAfterUptimeMillis);
       if (SystemClock.uptimeMillis() < notBeforeUptimeMillis) {
@@ -481,68 +632,107 @@ public final class MoexShadowUnreadManager {
     }
   }
 
+  /** Manual Shadow Ban edits preserve the successful server snapshot and any in-flight page. */
   public static void invalidateAccount (int accountId) {
-    List<AccountState> states = new ArrayList<>();
+    List<Tdlib> accounts = new ArrayList<>();
     synchronized (STATES_LOCK) {
-      for (Map.Entry<Tdlib, AccountState> entry : ACCOUNT_STATES.entrySet()) {
-        Tdlib tdlib = entry.getKey();
-        if (tdlib != null && tdlib.id() == accountId) {
-          states.add(entry.getValue());
-        }
+      for (Tdlib tdlib : ACCOUNT_STATES.keySet()) {
+        if (tdlib != null && tdlib.id() == accountId) accounts.add(tdlib);
       }
     }
-    for (AccountState state : states) {
-      invalidate(state);
+    for (Tdlib tdlib : accounts) {
+      AccountState state = accountState(tdlib);
+      if (syncManualUsers(tdlib, state, true)) {
+        notifyHiddenUsersChanged(tdlib, state);
+      }
     }
   }
 
+  private static boolean syncManualUsers (Tdlib tdlib, AccountState state, boolean invalidateUnread) {
+    final long revision;
+    synchronized (state) { revision = ++state.manualUsersRevision; }
+    HashSet<Long> users = new HashSet<>();
+    for (long userId : MoexConfig.instance().getShadowBannedUsers(tdlib.id())) {
+      if (userId != 0 && !tdlib.isSelfUserId(userId)) users.add(userId);
+    }
+    synchronized (state) {
+      if (revision != state.manualUsersRevision) return false;
+      state.manualUserIds.clear();
+      state.manualUserIds.addAll(users);
+      rebuildHiddenUsers(state);
+      if (invalidateUnread) {
+        clearUnreadRequests(state);
+        state.hiddenUsersRevision++;
+      }
+      return true;
+    }
+  }
+
+  private static void rebuildHiddenUsers (AccountState state) {
+    state.hiddenUserIds.clear();
+    state.hiddenUserIds.addAll(state.mainUserIds);
+    state.hiddenUserIds.addAll(state.manualUserIds);
+  }
+
+  private static void clearUnreadRequests (AccountState state) {
+    state.generation++;
+    state.scanQueue.clear();
+    state.scanPumpScheduled = false;
+    state.scheduledChecks.clear();
+    for (ChatRequest request : state.chatRequests.values()) request.callbacks.clear();
+    state.chatRequests.clear();
+    state.localReadRequests.clear();
+  }
+
+  /** Authorization teardown only; a different login must never inherit the previous snapshot. */
   public static void invalidate (@NonNull Tdlib tdlib) {
     AccountState state;
-    synchronized (STATES_LOCK) {
-      state = ACCOUNT_STATES.get(tdlib);
-    }
-    if (state != null) {
+    synchronized (STATES_LOCK) { state = ACCOUNT_STATES.get(tdlib); }
+    if (state == null) return;
+    Map<HiddenUsersCallback, Long> callbacks;
+    final long generation;
+    // Logging out invalidates results, but only Closed guarantees that the old native client
+    // can no longer keep a query alive. Ordinary account switches never clear this gate.
+    boolean clientClosed = tdlib.authorizationState() instanceof TdApi.AuthorizationStateClosed;
+    synchronized (state) {
+      callbacks = new HashMap<>(state.hiddenUsersCallbacks);
       invalidate(state);
+      if (clientClosed) {
+        state.activeApiAttemptId = 0;
+        state.apiAttemptTimedOut = false;
+        state.activeHiddenUsersPageAttemptId = 0;
+        state.activeScanRequest = null;
+      }
+      generation = state.hiddenUsersGeneration;
+    }
+    for (Map.Entry<HiddenUsersCallback, Long> callback : callbacks.entrySet()) {
+      deliverHiddenUsers(tdlib, state, callback.getKey(), callback.getValue(), generation, false);
     }
   }
 
   public static void onBlockListChanged (@NonNull Tdlib tdlib, long userId, boolean blocked) {
     if (userId == 0 || tdlib.isSelfUserId(userId)) return;
-    AccountState state;
-    synchronized (STATES_LOCK) {
-      state = ACCOUNT_STATES.get(tdlib);
-    }
-    if (state == null) return;
-
+    AccountState state = accountState(tdlib);
+    boolean changed;
     synchronized (state) {
+      Boolean previous = null;
+      if (!state.hiddenUsersReady || state.hiddenUsersLoading) {
+        previous = state.blockOverrides.put(userId, blocked);
+      }
       if (!state.hiddenUsersReady) {
-        state.blockOverrides.put(userId, blocked);
+        changed = previous == null || previous != blocked;
         state.hiddenUsersLoadFailed = false;
         state.hiddenUsersLoadRetryCount = 0;
-        state.localReadRequests.clear();
-        return;
-      }
-      boolean changed;
-      if (blocked) {
-        changed = state.hiddenUserIds.add(userId);
-      } else if (!state.manualUserIds.contains(userId)) {
-        changed = state.hiddenUserIds.remove(userId);
       } else {
-        changed = false;
+        changed = blocked ? state.mainUserIds.add(userId) : state.mainUserIds.remove(userId);
+        rebuildHiddenUsers(state);
       }
       if (changed) {
-        state.generation++;
-        state.scanQueue.clear();
-        state.scanPumpScheduled = false;
-        state.hiddenUsersLoadScheduled = false;
-        state.hiddenUsersLoadScheduleId++;
-        for (ChatRequest request : state.chatRequests.values()) {
-          request.callbacks.clear();
-        }
-        state.chatRequests.clear();
-        state.localReadRequests.clear();
+        clearUnreadRequests(state);
+        state.hiddenUsersRevision++;
       }
     }
+    if (changed) notifyHiddenUsersChanged(tdlib, state);
   }
 
   private static AccountState accountState (Tdlib tdlib) {
@@ -559,10 +749,17 @@ public final class MoexShadowUnreadManager {
   private static void invalidate (AccountState state) {
     synchronized (state) {
       state.generation++;
+      state.hiddenUsersGeneration++;
       state.hiddenUsersReady = false;
       state.hiddenUsersLoading = false;
       state.hiddenUsersLoadFailed = false;
       state.hiddenUsersLoadRetryCount = 0;
+      state.hiddenUsersDemandPending = false;
+      state.hiddenUsersRefreshPending = false;
+      state.nextHiddenUsersRefreshUptimeMillis = 0;
+      state.hiddenUsersRevision++;
+      state.manualUsersRevision++;
+      state.mainUserIds.clear();
       state.hiddenUserIds.clear();
       state.manualUserIds.clear();
       state.blockOverrides.clear();
@@ -579,14 +776,20 @@ public final class MoexShadowUnreadManager {
     }
   }
 
+  private static boolean hasHiddenUsersDemand (AccountState state) {
+    return !state.chatRequests.isEmpty() || !state.hiddenUsersCallbacks.isEmpty() ||
+      state.hiddenUsersDemandPending || state.hiddenUsersRefreshPending || state.hiddenUsersLoadRetryCount > 0 && !state.hiddenUsersLoadFailed;
+  }
+
   private static void scheduleHiddenUsersLoad (Tdlib tdlib, AccountState accountState) {
     long delayMillis;
     long scheduleId;
     synchronized (accountState) {
-      if (accountState.activeScanRequest != null || accountState.hiddenUsersLoadFailed ||
-          accountState.activeHiddenUsersPageAttemptId != 0 || accountState.hiddenUsersReady ||
+      if (accountState.activeApiAttemptId != 0 || accountState.activeScanRequest != null || accountState.hiddenUsersLoadFailed ||
+          accountState.activeHiddenUsersPageAttemptId != 0 ||
+          accountState.hiddenUsersReady && !accountState.hiddenUsersRefreshPending ||
           accountState.hiddenUsersLoading ||
-          accountState.hiddenUsersLoadScheduled || accountState.chatRequests.isEmpty()) {
+          accountState.hiddenUsersLoadScheduled || !hasHiddenUsersDemand(accountState)) {
         return;
       }
       delayMillis = Math.max(0L,
@@ -603,11 +806,11 @@ public final class MoexShadowUnreadManager {
           return;
         }
         accountState.hiddenUsersLoadScheduled = false;
-        if (accountState.activeScanRequest == null && !accountState.hiddenUsersLoadFailed &&
+        if (accountState.activeApiAttemptId == 0 && accountState.activeScanRequest == null && !accountState.hiddenUsersLoadFailed &&
             accountState.activeHiddenUsersPageAttemptId == 0 &&
-            !accountState.hiddenUsersReady &&
+            (!accountState.hiddenUsersReady || accountState.hiddenUsersRefreshPending) &&
             !accountState.hiddenUsersLoading &&
-            !accountState.chatRequests.isEmpty()) {
+            hasHiddenUsersDemand(accountState)) {
           if (SystemClock.uptimeMillis() < accountState.scanRetryAfterUptimeMillis) {
             reschedule = true;
           } else {
@@ -629,19 +832,22 @@ public final class MoexShadowUnreadManager {
     scheduleScanPump(tdlib, accountState);
   }
 
+  private static boolean isHiddenUsersCurrent (AccountState state, long generation) {
+    synchronized (state) { return state.hiddenUsersGeneration == generation; }
+  }
+
   private static void loadHiddenUsers (Tdlib tdlib, AccountState accountState) {
     long generation;
     synchronized (accountState) {
-      generation = accountState.generation;
+      generation = accountState.hiddenUsersGeneration;
+      accountState.hiddenUsersDemandPending = false;
+      accountState.hiddenUsersRefreshPending = false;
+      accountState.nextHiddenUsersRefreshUptimeMillis = SystemClock.uptimeMillis() + HIDDEN_USERS_REFRESH_INTERVAL_MS;
+      // Only events received after this request starts may override its server snapshot.
+      accountState.blockOverrides.clear();
     }
-    HashSet<Long> manualUserIds = new HashSet<>();
-    for (long userId : MoexConfig.instance().getShadowBannedUsers(tdlib.id())) {
-      if (userId != 0 && !tdlib.isSelfUserId(userId)) {
-        manualUserIds.add(userId);
-      }
-    }
-    loadBlockedUsersPage(tdlib, accountState, generation, 0, 0, manualUserIds,
-      new HashSet<>(manualUserIds));
+    syncManualUsers(tdlib, accountState, false);
+    loadBlockedUsersPage(tdlib, accountState, generation, 0, 0, null, new HashSet<>());
   }
 
   private static void loadBlockedUsersPage (Tdlib tdlib, AccountState accountState, long generation,
@@ -650,7 +856,7 @@ public final class MoexShadowUnreadManager {
                                             HashSet<Long> hiddenUserIds) {
     long cooldownDelayMillis;
     synchronized (accountState) {
-      if (accountState.generation != generation || !accountState.hiddenUsersLoading) return;
+      if (accountState.hiddenUsersGeneration != generation || !accountState.hiddenUsersLoading) return;
       cooldownDelayMillis = accountState.scanRetryAfterUptimeMillis -
         SystemClock.uptimeMillis();
     }
@@ -662,8 +868,8 @@ public final class MoexShadowUnreadManager {
     long reservedPageAttemptId;
     long recheckedCooldownDelayMillis;
     synchronized (accountState) {
-      if (accountState.generation != generation || !accountState.hiddenUsersLoading ||
-          accountState.activeHiddenUsersPageAttemptId != 0) {
+      if (accountState.hiddenUsersGeneration != generation || !accountState.hiddenUsersLoading ||
+          accountState.activeApiAttemptId != 0 || accountState.activeHiddenUsersPageAttemptId != 0) {
         return;
       }
       recheckedCooldownDelayMillis = accountState.scanRetryAfterUptimeMillis -
@@ -671,7 +877,9 @@ public final class MoexShadowUnreadManager {
       if (recheckedCooldownDelayMillis > 0) {
         reservedPageAttemptId = 0;
       } else {
-        reservedPageAttemptId = ++accountState.nextHiddenUsersPageAttemptId;
+        reservedPageAttemptId = ++accountState.nextApiAttemptId;
+        accountState.activeApiAttemptId = reservedPageAttemptId;
+        accountState.apiAttemptTimedOut = false;
         accountState.activeHiddenUsersPageAttemptId = reservedPageAttemptId;
       }
     }
@@ -687,11 +895,9 @@ public final class MoexShadowUnreadManager {
       (messageSenders, error) -> {
         boolean transientFailure = error != null ? isTransientScanError(error) :
           messageSenders == null;
-        if (transientFailure) {
-          applyScanErrorCooldown(accountState, error);
-        }
-        if (!finishHiddenUsersPageAttempt(accountState, pageAttemptId)) return;
-        if (!isCurrent(accountState, generation)) {
+        if (!finishHiddenUsersPageAttempt(tdlib, accountState, pageAttemptId,
+            transientFailure, error)) return;
+        if (!isHiddenUsersCurrent(accountState, generation)) {
           resumeAccountWork(tdlib, accountState);
           return;
         }
@@ -715,7 +921,7 @@ public final class MoexShadowUnreadManager {
           }
         }
         int nextOffset = offset + receivedCount;
-        if (receivedCount > 0 && receivedCount < PAGE_SIZE) {
+        if (receivedCount > 0 && messageSenders.totalCount > 0 && nextOffset >= messageSenders.totalCount) {
           completeHiddenUsersLoad(tdlib, accountState, generation, manualUserIds, hiddenUserIds,
             false);
         } else if (receivedCount > 0) {
@@ -726,6 +932,9 @@ public final class MoexShadowUnreadManager {
               loadBlockedUsersPage(tdlib, accountState, generation, nextOffset, pageCount + 1,
                 manualUserIds, hiddenUserIds), SCAN_PAGE_GAP_MS);
           }
+        } else if (messageSenders.totalCount > offset) {
+          // A known incomplete page is not an empty authoritative blacklist.
+          completeHiddenUsersLoad(tdlib, accountState, generation, null, null, true);
         } else {
           completeHiddenUsersLoad(tdlib, accountState, generation, manualUserIds, hiddenUserIds,
             false);
@@ -733,28 +942,57 @@ public final class MoexShadowUnreadManager {
       });
   }
 
-  private static boolean finishHiddenUsersPageAttempt (AccountState accountState,
-                                                       long pageAttemptId) {
+  private static boolean finishHiddenUsersPageAttempt (Tdlib tdlib, AccountState accountState,
+                                                       long pageAttemptId, boolean transientFailure,
+                                                       TdApi.Error error) {
+    boolean current;
     synchronized (accountState) {
-      if (accountState.activeHiddenUsersPageAttemptId != pageAttemptId) return false;
-      accountState.activeHiddenUsersPageAttemptId = 0;
-      return true;
+      if (accountState.activeApiAttemptId != pageAttemptId) return false;
+      if (transientFailure) applyScanErrorCooldown(accountState, error);
+      accountState.activeApiAttemptId = 0;
+      accountState.apiAttemptTimedOut = false;
+      current = accountState.activeHiddenUsersPageAttemptId == pageAttemptId;
+      if (current) accountState.activeHiddenUsersPageAttemptId = 0;
     }
+    if (!current) resumeAccountWork(tdlib, accountState);
+    return current;
+  }
+
+  private static void failAccountWaiters (Tdlib tdlib, AccountState accountState) {
+    Map<HiddenUsersCallback, Long> membershipCallbacks;
+    List<Callback> callbacks = new ArrayList<>();
+    final long generation;
+    synchronized (accountState) {
+      generation = accountState.hiddenUsersGeneration;
+      membershipCallbacks = new HashMap<>(accountState.hiddenUsersCallbacks);
+      for (ChatRequest request : accountState.chatRequests.values()) {
+        callbacks.addAll(request.callbacks);
+        request.callbacks.clear();
+      }
+    }
+    for (Map.Entry<HiddenUsersCallback, Long> callback : membershipCallbacks.entrySet()) {
+      deliverHiddenUsers(tdlib, accountState, callback.getKey(), callback.getValue(), generation, false);
+    }
+    for (Callback callback : callbacks) deliver(tdlib, callback, false, 0);
   }
 
   private static void onHiddenUsersPageTimeout (Tdlib tdlib, AccountState accountState,
                                                long generation, long pageAttemptId) {
-    boolean current;
     synchronized (accountState) {
-      if (accountState.activeHiddenUsersPageAttemptId != pageAttemptId) return;
+      if (accountState.activeApiAttemptId != pageAttemptId ||
+          accountState.activeHiddenUsersPageAttemptId != pageAttemptId) return;
       accountState.activeHiddenUsersPageAttemptId = 0;
-      current = accountState.generation == generation && accountState.hiddenUsersLoading;
-    }
-    applyScanErrorCooldown(accountState, null);
-    if (current) {
-      completeHiddenUsersLoad(tdlib, accountState, generation, null, null, true);
-    } else {
-      resumeAccountWork(tdlib, accountState);
+      accountState.apiAttemptTimedOut = true;
+      boolean current = accountState.hiddenUsersGeneration == generation && accountState.hiddenUsersLoading;
+      // Keep timeout bookkeeping atomic with the native callback and Closed invalidation.
+      // Waiter delivery and the next pump are posted to the UI queue, never run under this lock.
+      applyScanErrorCooldown(accountState, null);
+      failAccountWaiters(tdlib, accountState);
+      if (current) {
+        completeHiddenUsersLoad(tdlib, accountState, generation, null, null, true);
+      } else {
+        resumeAccountWork(tdlib, accountState);
+      }
     }
   }
 
@@ -763,9 +1001,11 @@ public final class MoexShadowUnreadManager {
                                                boolean retryableFailure) {
     List<ChatRequest> pendingRequests = new ArrayList<>();
     List<Callback> failedCallbacks = new ArrayList<>();
+    Map<HiddenUsersCallback, Long> membershipCallbacks = new HashMap<>();
     boolean retryLoad = false;
+    boolean membershipChanged = false;
     synchronized (accountState) {
-      if (accountState.generation != generation || !accountState.hiddenUsersLoading) return;
+      if (accountState.hiddenUsersGeneration != generation || !accountState.hiddenUsersLoading) return;
       accountState.hiddenUsersLoading = false;
       if (hiddenUserIds == null) {
         if (!retryableFailure) {
@@ -778,35 +1018,48 @@ public final class MoexShadowUnreadManager {
         }
         if (retryableFailure && accountState.hiddenUsersLoadRetryCount == 0) {
           accountState.hiddenUsersLoadRetryCount++;
-          for (ChatRequest request : accountState.chatRequests.values()) {
-            request.started = false;
-            request.queued = false;
+          accountState.hiddenUsersRefreshPending = accountState.hiddenUsersReady;
+          if (!accountState.hiddenUsersReady) {
+            for (ChatRequest request : accountState.chatRequests.values()) {
+              request.started = false;
+              request.queued = false;
+            }
+            accountState.scanQueue.clear();
           }
-          accountState.scanQueue.clear();
-          retryLoad = !accountState.chatRequests.isEmpty();
+          retryLoad = hasHiddenUsersDemand(accountState);
         } else {
           accountState.hiddenUsersLoadRetryCount = 0;
-          for (ChatRequest request : accountState.chatRequests.values()) {
-            failedCallbacks.addAll(request.callbacks);
-            request.callbacks.clear();
+          accountState.scanRetryAfterUptimeMillis = Math.max(accountState.scanRetryAfterUptimeMillis,
+            SystemClock.uptimeMillis() + SCAN_FAILURE_COOLDOWN_MS);
+          accountState.hiddenUsersLoadFailed = true;
+          accountState.hiddenUsersRefreshPending = false;
+          if (!accountState.hiddenUsersReady) {
+            membershipCallbacks.putAll(accountState.hiddenUsersCallbacks);
+            for (ChatRequest request : accountState.chatRequests.values()) {
+              failedCallbacks.addAll(request.callbacks);
+              request.callbacks.clear();
+            }
+            accountState.scanQueue.clear();
+            accountState.chatRequests.clear();
           }
-          accountState.scanQueue.clear();
-          accountState.chatRequests.clear();
         }
       } else {
         for (Map.Entry<Long, Boolean> override : accountState.blockOverrides.entrySet()) {
           if (override.getValue()) {
             hiddenUserIds.add(override.getKey());
-          } else if (!manualUserIds.contains(override.getKey())) {
+          } else {
             hiddenUserIds.remove(override.getKey());
           }
         }
-        accountState.hiddenUserIds.clear();
-        accountState.hiddenUserIds.addAll(hiddenUserIds);
-        accountState.manualUserIds.clear();
-        accountState.manualUserIds.addAll(manualUserIds);
+        membershipChanged = !accountState.hiddenUsersReady || !accountState.mainUserIds.equals(hiddenUserIds);
+        if (accountState.hiddenUsersReady && membershipChanged) clearUnreadRequests(accountState);
+        accountState.mainUserIds.clear();
+        accountState.mainUserIds.addAll(hiddenUserIds);
+        rebuildHiddenUsers(accountState);
+        membershipCallbacks.putAll(accountState.hiddenUsersCallbacks);
         accountState.blockOverrides.clear();
         accountState.hiddenUsersReady = true;
+        if (membershipChanged) accountState.hiddenUsersRevision++;
         accountState.hiddenUsersLoadFailed = false;
         accountState.hiddenUsersLoadRetryCount = 0;
         for (ChatRequest request : accountState.chatRequests.values()) {
@@ -817,6 +1070,11 @@ public final class MoexShadowUnreadManager {
         }
       }
     }
+    if (membershipChanged) notifyHiddenUsersChanged(tdlib, accountState);
+    for (Map.Entry<HiddenUsersCallback, Long> callback : membershipCallbacks.entrySet()) {
+      deliverHiddenUsers(tdlib, accountState, callback.getKey(), callback.getValue(), generation,
+        hiddenUserIds != null);
+    }
     for (Callback callback : failedCallbacks) {
       deliver(tdlib, callback, false, 0);
     }
@@ -826,6 +1084,7 @@ public final class MoexShadowUnreadManager {
     if (retryLoad) {
       scheduleHiddenUsersLoad(tdlib, accountState);
     }
+    scheduleScanPump(tdlib, accountState);
   }
 
   private static void executeRequest (Tdlib tdlib, AccountState accountState, ChatRequest request) {
@@ -922,10 +1181,8 @@ public final class MoexShadowUnreadManager {
       (foundMessages, error) -> {
         boolean transientFailure = error != null ? isTransientScanError(error) :
           foundMessages == null;
-        if (transientFailure) {
-          applyScanErrorCooldown(accountState, error);
-        }
-        if (!finishScanAttempt(accountState, request, attemptId)) return;
+        if (!finishScanAttempt(tdlib, accountState, request, attemptId,
+            transientFailure, error)) return;
         if (!isCurrent(accountState, request)) {
           completeRequest(tdlib, accountState, request, ScanOutcome.SUPERSEDED, 0);
           return;
@@ -1000,10 +1257,8 @@ public final class MoexShadowUnreadManager {
       (messages, error) -> {
         boolean transientFailure = error != null ? isTransientScanError(error) :
           messages == null;
-        if (transientFailure) {
-          applyScanErrorCooldown(accountState, error);
-        }
-        if (!finishScanAttempt(accountState, request, attemptId)) return;
+        if (!finishScanAttempt(tdlib, accountState, request, attemptId,
+            transientFailure, error)) return;
         if (!isCurrent(accountState, request)) {
           completeRequest(tdlib, accountState, request, ScanOutcome.SUPERSEDED, 0);
           return;
@@ -1071,14 +1326,17 @@ public final class MoexShadowUnreadManager {
     synchronized (accountState) {
       if (!isCurrentLocked(accountState, request) ||
           accountState.activeScanRequest != request ||
-          request.activeAttemptId != 0 || request.sentRequestCount >= MAX_SCAN_REQUESTS) {
+          accountState.activeApiAttemptId != 0 || request.activeAttemptId != 0 ||
+          request.sentRequestCount >= MAX_SCAN_REQUESTS) {
         return 0;
       }
       if (SystemClock.uptimeMillis() < accountState.scanRetryAfterUptimeMillis) {
         return -1;
       }
       request.sentRequestCount++;
-      attemptId = ++accountState.nextScanAttemptId;
+      attemptId = ++accountState.nextApiAttemptId;
+      accountState.activeApiAttemptId = attemptId;
+      accountState.apiAttemptTimedOut = false;
       request.activeAttemptId = attemptId;
     }
     tdlib.ui().postDelayed(() -> onScanAttemptTimeout(tdlib, accountState, request, attemptId),
@@ -1101,29 +1359,36 @@ public final class MoexShadowUnreadManager {
     return true;
   }
 
-  private static boolean finishScanAttempt (AccountState accountState, ChatRequest request,
-                                            long attemptId) {
+  private static boolean finishScanAttempt (Tdlib tdlib, AccountState accountState, ChatRequest request,
+                                            long attemptId, boolean transientFailure, TdApi.Error error) {
+    boolean current;
     synchronized (accountState) {
-      if (request.activeAttemptId != attemptId) return false;
-      request.activeAttemptId = 0;
-      return true;
+      if (accountState.activeApiAttemptId != attemptId) return false;
+      if (transientFailure) applyScanErrorCooldown(accountState, error);
+      accountState.activeApiAttemptId = 0;
+      accountState.apiAttemptTimedOut = false;
+      current = request.activeAttemptId == attemptId;
+      if (current) request.activeAttemptId = 0;
     }
+    if (!current) resumeAccountWork(tdlib, accountState);
+    return current;
   }
 
   private static void onScanAttemptTimeout (Tdlib tdlib, AccountState accountState,
                                             ChatRequest request, long attemptId) {
-    boolean current;
     synchronized (accountState) {
-      if (request.activeAttemptId != attemptId) return;
+      if (accountState.activeApiAttemptId != attemptId || request.activeAttemptId != attemptId) return;
       request.activeAttemptId = 0;
-      current = isCurrentLocked(accountState, request) &&
+      accountState.apiAttemptTimedOut = true;
+      boolean current = isCurrentLocked(accountState, request) &&
         accountState.activeScanRequest == request;
-    }
-    applyScanErrorCooldown(accountState, null);
-    if (current) {
-      completeRequest(tdlib, accountState, request, ScanOutcome.TRANSIENT_FAILURE, 0);
-    } else {
-      completeRequest(tdlib, accountState, request, ScanOutcome.SUPERSEDED, 0);
+      applyScanErrorCooldown(accountState, null);
+      failAccountWaiters(tdlib, accountState);
+      if (current) {
+        completeRequest(tdlib, accountState, request, ScanOutcome.TRANSIENT_FAILURE, 0);
+      } else {
+        completeRequest(tdlib, accountState, request, ScanOutcome.SUPERSEDED, 0);
+      }
     }
   }
 
@@ -1262,9 +1527,19 @@ public final class MoexShadowUnreadManager {
 
   private static final class AccountState {
     private long generation;
+    private long hiddenUsersGeneration;
+    private long hiddenUsersRevision;
+    private long manualUsersRevision;
+    private final HashSet<Long> mainUserIds = new HashSet<>();
+    private long nextHiddenUsersCallbackId;
+    private final HashMap<HiddenUsersCallback, Long> hiddenUsersCallbacks = new HashMap<>();
+    private final HashSet<HiddenUsersListener> hiddenUsersListeners = new HashSet<>();
     private boolean hiddenUsersReady;
     private boolean hiddenUsersLoading;
     private boolean hiddenUsersLoadFailed;
+    private boolean hiddenUsersDemandPending;
+    private boolean hiddenUsersRefreshPending;
+    private long nextHiddenUsersRefreshUptimeMillis;
     private final HashSet<Long> hiddenUserIds = new HashSet<>();
     private final HashSet<Long> manualUserIds = new HashSet<>();
     private final HashMap<Long, Boolean> blockOverrides = new HashMap<>();
@@ -1274,9 +1549,12 @@ public final class MoexShadowUnreadManager {
     private final HashMap<Long, LocalReadRequest> localReadRequests = new HashMap<>();
     private ChatRequest activeScanRequest;
     private long nextScheduledCheckId;
-    private long nextScanAttemptId;
+    // API completion owns this gate. The 30-second UI deadline must never release it.
+    // IDs remain monotonic across Closed so an old client callback cannot unlock a new request.
+    private long nextApiAttemptId;
+    private long activeApiAttemptId;
+    private boolean apiAttemptTimedOut;
     private long hiddenUsersLoadScheduleId;
-    private long nextHiddenUsersPageAttemptId;
     private long activeHiddenUsersPageAttemptId;
     private int hiddenUsersLoadRetryCount;
     private boolean scanPumpScheduled;

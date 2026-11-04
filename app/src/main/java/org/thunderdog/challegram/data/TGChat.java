@@ -66,6 +66,7 @@ import java.util.concurrent.TimeUnit;
 import moe.kirao.mgx.MoexConfig;
 import moe.kirao.mgx.MoexMessageFilter;
 import moe.kirao.mgx.MoexShadowUnreadManager;
+import moe.kirao.mgx.topics.ForumUnreadBadges;
 
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.animator.BounceAnimator;
@@ -81,7 +82,7 @@ import tgx.td.ChatPosition;
 import tgx.td.Td;
 import tgx.td.TdExt;
 
-public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.RefreshCallback, Counter.Callback, ReactionLoadListener, Destroyable, TdlibUi.MessageProvider {
+public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.RefreshCallback, Counter.Callback, ReactionLoadListener, Destroyable, TdlibUi.MessageProvider, ForumUnreadBadges.Listener {
   private static final int FLAG_HAS_PREFIX = 1;
   private static final int FLAG_TEXT_DRAFT = 1 << 4;
   private static final int FLAG_SHOW_VERIFY = 1 << 5;
@@ -834,7 +835,22 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
 
     reactionsCounter.setCount(hasReactions ? Tdlib.CHAT_MARKED_AS_UNREAD : 0, !notificationsEnabled(), allowAnimation && needAnimateChanges());
     mentionCounter.setCount(hasMentions ? Tdlib.CHAT_MARKED_AS_UNREAD : 0, false, allowAnimation && needAnimateChanges());
-    counter.setCount(hasMentions && unreadCount == 1 ? 0 : unreadCount, !notificationsEnabled(), allowAnimation && needAnimateChanges());
+    boolean muted = !notificationsEnabled();
+    if (usesForumTopicBadge()) {
+      muted = ForumUnreadBadges.isBadgeMuted(tdlib, chat.id, muted);
+    }
+    counter.setCount(hasMentions && unreadCount == 1 ? 0 : unreadCount, muted, allowAnimation && needAnimateChanges());
+  }
+
+  private boolean usesForumTopicBadge () {
+    return chat != null && !isArchive() && getSource() == null && ForumUnreadBadges.usesTopics(tdlib, chat.id);
+  }
+
+  @Override
+  public void onForumUnreadTopicsChanged (long chatId) {
+    if (chat != null && chat.id == chatId && !isDestroyed) {
+      setCounter(needAnimateChanges());
+    }
   }
 
   public boolean needAnimateChanges () {
@@ -850,6 +866,9 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
       return getTotalUnreadCount();
     } else if (getSource() != null) {
       return 0;
+    } else if (usesForumTopicBadge()) {
+      // The chat's unread_count doesn't follow its topics: as the official apps, count the unread topics.
+      return ForumUnreadBadges.badgeCount(tdlib, chat);
     } else {
       int unreadCount = chat.unreadCount;
       int hiddenUnreadCount = MoexShadowUnreadManager.UNKNOWN_HIDDEN_UNREAD_COUNT;
@@ -1739,6 +1758,15 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
           statusHelper.attachToChat(chat.id, null);
         } else {
           statusHelper.detachFromAnyChat();
+        }
+      }
+      if (chat != null) {
+        if (isAttached && usesForumTopicBadge()) {
+          ForumUnreadBadges.attach(tdlib, chat.id, this);
+          // Its topics may have been read or loaded while no row showed it.
+          setCounter(false);
+        } else if (!isAttached) {
+          ForumUnreadBadges.detach(tdlib, chat.id, this);
         }
       }
     }

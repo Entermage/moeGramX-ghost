@@ -135,4 +135,10 @@
   <string name="ShadowBannedUsers">Shadow-banned users</string>
   <string name="ShadowBannedUsersHint">One numeric Telegram user ID per line. You can also add a user from any of their message menus.</string>
   <plurals name="xFilterPatterns"><item quantity="one">%d pattern</item><item quantity="other">%d patterns</item></plurals>
+  <string name="MoexWideScreens">Wide screens</string>
+  <string name="MoexTwoPaneLayout">Two-pane layout</string>
+  <string name="MoexTwoPaneLayoutInfo">Show the chat list and the selected chat side by side on wide screens. Drag the divider to resize the panes. Narrow windows use a single pane.</string>
+  <string name="MoexTwoPaneSelectChat">Select a chat</string>
+  <string name="MoexTwoPaneResize">Resize chat list</string>
+  <string name="ReadOnServer">Read on Server</string>
 </resources>

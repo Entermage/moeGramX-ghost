@@ -1691,11 +1691,11 @@ public class RoundVideoController extends BasePlaybackController implements
       }
 
       this.toGravity = gravity;
-      if (positionAnimator == null) {
-        positionAnimator = new FactorAnimator(0, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 180l, 0f);
-      } else {
-        positionAnimator.forceFactor(0f);
+      if (positionAnimator != null) {
+        positionAnimator.cancel();
       }
+      // Resetting a used animator dispatches its old position/finish callbacks.
+      positionAnimator = new FactorAnimator(0, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 180l, 0f);
 
       this.fromX = playerView.getTranslationX();
       this.fromY = playerView.getTranslationY();

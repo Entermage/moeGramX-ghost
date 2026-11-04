@@ -239,6 +239,11 @@ public class EmbeddedService {
           viewType = TYPE_YOUTUBE;
           if (segments.length == 1 && "watch".equals(segments[0]) && !StringUtils.isEmpty(viewIdentifier = uri.getQueryParameter("v"))) {
             embedUrl = buildYouTubeEmbedUrl(uri, viewIdentifier, allowAutoplay, additionalHttpHeaders);
+          } else if ("shorts".equals(segments[0])) {
+            if (segments.length != 2 || !segments[1].matches("[A-Za-z0-9_-]{11}")) {
+              return null;
+            }
+            embedUrl = buildYouTubeEmbedUrl(uri, segments[1], allowAutoplay, additionalHttpHeaders);
           }
           break;
         }

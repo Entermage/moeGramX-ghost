@@ -142,6 +142,8 @@ public class DrawerHeaderView extends View implements Destroyable, GlobalAccount
         return pos[1] + emojiStatusHelper.getLastDrawY() + Screen.dp(12);
       }
     });
+    c.setDrawerAnchor(this, emojiStatusHelper.getLastDrawX() + Screen.dp(12),
+      emojiStatusHelper.getLastDrawY() + Screen.dp(12));
     c.show();
     return false;
   }

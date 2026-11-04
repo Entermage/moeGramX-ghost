@@ -83,4 +83,6 @@
   <item name="btn_setPersonalChannel" type="id" />
   <item name="btn_toggleEdgeAnimSide" type="id" />
   <item name="btn_profileChannel" type="id" />
+  <item name="btn_moexTwoPaneLayout" type="id" />
+  <item name="btn_readOnServer" type="id" />
 </resources>

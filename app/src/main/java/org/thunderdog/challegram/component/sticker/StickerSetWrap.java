@@ -14,6 +14,8 @@
  */
 package org.thunderdog.challegram.component.sticker;
 
+import org.thunderdog.challegram.navigation.PopupPaneBounds;
+import android.widget.FrameLayout;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Canvas;
@@ -75,7 +77,39 @@ import me.vkryl.core.lambda.RunnableBool;
 import tgx.td.Td;
 
 @SuppressLint("ViewConstructor")
-public class StickerSetWrap extends FrameLayoutFix implements StickersListController.StickerSetProvider, MediaStickersAdapter.OffsetProvider, View.OnClickListener, FactorAnimator.Target, PopupLayout.PopupHeightProvider, StickersListener, RootFrameLayout.InsetsChangeListener {
+public class StickerSetWrap extends FrameLayoutFix implements StickersListController.StickerSetProvider, MediaStickersAdapter.OffsetProvider, View.OnClickListener, FactorAnimator.Target, PopupLayout.PopupHeightProvider, StickersListener, RootFrameLayout.InsetsChangeListener, RootFrameLayout.MarginModifier, PopupPaneBounds.Provider {
+  private @Nullable PopupPaneBounds popupPaneBounds;
+
+  public void setSourceController (@Nullable ViewController<?> source) {
+    if (popupPaneBounds != null) popupPaneBounds.detach();
+    popupPaneBounds = source != null ? new PopupPaneBounds(this, source) : null;
+    stickersController.setParentWrapper(source);
+    if (popupPaneBounds != null && isAttachedToWindow()) popupPaneBounds.attach();
+  }
+
+  @Override
+  public @Nullable PopupPaneBounds getPopupPaneBounds () { return popupPaneBounds; }
+
+  @Override
+  public void onApplyMarginInsets (View child, FrameLayout.LayoutParams params, Rect legacyInsets, Rect insets, Rect insetsWithoutIme) {
+    if (popupPaneBounds != null) popupPaneBounds.update();
+    Views.setMargins(params,
+      Math.max(legacyInsets.left, popupPaneBounds != null ? popupPaneBounds.getLeftInset() : 0), legacyInsets.top,
+      Math.max(legacyInsets.right, popupPaneBounds != null ? popupPaneBounds.getRightInset() : 0), legacyInsets.bottom);
+  }
+
+  @Override
+  protected void onAttachedToWindow () {
+    super.onAttachedToWindow();
+    if (popupPaneBounds != null) popupPaneBounds.attach();
+  }
+
+  @Override
+  protected void onDetachedFromWindow () {
+    if (popupPaneBounds != null) popupPaneBounds.detach();
+    super.onDetachedFromWindow();
+  }
+
   private final HeaderView headerView;
   private final StickersListController stickersController;
   private final FrameLayoutFix bottomWrap;
@@ -705,6 +739,7 @@ public class StickerSetWrap extends FrameLayoutFix implements StickersListContro
 
   public static StickerSetWrap showStickerSet (TdlibDelegate context, TdApi.StickerSetInfo info) {
     StickerSetWrap wrap = new StickerSetWrap(context.context(), context.tdlib());
+    wrap.setSourceController(context instanceof ViewController<?> ? (ViewController<?>) context : null);
     wrap.initWithInfo(info);
     wrap.showStickerSet();
     return wrap;
@@ -712,6 +747,7 @@ public class StickerSetWrap extends FrameLayoutFix implements StickersListContro
 
   public static StickerSetWrap showStickerSet (TdlibDelegate context, TdApi.StickerSet set) {
     StickerSetWrap wrap = new StickerSetWrap(context.context(), context.tdlib());
+    wrap.setSourceController(context instanceof ViewController<?> ? (ViewController<?>) context : null);
     wrap.initWithSet(set);
     wrap.showStickerSet();
     return wrap;
@@ -719,6 +755,7 @@ public class StickerSetWrap extends FrameLayoutFix implements StickersListContro
 
   public static StickerSetWrap showStickerSets (TdlibDelegate context, long[] ids, boolean isEmojiPacks) {
     StickerSetWrap wrap = new StickerSetWrap(context.context(), context.tdlib());
+    wrap.setSourceController(context instanceof ViewController<?> ? (ViewController<?>) context : null);
     wrap.initWithSets(ids, isEmojiPacks);
     wrap.showStickerSet();
     return wrap;

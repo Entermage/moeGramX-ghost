@@ -56,7 +56,7 @@ import me.vkryl.android.ViewUtils;
 import me.vkryl.android.animator.Animated;
 import me.vkryl.core.StringUtils;
 
-public class OptionsLayout extends LinearLayout implements Animated, RootFrameLayout.MarginModifier {
+public class OptionsLayout extends LinearLayout implements Animated, RootFrameLayout.MarginModifier, PopupPaneBounds.Provider {
   private final CustomTextView textView;
   private final CustomTextView headerView;
   private final ViewController<?> parent;
@@ -117,9 +117,34 @@ public class OptionsLayout extends LinearLayout implements Animated, RootFrameLa
     }
   }
 
+  private @Nullable PopupPaneBounds paneBounds;
+
+  /** Ordinary options belong to the screen that opened them; full-screen overlays opt out. */
+  public void setConstrainToSourcePane () {
+    paneBounds = new PopupPaneBounds(this, parent);
+  }
+
+  @Override
+  public @Nullable PopupPaneBounds getPopupPaneBounds () {
+    return paneBounds;
+  }
+
+  @Override
+  protected void onAttachedToWindow () {
+    super.onAttachedToWindow();
+    if (paneBounds != null) paneBounds.attach();
+  }
+
+  @Override
+  protected void onDetachedFromWindow () {
+    if (paneBounds != null) paneBounds.detach();
+    super.onDetachedFromWindow();
+  }
+
   @Override
   public void onApplyMarginInsets (View child, FrameLayout.LayoutParams params, Rect legacyInsets, Rect insets, Rect insetsWithoutIme) {
-    Views.setMargins(params, insets.left, 0, insets.right, 0);
+    if (paneBounds != null) paneBounds.applyInsets(params, insets);
+    else Views.setMargins(params, insets.left, 0, insets.right, 0);
     Views.setPaddingBottom(this, insetsWithoutIme.bottom);
   }
 

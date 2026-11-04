@@ -112,4 +112,10 @@
   <string name="ShadowBannedUsers">已屏蔽用户</string>
   <string name="ShadowBannedUsersHint">每行一个 Telegram 数字用户 ID；也可从该用户任意消息的互动菜单中添加。</string>
   <plurals name="xFilterPatterns"><item quantity="other">%d 条规则</item></plurals>
+  <string name="MoexWideScreens">宽屏显示</string>
+  <string name="MoexTwoPaneLayout">聊天分栏</string>
+  <string name="MoexTwoPaneLayoutInfo">在宽屏上并排显示聊天列表和当前聊天，拖动中间分隔条可调整宽度。窄屏自动恢复单栏。</string>
+  <string name="MoexTwoPaneSelectChat">请选择一个聊天</string>
+  <string name="MoexTwoPaneResize">调整聊天列表宽度</string>
+  <string name="ReadOnServer">在服务器上标为已读</string>
 </resources>

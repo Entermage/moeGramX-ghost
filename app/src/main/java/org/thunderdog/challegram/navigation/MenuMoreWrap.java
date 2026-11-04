@@ -18,6 +18,7 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.text.TextUtils;
@@ -52,6 +53,7 @@ import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.util.HapticMenuHelper;
 import org.thunderdog.challegram.widget.NoScrollTextView;
+import org.thunderdog.challegram.widget.RootFrameLayout;
 import org.thunderdog.challegram.widget.SimplestCheckBox;
 
 import me.vkryl.android.AnimatorUtils;
@@ -65,7 +67,7 @@ import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
 import tgx.td.Td;
 
-public class MenuMoreWrap extends MenuMoreWrapAbstract implements Animated {
+public class MenuMoreWrap extends MenuMoreWrapAbstract implements Animated, RootFrameLayout.MarginModifier, PopupPaneBounds.Provider {
   public static final int ITEM_HEIGHT = 48;
   public static final int PADDING = 8;
 
@@ -138,6 +140,35 @@ public class MenuMoreWrap extends MenuMoreWrapAbstract implements Animated {
     setOrientation(VERTICAL);
     setLayerType(LAYER_TYPE_HARDWARE, Views.getLayerPaint());
     setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | (Lang.rtl() ? Gravity.LEFT : Gravity.RIGHT)));
+  }
+
+  private @Nullable PopupPaneBounds popupPaneBounds;
+  private boolean reserveTranslationWidth = true;
+
+  /** Menus opened by a navigation header remain within that header's pane. */
+  public void setSourceController (@Nullable ViewController<?> source) {
+    setSourceController(source, true);
+  }
+
+  /** View-anchored menus clamp their final position and do not reserve translation twice. */
+  public void setSourceController (@Nullable ViewController<?> source, boolean reserveTranslationWidth) {
+    this.reserveTranslationWidth = reserveTranslationWidth;
+    if (popupPaneBounds != null) popupPaneBounds.detach();
+    popupPaneBounds = source != null ? new PopupPaneBounds(this, source) : null;
+    if (popupPaneBounds != null && isAttachedToWindow()) popupPaneBounds.attach();
+  }
+
+  @Override
+  public @Nullable PopupPaneBounds getPopupPaneBounds () {
+    return popupPaneBounds;
+  }
+
+  @Override
+  public void onApplyMarginInsets (View child, FrameLayout.LayoutParams params, Rect legacyInsets, Rect insets, Rect insetsWithoutIme) {
+    if (popupPaneBounds != null) popupPaneBounds.update();
+    Views.setMargins(params,
+      Math.max(legacyInsets.left, popupPaneBounds != null ? popupPaneBounds.getLeftInset() : 0), legacyInsets.top,
+      Math.max(legacyInsets.right, popupPaneBounds != null ? popupPaneBounds.getRightInset() : 0), legacyInsets.bottom);
   }
 
   public void setRightNumber (int number) {
@@ -428,7 +459,13 @@ public class MenuMoreWrap extends MenuMoreWrapAbstract implements Animated {
         maxWidth = Math.max(maxWidth, (Integer) v.getTag());
       }
     }
-    return Math.max(getMinimumWidth(), maxWidth + padding + padding);
+    int width = Math.max(getMinimumWidth(), maxWidth + padding + padding);
+    if (popupPaneBounds != null) {
+      int availableWidth = popupPaneBounds.getAvailableWidth(Screen.currentWidth());
+      // Header/button offsets are translations, so leave their room inside the pane as well.
+      width = Math.min(width, Math.max(1, availableWidth - (reserveTranslationWidth ? (int) Math.ceil(Math.abs(getTranslationX())) : 0)));
+    }
+    return width;
   }
 
   private boolean shouldPivotBottom;
@@ -549,11 +586,13 @@ public class MenuMoreWrap extends MenuMoreWrapAbstract implements Animated {
   @Override
   protected void onAttachedToWindow () {
     super.onAttachedToWindow();
+    if (popupPaneBounds != null) popupPaneBounds.attach();
     complexAvatarReceiver.attach();
   }
 
   @Override
   protected void onDetachedFromWindow () {
+    if (popupPaneBounds != null) popupPaneBounds.detach();
     super.onDetachedFromWindow();
     complexAvatarReceiver.detach();
   }

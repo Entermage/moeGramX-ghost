@@ -14,6 +14,8 @@
  */
 package org.thunderdog.challegram.telegram;
 
+import moe.kirao.mgx.MoexShadowUnreadManager;
+
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -489,6 +491,8 @@ public class TdlibCache implements LiveLocationManager.OutputDelegate, CleanupSt
 
   @TdlibThread
   void onUpdateUserFull (final TdApi.UpdateUserFullInfo update) {
+    MoexShadowUnreadManager.onBlockListChanged(tdlib, update.userId,
+      update.userFullInfo.blockList instanceof TdApi.BlockListMain);
     boolean updated;
     synchronized (dataLock) {
       updated = putUserFull(update.userId, update.userFullInfo);

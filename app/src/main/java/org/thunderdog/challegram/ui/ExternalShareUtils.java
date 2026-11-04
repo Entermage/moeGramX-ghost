@@ -6,9 +6,14 @@ package org.thunderdog.challegram.ui;
 
 import android.content.ClipData;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ProviderInfo;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 
@@ -17,12 +22,18 @@ import androidx.annotation.Nullable;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.tool.TGMimeType;
+import org.thunderdog.challegram.util.OfferedUris;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 final class ExternalShareUtils {
   private ExternalShareUtils () { }
@@ -36,8 +47,96 @@ final class ExternalShareUtils {
     return path.equals(directory) || path.startsWith(directory.endsWith(File.separator) ? directory : directory + File.separator);
   }
 
-  static String resolveSharedFilePath (Uri uri, String privateDataDirectory) throws IOException {
-    String path = validateSharedFilePath(uri, privateDataDirectory);
+  /**
+   * What an outside app may not make this app read on its behalf: its own content providers (logs, secret
+   * chat media, TDLib files, which only this app can open) and its private directories, including the
+   * app-specific external ones that other apps cannot read since Android 11.
+   */
+  static final class SharePolicy {
+    final String packageName;
+    final Set<String> ownAuthorities;
+    final List<String> privateDirectories;
+
+    private SharePolicy (String packageName, Set<String> ownAuthorities, List<String> privateDirectories) {
+      this.packageName = packageName;
+      this.ownAuthorities = ownAuthorities;
+      this.privateDirectories = privateDirectories;
+    }
+
+    static SharePolicy create (String packageName, Collection<String> providerAuthorities, Collection<String> dataDirectories,
+                               Collection<File> appSpecificDirectories) throws IOException {
+      Set<String> authorities = new HashSet<>();
+      for (String value : providerAuthorities) {
+        if (value == null) continue;
+        for (String authority : value.split(";")) {
+          if (!authority.isEmpty()) authorities.add(authority.toLowerCase(Locale.ROOT));
+        }
+      }
+      LinkedHashSet<String> directories = new LinkedHashSet<>();
+      for (String dataDirectory : dataDirectories) {
+        directories.add(new File(dataDirectory).getCanonicalPath());
+      }
+      for (File directory : appSpecificDirectories) {
+        File root = appSpecificRoot(directory, packageName);
+        if (root != null) directories.add(root.getCanonicalPath());
+      }
+      return new SharePolicy(packageName.toLowerCase(Locale.ROOT), Collections.unmodifiableSet(authorities),
+        Collections.unmodifiableList(new ArrayList<>(directories)));
+    }
+
+    static SharePolicy forContext (Context context) throws IOException {
+      return forContext(context, Build.VERSION.SDK_INT >= Build.VERSION_CODES.N);
+    }
+
+    static SharePolicy forContext (Context context, boolean hasDeviceProtectedStorage) throws IOException {
+      String packageName = context.getPackageName();
+      List<String> authorities = new ArrayList<>();
+      try {
+        PackageInfo info = context.getPackageManager().getPackageInfo(packageName, PackageManager.GET_PROVIDERS);
+        if (info.providers != null) {
+          for (ProviderInfo provider : info.providers) authorities.add(provider.authority);
+        }
+      } catch (PackageManager.NameNotFoundException | RuntimeException e) {
+        Log.w("Cannot list own providers; the package prefix still applies", e);
+      }
+      List<File> directories = new ArrayList<>();
+      Collections.addAll(directories, context.getExternalFilesDirs(null));
+      Collections.addAll(directories, context.getExternalCacheDirs());
+      Collections.addAll(directories, context.getExternalMediaDirs());
+      Collections.addAll(directories, context.getObbDirs());
+      List<String> dataDirectories = new ArrayList<>();
+      dataDirectories.add(context.getApplicationInfo().dataDir);
+      // Android 7+ keeps a second private root, device-protected storage (/data/user_de/<user>/<package>).
+      if (hasDeviceProtectedStorage) dataDirectories.add(deviceProtectedDataDir(context));
+      return create(packageName, authorities, dataDirectories, directories);
+    }
+
+    static String deviceProtectedDataDir (Context context) throws IOException {
+      try {
+        return context.createDeviceProtectedStorageContext().getDataDir().getPath();
+      } catch (RuntimeException e) {
+        throw new IOException("Cannot locate device-protected storage", e); // Refuse rather than allow it.
+      }
+    }
+
+    boolean isOwnAuthority (String authority) {
+      // "<userId>@authority" reaches the same provider (ContentProvider.getAuthorityWithoutUserId).
+      String name = authority.substring(authority.lastIndexOf('@') + 1).toLowerCase(Locale.ROOT);
+      return ownAuthorities.contains(name) || name.equals(packageName) || name.startsWith(packageName + ".");
+    }
+  }
+
+  /** {@code Android/data/<package>}, {@code Android/media/<package>} or {@code Android/obb/<package>}. */
+  @Nullable
+  static File appSpecificRoot (@Nullable File directory, String packageName) {
+    for (File current = directory; current != null; current = current.getParentFile()) {
+      if (packageName.equals(current.getName())) return current;
+    }
+    return null;
+  }
+
+  static String resolveSharedFilePath (Uri uri, SharePolicy policy) throws IOException {
+    String path = validateSharedFilePath(uri, policy);
     if ("file".equals(uri.getScheme()) && !new File(path).isFile()) {
       throw new IOException("Shared path is not a file");
     }
@@ -45,8 +144,16 @@ final class ExternalShareUtils {
   }
 
   // Permission preflight must not require stat/read access to the external file.
-  static String validateSharedFilePath (Uri uri, String privateDataDirectory) throws IOException {
+  static String validateSharedFilePath (Uri uri, SharePolicy policy) throws IOException {
     if ("content".equals(uri.getScheme())) {
+      String authority = uri.getAuthority();
+      if (authority == null || authority.isEmpty()) {
+        throw new IOException("Shared URI names no provider");
+      }
+      // Choosing this app in its own share sheet returns exactly the URI it just offered.
+      if (policy.isOwnAuthority(authority) && !OfferedUris.wasOffered(uri)) {
+        throw new IOException("Shared URI belongs to this app");
+      }
       // Never trust a foreign provider's _data column.
       return uri.toString();
     }
@@ -54,9 +161,10 @@ final class ExternalShareUtils {
       throw new IOException("Unsupported shared URI");
     }
     File file = new File(uri.getPath()).getCanonicalFile();
-    String privatePath = new File(privateDataDirectory).getCanonicalPath();
-    if (isPathWithinDirectory(file.getPath(), privatePath)) {
-      throw new IOException("Shared path is private");
+    for (String privatePath : policy.privateDirectories) {
+      if (isPathWithinDirectory(file.getPath(), privatePath)) {
+        throw new IOException("Shared path is private");
+      }
     }
     return file.getPath();
   }

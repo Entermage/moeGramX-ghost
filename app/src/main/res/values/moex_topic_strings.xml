@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+<string name="XgramCloseTopic">Close topic</string>
+  <string name="XgramCreateTopic">Create topic</string>
+  <string name="XgramDeleteTopic">Delete topic</string>
+  <string name="XgramDeleteTopicConfirm">Are you sure you want to delete %1$s?</string>
+  <string name="XgramEditTopic">Edit topic</string>
+  <string name="XgramGeneralTopic">General</string>
+  <string name="XgramHideGeneralTopic">Hide General topic</string>
+  <string name="XgramMarkAllTopicsRead">Mark all topics as read</string>
+  <string name="XgramMarkTopicAsRead">Mark as read</string>
+  <string name="XgramMuteFor">Mute for %1$s</string>
+  <string name="XgramMuteForever">Mute forever</string>
+  <string name="XgramMuteTopic">Mute</string>
+  <string name="XgramNewTopic">New topic</string>
+  <string name="XgramNoTopics">No topics here yet</string>
+  <string name="XgramPinTopic">Pin</string>
+  <string name="XgramReopenTopic">Reopen topic</string>
+  <string name="XgramReorderTopics">Reorder pinned topics</string>
+  <string name="XgramReorderTopicsDone">Done reordering</string>
+  <string name="XgramReorderTopicsHint">Long-press a pinned topic and drag it</string>
+  <string name="XgramSelectTopic">Select a topic in %1$s</string>
+  <string name="XgramShowGeneralTopic">Show General topic</string>
+  <string name="XgramTabAll">All</string>
+  <string name="XgramTopicClosed">The topic is closed</string>
+  <string name="XgramTopicGroup">Group</string>
+  <string name="XgramTopicIcon">Topic icon</string>
+  <string name="XgramTopicIconCreateHint">Choose a topic icon. Tap the icon above to change its color.</string>
+
+  
+  <string name="XgramTopicInChat">in %1$s</string>
+  <string name="XgramTopicLink">Link</string>
+  <string name="XgramTopicMuted">Muted</string>
+  <string name="XgramTopicNameHint">What do you want to discuss?</string>
+  <string name="XgramTopicNoMessages">No messages yet</string>
+  <string name="XgramTopicNotificationsOn">On</string>
+  <string name="XgramTopics">Topics</string>
+  <string name="XgramTopicsDesc">Split the group into topics. Tabs show them above or beside the messages, List shows them as a list of chats.</string>
+  <string name="XgramTopicsList">List</string>
+  <string name="XgramTopicsOff">Off</string>
+  <string name="XgramTopicsTabs">Tabs</string>
+  <string name="XgramTopicsViewDesc">How this group\'s topics show for you: Tabs above or beside the messages, or List as a list of chats. Only you see this; the group stays the same for everyone else.</string>
+<string name="XgramTopicsViewGroup">Group\'s choice (%1$s)</string>
+  <string name="XgramUnmuteTopic">Unmute</string>
+  <string name="XgramUnpinTopic">Unpin</string>
+  <string name="XgramViewAsMessages">View as messages</string>
+  <string name="XgramViewAsTopics">View as topics</string>
+
+  
+  
+
+
+</resources>
+

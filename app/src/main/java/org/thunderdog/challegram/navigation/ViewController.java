@@ -217,6 +217,12 @@ public abstract class ViewController<T> implements Future<View>, ThemeChangeList
     return parentWrapper != null ? parentWrapper : this;
   }
 
+  /** The controller whose pane owns ordinary options. Resolved again after window-size changes. */
+  public @Nullable ViewController<?> getOptionsSourceController () {
+    ViewController<?> owner = getParentOrSelf();
+    return owner != this ? owner.getOptionsSourceController() : this;
+  }
+
   public void setParentWrapper (@Nullable ViewController<?> parentWrapper) {
     this.parentWrapper = parentWrapper;
   }
@@ -1904,14 +1910,32 @@ public abstract class ViewController<T> implements Future<View>, ThemeChangeList
     showSettings(new SettingsWrapBuilder(id).setRawItems(rawItems).setIntDelegate(delegate).setAllowResize(allowResize));
   }
 
-  private static class SettingsWrapLayout extends FrameLayoutFix implements RootFrameLayout.MarginModifier {
-    public SettingsWrapLayout (@NonNull Context context) {
+  private static class SettingsWrapLayout extends FrameLayoutFix implements RootFrameLayout.MarginModifier, PopupPaneBounds.Provider {
+    private final PopupPaneBounds paneBounds;
+
+    public SettingsWrapLayout (@NonNull Context context, ViewController<?> source) {
       super(context);
+      paneBounds = new PopupPaneBounds(this, source);
+    }
+
+    @Override
+    public PopupPaneBounds getPopupPaneBounds () { return paneBounds; }
+
+    @Override
+    protected void onAttachedToWindow () {
+      super.onAttachedToWindow();
+      paneBounds.attach();
+    }
+
+    @Override
+    protected void onDetachedFromWindow () {
+      paneBounds.detach();
+      super.onDetachedFromWindow();
     }
 
     @Override
     public void onApplyMarginInsets (View child, LayoutParams params, Rect legacyInsets, Rect insets, Rect insetsWithoutIme) {
-      Views.setMargins(params, insets.left, 0, insets.right, 0);
+      paneBounds.applyInsets(params, insets);
       setBottomInset(insetsWithoutIme.bottom);
     }
 
@@ -1974,7 +1998,7 @@ public abstract class ViewController<T> implements Future<View>, ThemeChangeList
       Collections.addAll(items, b.rawItems);
     }
 
-    final SettingsWrapLayout settingsLayout = new SettingsWrapLayout(context);
+    final SettingsWrapLayout settingsLayout = new SettingsWrapLayout(context, this);
     settingsLayout.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
     final SettingsWrap settings = new SettingsWrap();
@@ -2542,6 +2566,7 @@ public abstract class ViewController<T> implements Future<View>, ThemeChangeList
     }
 
     OptionsLayout optionsWrap = new OptionsLayout(context(), this, forcedTheme);
+    optionsWrap.setConstrainToSourcePane();
     optionsWrap.setHeader(options.title);
     if (options.subtitle != null) {
       optionsWrap.setSubtitle(options.subtitle);
@@ -2623,6 +2648,7 @@ public abstract class ViewController<T> implements Future<View>, ThemeChangeList
     int totalHeight = 0;
 
     OptionsLayout optionsWrap = new OptionsLayout(context(), this, forcedTheme);
+    optionsWrap.setConstrainToSourcePane();
     optionsWrap.setInfo(this, tdlib(), title, isTitle, maxLineCount);
     optionsWrap.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
     totalHeight += optionsWrap.getTextHeight();

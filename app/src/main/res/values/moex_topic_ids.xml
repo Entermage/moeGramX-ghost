@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+<item type="id" name="btn_xgramCreateTopic" />
+
+  
+  <item type="id" name="btn_xgramMarkAllTopicsRead" />
+  <item type="id" name="btn_xgramMute1h" />
+  <item type="id" name="btn_xgramMute2d" />
+  <item type="id" name="btn_xgramMute8h" />
+  <item type="id" name="btn_xgramMuteForever" />
+  <item type="id" name="btn_xgramReorderTopics" />
+  <item type="id" name="btn_xgramTopicClose" />
+  <item type="id" name="btn_xgramTopicCopyLink" />
+  <item type="id" name="btn_xgramTopicDelete" />
+  <item type="id" name="btn_xgramTopicEdit" />
+  <item type="id" name="btn_xgramTopicGroup" />
+  <item type="id" name="btn_xgramTopicHideGeneral" />
+  <item type="id" name="btn_xgramTopicLink" />
+  <item type="id" name="btn_xgramTopicMute" />
+  <item type="id" name="btn_xgramTopicPin" />
+  <item type="id" name="btn_xgramTopicRead" />
+  <item type="id" name="btn_xgramTopicsList" />
+  <item type="id" name="btn_xgramTopicsMode" />
+  <item type="id" name="btn_xgramTopicsOff" />
+  <item type="id" name="btn_xgramTopicsTabs" />
+  <item name="btn_xgramTopicsViewGroup" type="id" />
+  <item name="btn_xgramTopicsViewList" type="id" />
+<item name="btn_xgramTopicsViewTabs" type="id" />
+  <item type="id" name="btn_xgramViewAsMessages" />
+  <item type="id" name="btn_xgramViewAsTopics" />
+  <item type="id" name="controller_xgramForumTopics" />
+  <item type="id" name="controller_xgramTopicEdit" />
+  <item type="id" name="menu_xgramTopics" />
+  
+
+<item name="btn_xgramTopicsView" type="id" />
+  
+</resources>
+

@@ -16,6 +16,7 @@ package org.thunderdog.challegram.ui;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.Rect;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -27,6 +28,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.data.TD;
+import org.thunderdog.challegram.navigation.PopupPaneBounds;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.support.RippleSupport;
 import org.thunderdog.challegram.support.ViewSupport;
@@ -37,6 +39,7 @@ import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.widget.PopupLayout;
+import org.thunderdog.challegram.widget.RootFrameLayout;
 import org.thunderdog.challegram.widget.ShadowView;
 
 import java.util.ArrayList;
@@ -49,8 +52,9 @@ import tgx.td.Td;
 public class ChatFolderIconSelector {
 
   private final Context context;
+  private final ViewController<?> owner;
   private final Delegate delegate;
-  private final View popupView;
+  private final IconGridLayout popupView;
   private final GridLayoutManager layoutManager;
   private final @Nullable String selectedIconName;
 
@@ -58,6 +62,7 @@ public class ChatFolderIconSelector {
 
   public ChatFolderIconSelector (ViewController<?> owner, @Nullable String selectedIconName, boolean isDefault, Delegate delegate) {
     this.context = owner.context();
+    this.owner = owner;
     this.delegate = delegate;
     this.selectedIconName = selectedIconName;
 
@@ -116,7 +121,7 @@ public class ChatFolderIconSelector {
       }
     };
 
-    layoutManager = new GridLayoutManager(context, computeSpanCount(Screen.currentWidth()));
+    layoutManager = new GridLayoutManager(context, 3);
     popupAdapter.setItems(items, false);
     RecyclerView recyclerView = new RecyclerView(context);
     recyclerView.setLayoutManager(layoutManager);
@@ -127,7 +132,7 @@ public class ChatFolderIconSelector {
     shadowView.setSimpleTopShadow(true);
     owner.addThemeInvalidateListener(shadowView);
 
-    FrameLayoutFix popupView = new FrameLayoutFix(context);
+    IconGridLayout popupView = new IconGridLayout();
     popupView.addView(shadowView, FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(7f), Gravity.TOP));
     popupView.addView(recyclerView, FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP, 0, Screen.dp(7f), 0, 0));
     popupView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
@@ -135,24 +140,19 @@ public class ChatFolderIconSelector {
   }
 
   public void show () {
-    int itemCount = layoutManager.getItemCount();
+    int popupWidth = popupView.paneBounds.getAvailableWidth(Screen.currentWidth());
+    updateGridWidth(popupWidth);
     int spanCount = layoutManager.getSpanCount();
-    int rowCount = (itemCount + spanCount - 1) / spanCount;
-    int popupHeight = rowCount * (Screen.currentWidth() / spanCount) + Screen.dp(7f);
-
-    popupLayout = new PopupLayout(context) {
-      @Override
-      protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
-        int popupWidth = getDefaultSize(Screen.currentWidth(), widthMeasureSpec);
-        layoutManager.setSpanCount(computeSpanCount(popupWidth));
-        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-      }
-    };
+    int rowCount = (layoutManager.getItemCount() + spanCount - 1) / spanCount;
+    int popupHeight = rowCount * (popupWidth / spanCount) + Screen.dp(7f);
+    popupLayout = new PopupLayout(context);
     popupLayout.init(true);
     popupLayout.setShowListener(popup -> delegate.onShow());
     popupLayout.setDismissListener(popup -> delegate.onDismiss());
     popupLayout.setHideKeyboard();
     popupLayout.setNeedRootInsets();
+    // The first estimate already uses the source pane; PopupLayout starts the
+    // animation from the measured height after system insets have been applied.
     popupLayout.showSimplePopupView(popupView, popupHeight);
   }
 
@@ -160,6 +160,54 @@ public class ChatFolderIconSelector {
     if (popupLayout != null) {
       popupLayout.hideWindow(animated);
       popupLayout = null;
+    }
+  }
+
+  private final class IconGridLayout extends FrameLayoutFix implements RootFrameLayout.MarginModifier, PopupPaneBounds.Provider {
+    private final PopupPaneBounds paneBounds;
+
+    IconGridLayout () {
+      super(context);
+      paneBounds = new PopupPaneBounds(this, owner);
+    }
+
+    @Override
+    public PopupPaneBounds getPopupPaneBounds () {
+      return paneBounds;
+    }
+
+    @Override
+    protected void onAttachedToWindow () {
+      super.onAttachedToWindow();
+      paneBounds.attach();
+    }
+
+    @Override
+    protected void onDetachedFromWindow () {
+      paneBounds.detach();
+      super.onDetachedFromWindow();
+    }
+
+    @Override
+    public void onApplyMarginInsets (View child, LayoutParams params, Rect legacyInsets, Rect insets, Rect insetsWithoutIme) {
+      paneBounds.applyInsets(params, insets);
+      // Preserve the default FrameLayout's vertical system-inset placement.
+      params.topMargin = legacyInsets.top;
+      params.bottomMargin = legacyInsets.bottom;
+    }
+
+    @Override
+    protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
+      updateGridWidth(MeasureSpec.getSize(widthMeasureSpec));
+      super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+    }
+  }
+
+  private void updateGridWidth (int width) {
+    if (width <= 0) return;
+    int spanCount = computeSpanCount(width);
+    if (layoutManager.getSpanCount() != spanCount) {
+      layoutManager.setSpanCount(spanCount);
     }
   }
 

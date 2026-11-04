@@ -229,7 +229,16 @@ public class TdlibNotificationUtils {
   }
 
   static PendingIntent newIntent (int accountId, long forLocalChatId, long specificMessageId) {
-    return PendingIntent.getActivity(UI.getContext(), 0, forLocalChatId != 0 ? Intents.valueOfLocalChatId(accountId, forLocalChatId, specificMessageId) : Intents.valueOfMain(accountId), PendingIntent.FLAG_ONE_SHOT | Intents.mutabilityFlags(true));
+    return newIntent(accountId, forLocalChatId, specificMessageId, 0);
+  }
+
+  /** XGram: {@code xgramForumTopicId}, the forum topic of the notification's messages (XgramForums#notificationTopicId), or 0. */
+  static PendingIntent newIntent (int accountId, long forLocalChatId, long specificMessageId, int xgramForumTopicId) {
+    Intent intent = forLocalChatId != 0 ? Intents.valueOfLocalChatId(accountId, forLocalChatId, specificMessageId) : Intents.valueOfMain(accountId);
+    if (forLocalChatId != 0 && xgramForumTopicId != 0) {
+      intent.putExtra(moe.kirao.mgx.topics.XgramForums.EXTRA_NOTIFICATION_TOPIC_ID, xgramForumTopicId);
+    }
+    return PendingIntent.getActivity(UI.getContext(), 0, intent, PendingIntent.FLAG_ONE_SHOT | Intents.mutabilityFlags(true));
   }
 
   static Intent newCoreIntent (int accountId, long forLocalChatId, long specificMessageId) {

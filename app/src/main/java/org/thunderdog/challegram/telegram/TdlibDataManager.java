@@ -76,14 +76,73 @@ public abstract class TdlibDataManager<Key, Value extends TdApi.Object, Result e
 
   // Listeners
 
+  /**
+   * Whether a client restart ends the waits of this manager's watchers with an uncached error. Otherwise
+   * they stay registered and receive the next client's answer for their key (custom emoji, for example,
+   * would show an error entry as "not found").
+   */
+  protected boolean endsWaitsOnRestart () {
+    return false;
+  }
+
   @Override
   public final void onPerformRestart () {
+    final boolean endWaits = endsWaitsOnRestart();
+    final Map<Key, List<Watcher<Key, Value, Result>>> cancelledWatchers;
+    final Map<Key, ReferenceList<Watcher<Key, Value, Result>>> cancelledReferences;
     synchronized (dataLock) {
       contextId++;
       entries.clear();
-      // TODO cancel all pending requests
+      // Results of the closed client are dropped by contextId. Release their keys so this same
+      // instance requests them again on the next client.
+      loadingKeys.clear();
+      postponedKeys.clear();
+      if (!endWaits) {
+        return;
+      }
+      cancelledWatchers = new LinkedHashMap<>(watchers);
+      watchers.clear();
+      // Watchers are only added under dataLock: detach the weak ones of the closed client in this
+      // same section, so a watcher registered after it stays for the next client's request.
+      cancelledReferences = removeAllReferences();
+    }
+    for (Map.Entry<Key, ReferenceList<Watcher<Key, Value, Result>>> pair : cancelledReferences.entrySet()) {
+      List<Watcher<Key, Value, Result>> target = cancelledWatchers.get(pair.getKey());
+      if (target == null) cancelledWatchers.put(pair.getKey(), target = new ArrayList<>());
+      for (Watcher<Key, Value, Result> watcher : pair.getValue()) target.add(watcher);
+      pair.getValue().clear();
+    }
+    if (!cancelledWatchers.isEmpty()) {
+      tdlib.ui().post(() -> notifyCancelled(cancelledWatchers));
     }
   }
+
+  private Map<Key, ReferenceList<Watcher<Key, Value, Result>>> removeAllReferences () {
+    Map<Key, ReferenceList<Watcher<Key, Value, Result>>> removed = new LinkedHashMap<>();
+    synchronized (watcherReferences.mapUnchecked()) {
+      Set<Key> keys = watcherReferences.keySetUnchecked();
+      if (keys != null) {
+        for (Key key : new ArrayList<>(keys)) {
+          ReferenceList<Watcher<Key, Value, Result>> list = watcherReferences.removeAll(key);
+          if (list != null) removed.put(key, list);
+        }
+      }
+    }
+    return removed;
+  }
+
+  private void notifyCancelled (Map<Key, List<Watcher<Key, Value, Result>>> cancelledWatchers) {
+    for (Map.Entry<Key, List<Watcher<Key, Value, Result>>> pair : cancelledWatchers.entrySet()) {
+      // A terminal, uncached error: the next find() requests the key again.
+      Result entry = newEntry(pair.getKey(), null, new TdApi.Error(CANCELLED_ERROR_CODE, CANCELLED_ERROR_MESSAGE));
+      for (Watcher<Key, Value, Result> watcher : pair.getValue()) {
+        watcher.onEntryLoaded(this, entry);
+      }
+    }
+  }
+
+  public static final int CANCELLED_ERROR_CODE = 500;
+  public static final String CANCELLED_ERROR_MESSAGE = "Request cancelled by client restart";
 
   // Impl
 
@@ -235,21 +294,56 @@ public abstract class TdlibDataManager<Key, Value extends TdApi.Object, Result e
     }
   }
 
+  /** Discard only this failed response; never removes a newer successful update. */
+  protected final void forgetError (int requestContextId, Key key, TdApi.Error error) {
+    synchronized (dataLock) {
+      Result entry = entries.get(key);
+      if (contextId == requestContextId && entry != null && entry.error == error) entries.remove(key);
+    }
+  }
+
   @TdlibThread
   protected final void processError (int contextId, @NonNull Key key, @NonNull TdApi.Error error) {
     processEntry(contextId, newEntry(key, null, error));
   }
 
+  /** The request ended without an answer (its client closed): release the key without caching an error. */
+  protected final void processCancelled (int contextId, @NonNull Key key, @NonNull TdApi.Error error) {
+    List<Watcher<Key, Value, Result>> watcherList;
+    ReferenceList<Watcher<Key, Value, Result>> referenceList;
+    synchronized (dataLock) {
+      if (this.contextId != contextId || !loadingKeys.remove(key))
+        return;
+      // Same section as the key release: a watcher added after it postpones a new request instead.
+      watcherList = watchers.remove(key);
+      referenceList = watcherReferences.removeAll(key);
+    }
+    Result entry = newEntry(key, null, error);
+    if (referenceList != null) {
+      for (Watcher<Key, Value, Result> watcher : referenceList) {
+        watcher.onEntryLoaded(this, entry);
+      }
+      referenceList.clear();
+    }
+    if (watcherList != null) {
+      for (Watcher<Key, Value, Result> watcher : watcherList) {
+        watcher.onEntryLoaded(this, entry);
+      }
+    }
+  }
+
   @TdlibThread
   private void processEntry (int contextId, Result entry) {
     List<Watcher<Key, Value, Result>> watcherList;
+    ReferenceList<Watcher<Key, Value, Result>> referenceList;
     synchronized (dataLock) {
       if (this.contextId != contextId)
         return;
       entries.put(entry.key, entry);
       watcherList = watchers.remove(entry.key);
+      // Detach before a restart can start the next generation.
+      referenceList = watcherReferences.removeAll(entry.key);
     }
-    ReferenceList<Watcher<Key, Value, Result>> referenceList = watcherReferences.removeAll(entry.key);
     if (referenceList != null) {
       for (Watcher<Key, Value, Result> watcher : referenceList) {
         watcher.onEntryLoaded(this, entry);

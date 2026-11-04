@@ -25,6 +25,11 @@ public class ScrollJumpCompensator implements ViewTreeObserver.OnGlobalLayoutLis
   private final ViewTreeObserver observer;
   private final @Nullable Runnable after;
   private int offset;
+  private java.util.function.BooleanSupplier validityCheck;
+
+  public void setValidityCheck (java.util.function.BooleanSupplier check) {
+    validityCheck = check;
+  }
 
   @Deprecated
   public ScrollJumpCompensator (RecyclerView r, View v, int offset) {
@@ -44,7 +49,7 @@ public class ScrollJumpCompensator implements ViewTreeObserver.OnGlobalLayoutLis
 
   @Override
   public void onGlobalLayout () {
-    if (offset != 0) {
+    if (offset != 0 && (validityCheck == null || validityCheck.getAsBoolean())) {
       recyclerView.scrollBy(0, offset);
       offset = 0;
       if (after != null) {

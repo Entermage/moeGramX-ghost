@@ -173,6 +173,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import moe.kirao.mgx.layout.MoexTwoPane;
+
 import me.vkryl.core.ArrayUtils;
 import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.ColorUtils;
@@ -623,7 +625,8 @@ public class TdlibUi extends Handler {
             }
           })
           .setSaveStr(R.string.Delete)
-          .setSaveColorId(ColorId.textNegative))
+          .setSaveColorId(ColorId.textNegative)
+          .setAllowResize(false))
       );
     });
   }
@@ -1769,10 +1772,34 @@ public class TdlibUi extends Handler {
     public TdApi.ChatInviteLinkInfo inviteLinkInfo;
     public ThreadInfo threadInfo;
     public TdApi.MessageTopic messageTopicId;
+    public @Nullable String forumTopicTitle;
     public TdApi.MessageLinkInfo messageLinkTarget;
     public TdApi.SearchMessagesFilter filter;
     public TdApi.InternalLinkTypeVideoChat videoChatOrLiveStreamInvitation;
     public TdApi.FormattedText fillDraft;
+    // XGram: open forums as merged history even when they are shown as topics.
+    public boolean xgramSkipForumRouting;
+    public boolean xgramFromNotification;
+    public int xgramNotificationTopicId;
+    public ChatOpenParameters xgramFromNotification (int topicId) {
+      xgramFromNotification = true;
+      xgramNotificationTopicId = topicId;
+      return this;
+    }
+
+    public ChatOpenParameters xgramSkipForumRouting () {
+      this.xgramSkipForumRouting = true;
+      return this;
+    }
+
+    /** Plain list selection may reuse the current pane; explicit navigation targets must not. */
+    public boolean isPlainChatSelection () {
+      return (options & ~CHAT_OPTION_KEEP_STACK) == 0 && !highlightSet && highlightMode == 0 &&
+        highlightMessageId == null && searchQuery == null && foundMessage == null &&
+        urlOpenParameters == null && shareItem == null && inviteLink == null && inviteLinkInfo == null &&
+        threadInfo == null && messageTopicId == null && messageLinkTarget == null && filter == null &&
+        videoChatOrLiveStreamInvitation == null && fillDraft == null;
+    }
 
     private void onDone () {
       if (onDone != null) {
@@ -2197,6 +2224,35 @@ public class TdlibUi extends Handler {
       return;
     }
 
+    // XGram: forums shown as topics open their topic list, forums with tabs open their last tab,
+    // unless something specific was requested.
+    if (messageThread == null && messageTopicId == null && filter == null && !onlyScheduled &&
+      shareItem == null && voiceChatInvitation == null && forceDraft == null &&
+      (params == null || (!params.xgramSkipForumRouting && StringUtils.isEmpty(params.searchQuery) &&
+        (!params.highlightSet || moe.kirao.mgx.topics.XgramForums.isResumePosition(params.highlightMode))))) {
+      if (params != null && params.xgramNotificationTopicId != 0 && tdlib.isForum(chat.id)) {
+        moe.kirao.mgx.topics.XgramForums.prepareNotificationTopicOpen(tdlib, chat, params.xgramNotificationTopicId, params);
+        openChat(context, chat, params);
+        return;
+      }
+      if (moe.kirao.mgx.topics.XgramForums.hasForumTabs(tdlib, chat)) {
+        ChatOpenParameters tabParams = params != null ? params : new ChatOpenParameters();
+        moe.kirao.mgx.topics.XgramForums.prepareTabsOpen(tdlib, chat, tabParams);
+        openChat(context, chat, tabParams);
+        return;
+      }
+      if (moe.kirao.mgx.topics.XgramForums.shouldOpenTopicList(tdlib, chat)) {
+        moe.kirao.mgx.topics.XgramForums.openRoutedTopicList(context, chat, params != null && params.xgramFromNotification);
+        if (after != null) {
+          after.runWithLong(chat.id);
+        }
+        if (params != null) {
+          params.onDone();
+        }
+        return;
+      }
+    }
+
     final int highlightMode;
     final MessageId highlightMessageId;
     if (params != null && params.highlightSet) {
@@ -2210,8 +2266,10 @@ public class TdlibUi extends Handler {
 
     final boolean isSelfChat = tdlib.isSelfChat(chat.id);
 
-    boolean doneOpen = false;
-    if (!openingSearch && context instanceof MessagesController && context.tdlib() == tdlib && !((MessagesController) context).inPreviewMode() && ((MessagesController) context).compareChat(chat.id, messageThread, onlyScheduled)) {
+    boolean doneOpen = context.tdlib() == tdlib && context instanceof ViewController<?> &&
+      (params == null || params.isPlainChatSelection()) &&
+      MoexTwoPane.reselectChatFromList((ViewController<?>) context, chat.id);
+    if (!doneOpen && !openingSearch && context instanceof MessagesController && context.tdlib() == tdlib && !((MessagesController) context).inPreviewMode() && ((MessagesController) context).compareChat(chat.id, messageThread, onlyScheduled) && xgramSameTopic((MessagesController) context, messageTopicId)) {
       boolean doneSomething = false;
       if (highlightMode == MessagesManager.HIGHLIGHT_MODE_NORMAL && highlightMessageId != null) {
         ((MessagesController) context).highlightMessage(highlightMessageId, urlOpenParameters);
@@ -2246,7 +2304,7 @@ public class TdlibUi extends Handler {
     }
     if (!doneOpen && !openingSearch && highlightMode == MessagesManager.HIGHLIGHT_MODE_NORMAL && highlightMessageId != null) {
       ViewController<?> c = context.context().navigation().getCurrentStackItem();
-      if (c != null && c != context && c.tdlib() == tdlib && c instanceof MessagesController && !((MessagesController) c).inPreviewMode() && ((MessagesController) c).compareChat(chat.id, messageThread, onlyScheduled)) {
+      if (c != null && c != context && c.tdlib() == tdlib && c instanceof MessagesController && !((MessagesController) c).inPreviewMode() && ((MessagesController) c).compareChat(chat.id, messageThread, onlyScheduled) && xgramSameTopic((MessagesController) c, messageTopicId)) {
         ((MessagesController) c).highlightMessage(highlightMessageId, urlOpenParameters);
         if (messageLinkTarget != null) {
           ((MessagesController) c).openMessageLinkTarget(highlightMessageId, messageLinkTarget);
@@ -2316,8 +2374,6 @@ public class TdlibUi extends Handler {
         }
       });
     };
-    controller.postOnAnimationReady(actor);
-
     final MessagesController.Arguments arguments;
     if (params != null && !StringUtils.isEmpty(params.searchQuery)) {
       if (params.foundMessage != null) {
@@ -2331,6 +2387,7 @@ public class TdlibUi extends Handler {
       arguments = new MessagesController.Arguments(tdlib, chatList, chat, messageThread, messageTopicId, filter);
     }
     controller.setArguments(arguments
+      .setForumTopicTitle(params != null ? params.forumTopicTitle : null)
       .setScheduled(onlyScheduled)
       .referrer(referrer)
       .voiceChatInvitation(voiceChatInvitation)
@@ -2344,6 +2401,7 @@ public class TdlibUi extends Handler {
       }
       return;
     }
+    controller.postOnAnimationReady(actor); // XGram: queued only when the chat really opens, or it fires on the next open
     if (view.getParent() != null) {
       ((ViewGroup) view.getParent()).removeView(controller.getValue());
     }
@@ -2355,7 +2413,9 @@ public class TdlibUi extends Handler {
       MainController c = new MainController(context.context(), context.tdlib());
       c.getValue();
       navigation.getStack().insert(c, 0);
-    } else if (navigation.getStackSize() > 1 && (options & CHAT_OPTION_KEEP_STACK) == 0) {
+    } else if (navigation.getStackSize() > 1 && ((options & CHAT_OPTION_KEEP_STACK) == 0 ||
+      (context instanceof ViewController<?> && MoexTwoPane.replacesRightPane((ViewController<?>) context)))) {
+      // A chat chosen from the list pane replaces the previous chat, including archive/folder results.
       navigation.setControllerAnimated(controller, true, true);
     } else {
       navigation.navigateTo(controller);
@@ -2419,7 +2479,7 @@ public class TdlibUi extends Handler {
       navigation.getStack().insert(c, 0);
     } else {
       ViewController<?> c = navigation.getCurrentStackItem();
-      if (c instanceof MessagesController && !tdlib.isSelfChat(chat) && ((MessagesController) c).getHeaderChatId() == chat.id && !((MessagesController) c).inPreviewMode()) {
+      if (c instanceof MessagesController && !tdlib.isSelfChat(chat) && ((MessagesController) c).getHeaderChatId() == chat.id && !((MessagesController) c).inPreviewMode() && !((MessagesController) c).xgramShowsTopicIcon()) {
         profileController.setShareCustomHeaderView(true);
       } else if (c instanceof ProfileController && ((ProfileController) c).isSameProfile(profileController)) {
         profileController.getValue();
@@ -2566,6 +2626,19 @@ public class TdlibUi extends Handler {
     openChat(context, chatId, new ChatOpenParameters().keepStack().highlightMessage(messageId).ensureHighlightAvailable().messageThread(messageThread).urlOpenParameters(openParameters));
   }
 
+  /**
+   * XGram: an open chat only handles a link itself (highlighting the message in place) when it shows the same forum
+   * topic. A link from one topic to a message in another topic must open that topic, or the message is looked up in
+   * the wrong topic's history.
+   */
+  private static boolean xgramSameTopic (MessagesController c, @Nullable TdApi.MessageTopic topicId) {
+    TdApi.MessageTopic current = c.getMessageTopicId();
+    if (topicId == null || current == null) {
+      return topicId == null && current == null;
+    }
+    return Td.equalsTo(topicId, current);
+  }
+
   public void openMessage (final TdlibDelegate context, final TdApi.MessageLinkInfo messageLink, final @Nullable UrlOpenParameters openParameters) {
     if (messageLink.message != null) {
       MessageId messageId = new MessageId(messageLink.message.chatId, messageLink.message.id);
@@ -2600,13 +2673,16 @@ public class TdlibUi extends Handler {
             openMessageLinkChat(context, messageLink, messageThread, openParameters);
           }
         });
+      } else if (messageLink.topicId instanceof TdApi.MessageTopicForum) {
+        // XGram: open forum topic links inside the topic.
+        moe.kirao.mgx.topics.XgramForums.openTopicLink(context, messageLink.chatId, (TdApi.MessageTopicForum) messageLink.topicId, messageLink.message, openParameters);
       } else {
         openMessageLinkChat(context, messageLink, null, openParameters);
       }
     } else {
-      // A topic-only link has no specific message. Keep TGX's merged-chat view.
-      if (messageLink.topicId != null) {
-        openChat(context, messageLink.chatId, new ChatOpenParameters().keepStack().urlOpenParameters(openParameters));
+      if (messageLink.topicId instanceof TdApi.MessageTopicForum) {
+        // XGram: link to a forum topic without a specific message.
+        moe.kirao.mgx.topics.XgramForums.openTopicLink(context, messageLink.chatId, (TdApi.MessageTopicForum) messageLink.topicId, null, openParameters);
         return;
       }
       if (tdlib.chat(messageLink.chatId) != null) {
@@ -4702,8 +4778,12 @@ public class TdlibUi extends Handler {
     }
   }
 
+  private static @Nullable ViewController<?> resolvePopupSource (TdlibDelegate source) {
+    return source instanceof ViewController<?> ? (ViewController<?>) source : source.context().navigation().getCurrentStackItem();
+  }
+
   public void showUrlOptions (TdlibDelegate context, String url, Future<UrlOpenParameters> openParametersFuture) {
-    ViewController<?> c = context.context().navigation().getCurrentStackItem();
+    ViewController<?> c = resolvePopupSource(context);
     if (c == null)
       return;
 
@@ -4732,7 +4812,7 @@ public class TdlibUi extends Handler {
   }
 
   public void openProxyAlert (TdlibDelegate context, @Nullable TdApi.Proxy proxy) {
-    ViewController<?> c = context.context().navigation().getCurrentStackItem();
+    ViewController<?> c = resolvePopupSource(context);
     if (c == null || proxy == null) return;
 
     String server = proxy.server;
@@ -5006,6 +5086,8 @@ public class TdlibUi extends Handler {
     if (c == null) {
       return;
     }
+    // Keep the source pane for the choice menu; editing and scanning retain the primary navigation.
+    ViewController<?> optionsSource = context instanceof ViewController<?> ? (ViewController<?>) context : c;
 
     /*boolean needTor = !checkTorAvailability;
     if (checkTorAvailability) {
@@ -5080,7 +5162,7 @@ public class TdlibUi extends Handler {
     if (ids.size() == 1) {
       callback.onOptionItemPressed(null, ids.get(0));
     } else {
-      c.showOptions(needProxyHint ? Lang.getString(R.string.ProxyInfo) : null, ids.get(), strings.get(), callback);
+      optionsSource.showOptions(needProxyHint ? Lang.getString(R.string.ProxyInfo) : null, ids.get(), strings.get(), callback);
     }
   }
 
@@ -6681,11 +6763,12 @@ public class TdlibUi extends Handler {
 
   public void showLanguageInstallPrompt (TdlibDelegate c, TdApi.LanguagePackInfo info) {
     ViewController<?> context = c.context().navigation().getCurrentStackItem();
-    if (context == null || context.isDestroyed())
+    ViewController<?> optionsSource = resolvePopupSource(c);
+    if (context == null || context.isDestroyed() || optionsSource == null || optionsSource.isDestroyed())
       return;
     if (Lang.packId().equals(info.id)) {
       CharSequence text = Strings.buildMarkdown(c, Lang.getString(R.string.LanguageSame, info.name), null);
-      context.showOptions(text, new int[] {R.id.btn_done, R.id.btn_settings}, new String[] {Lang.getString(R.string.OK), Lang.getString(R.string.Settings)}, null, new int[] {R.drawable.baseline_check_circle_24, R.drawable.baseline_settings_24}, (itemView, id) -> {
+      optionsSource.showOptions(text, new int[] {R.id.btn_done, R.id.btn_settings}, new String[] {Lang.getString(R.string.OK), Lang.getString(R.string.Settings)}, null, new int[] {R.drawable.baseline_check_circle_24, R.drawable.baseline_settings_24}, (itemView, id) -> {
         if (id == R.id.btn_done) {
           // Do nothing
         } else if (id == R.id.btn_settings) {
@@ -6696,7 +6779,7 @@ public class TdlibUi extends Handler {
       return;
     }
     CharSequence text = Strings.buildMarkdown(c, Lang.getString(info.isOfficial ? R.string.LanguageAlert : R.string.LanguageCustomAlert, info.name, (int) Math.floor((float) info.translatedStringCount / (float) info.totalStringCount * 100f), info.translationUrl), null);
-    context.showOptions(text, new int[] {R.id.btn_done, R.id.btn_cancel}, new String[] {Lang.getString(R.string.LanguageChange), Lang.getString(R.string.Cancel)}, new int[] {ViewController.OptionColor.BLUE, ViewController.OptionColor.NORMAL}, new int[] {R.drawable.baseline_language_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
+    optionsSource.showOptions(text, new int[] {R.id.btn_done, R.id.btn_cancel}, new String[] {Lang.getString(R.string.LanguageChange), Lang.getString(R.string.Cancel)}, new int[] {ViewController.OptionColor.BLUE, ViewController.OptionColor.NORMAL}, new int[] {R.drawable.baseline_language_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
       if (id == R.id.btn_done) {
         c.tdlib().client().send(new TdApi.AddCustomServerLanguagePack(info.id), result -> {
           switch (result.getConstructor()) {
@@ -7706,7 +7789,7 @@ public class TdlibUi extends Handler {
         sendCallback.onSendRequested(Td.newSendOptions(new TdApi.MessageSchedulingStateSendWhenOnline()), false);
       }
       return true;
-    }, context != null ? context.getThemeListeners() : null, forcedTheme);
+    }, context != null ? context.getThemeListeners() : null, forcedTheme).setSourceController(context);
   }
 
   public boolean showScheduleOptions (ViewController<?> context, long chatId, boolean needSendWithoutSound, SimpleSendCallback callback, @Nullable TdApi.MessageSendOptions defaultSendOptions, @Nullable ThemeDelegate forcedTheme) {

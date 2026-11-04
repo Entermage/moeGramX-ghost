@@ -54,7 +54,7 @@ public class NavigationGestureController implements GestureDetector.OnGestureLis
     lastScrollX = -1;
     lastScrollY = -1;
 
-    if (releaseInput && !navigation.isAnimating()) {
+    if (releaseInput && !target().isAnimating()) {
       setInputBlocked(false);
     }
   }
@@ -103,7 +103,73 @@ public class NavigationGestureController implements GestureDetector.OnGestureLis
     }
   }
 
+  // Two-pane gesture routing adapted from XGram (MoexTwoPane: chat list | chat) a gesture acts on the pane it starts in, as if that pane
+  // were the whole screen. In the chat list pane the side menu opens from the screen edge (or the pane's own screens
+  // slide back) and the folder pager keeps its swipes; in the chat pane the chat slides back from its leading edge,
+  // next to the divider; over the "select a chat" placeholder nothing happens. Touches come in the content view's
+  // coordinates (the whole screen): the system gesture edges are checked with those, and the screens get them in
+  // their own pane's coordinates, as with one pane. One pane: exactly Telegram X.
+
+  /** The navigation the current gesture acts on: {@link #navigation}, or the chat list pane's. */
+  private NavigationController target;
+  /** Where {@link #target}'s view starts in the content view: 0 with one pane. */
+  private int targetLeft;
+
+  private NavigationController target () {
+    NavigationController target = this.target;
+    return target != null && !target.isDestroyed() ? target : navigation;
+  }
+
+  @Nullable
+  private moe.kirao.mgx.layout.MoexTwoPane moexTwoPane () {
+    moe.kirao.mgx.layout.MoexTwoPane twoPane = ((BaseActivity) navigation.getContext()).moexTwoPane();
+    return twoPane != null && twoPane.isActive() ? twoPane : null;
+  }
+
+  /**
+   * Picks the pane a gesture starting at {@code x} (content view coordinates) acts on.
+   *
+   * @return false when no gesture starts there: the placeholder of the chat pane, the line between the panes
+   */
+  private boolean moexPickPane (float x, boolean drawerVisible) {
+    target = navigation;
+    targetLeft = 0;
+    NavigationController list = moe.kirao.mgx.layout.MoexTwoPaneGestures.listNavigation((BaseActivity) navigation.getContext());
+    if (list == null || list == navigation) {
+      return true; // one pane
+    }
+    if (drawerVisible) {
+      // The side menu belongs to the chat list pane: dragging it or tapping beside it, anywhere.
+      target = list;
+      targetLeft = list.getValue().getLeft();
+      return true;
+    }
+    android.view.View listView = list.getValue(), chatView = navigation.getValue();
+    if (x >= listView.getLeft() && x < listView.getRight()) {
+      target = list;
+      targetLeft = listView.getLeft();
+      return true;
+    }
+    if (x >= chatView.getLeft() && x < chatView.getRight()) {
+      targetLeft = chatView.getLeft();
+      // At its root the chat pane shows the placeholder over its hidden chat list: nothing to slide back.
+      return navigation.getStackSize() > 1;
+    }
+    return false;
+  }
+
+  /** The width the side menu opens in: the screen's, also with two panes. */
+  private int moexDrawerSpaceWidth () {
+    android.view.View view = navigation.getValue();
+    if (moexTwoPane() != null && view.getParent() instanceof android.view.View) {
+      return ((android.view.View) view.getParent()).getMeasuredWidth();
+    }
+    return view.getMeasuredWidth();
+  }
+
   public boolean onDown (MotionEvent event) {
+    target = navigation; // XGram: until the pane is picked below
+    targetLeft = 0;
     if (navigation.isDestroyed() || navigation.isAnimating())
       return false;
 
@@ -113,27 +179,38 @@ public class NavigationGestureController implements GestureDetector.OnGestureLis
     if (startY <= 0f) //HeaderView.getSize()
       return false;
 
-    ViewController<?> c = navigation.getCurrentStackItem();
+    final boolean drawerVisible = drawer != null && drawer.isVisible();
+    if (!moexPickPane(startX, drawerVisible)) {
+      return false;
+    }
+    final NavigationController target = target();
+    if (target != navigation && target.isAnimating()) {
+      return false;
+    }
+
+    ViewController<?> c = target.getCurrentStackItem();
 
     if (c == null || c.isIntercepted())
       return false;
 
-    listenSlidingBack = ((drawer != null && drawer.isVisible()) || (!isScrolling && canSlideBack(c, startX, startY)));
+    listenSlidingBack = (drawerVisible || (!isScrolling && canSlideBack(c, startX, startY)));
     slidingVertical = listenSlidingBack && c.usePopupMode();
 
     return listenSlidingBack;
   }
 
   private boolean canSlideBack () {
+    final NavigationController navigation = target();
     int stackSize = navigation.getStackSize();
     ViewController<?> c = navigation.getCurrentStackItem();
     return navigation.swipeNavigationEnabled() && stackSize > 0 && c != null && c.swipeNavigationEnabled() && !c.forceFadeMode() && !c.inSelectMode() && !c.inCustomMode() && !(stackSize == 1 && c.inSearchMode());
   }
 
   private boolean canSlideBack (ViewController<?> c, float x, float y) {
+    final NavigationController navigation = target();
     int stackSize = navigation.getStackSize();
     if (navigation.swipeNavigationEnabled() && stackSize > 0 && c != null){
-      if (c.swipeNavigationEnabled() && !c.forceFadeMode() && !c.inSelectMode() && !c.inCustomMode() && !(stackSize == 1 && c.inSearchMode()) && c.canSlideBackFrom(navigation, x, y)) {
+      if (c.swipeNavigationEnabled() && !c.forceFadeMode() && !c.inSelectMode() && !c.inCustomMode() && !(stackSize == 1 && c.inSearchMode()) && c.canSlideBackFrom(navigation, x - targetLeft, y)) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
           RootFrameLayout rootFrameLayout = UI.getContext(navigation.getContext()).getRootView();
           Rect gestureInsets = rootFrameLayout.getSystemGesturesInsets();
@@ -149,6 +226,7 @@ public class NavigationGestureController implements GestureDetector.OnGestureLis
 
   public void onCancel () {
     abortUp = false;
+    final NavigationController navigation = target();
     if (slidingBack) {
       navigation.forceClosePreview();
       navigation.setIsAnimating(false);
@@ -164,10 +242,11 @@ public class NavigationGestureController implements GestureDetector.OnGestureLis
       return abortUp = false;
     }
 
+    final NavigationController navigation = target();
     if (listenSlidingBack && drawer != null && drawer.isVisible()) {
       boolean ok;
       if (Lang.rtl()) {
-        ok = event.getX() < navigation.getValue().getMeasuredWidth() - drawer.getWidth() + drawer.getShadowWidth();
+        ok = event.getX() < moexDrawerSpaceWidth() - drawer.getWidth() + drawer.getShadowWidth();
       } else {
         ok = event.getX() >= drawer.getWidth();
       }
@@ -204,6 +283,7 @@ public class NavigationGestureController implements GestureDetector.OnGestureLis
     if (abs > Screen.dp(250, 1f)) {
       abortUp = true;
 
+      final NavigationController navigation = target();
       if (slidingBack) {
         if ((velocity < 0 && (!Lang.rtl() || slidingVertical)) || (velocity >= 0 && Lang.rtl() && !slidingVertical)) {
           navigation.closePreview(abs);
@@ -234,6 +314,7 @@ public class NavigationGestureController implements GestureDetector.OnGestureLis
     lastScrollX = (int) Math.floor(event.getX(0) - startX);
     lastScrollY = slidingVertical ? (int) Math.floor(Math.max(0f, event.getY(0) - startY)) : 0;
 
+    final NavigationController navigation = target();
     if (slidingBack) {
       navigation.translatePreview(slidingVertical ? lastScrollY : lastScrollX);
       return slidingBack;

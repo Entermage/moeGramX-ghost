@@ -138,7 +138,7 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
       View v = stickersView.getLayoutManager().findViewByPosition(i);
       int additional = v != null ? -v.getTop() : 0;
       int stickerSet = indexOfStickerSetByAdapterPosition(i);
-      return additional + stickersAdapter.measureScrollTop(i, spanCount, stickerSet, stickerSets, null, false);
+      return additional + stickersAdapter.measureScrollTop(i, spanCount, stickerSet, stickerSets, stickersView, false, true);
     }
     return 0;
   }
@@ -292,7 +292,8 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
   private int spanCount;
 
   public void checkSpanCount () {
-    int spanCount = calculateSpanCount(Screen.currentWidth(), Screen.currentHeight());
+    int width = stickersView != null ? stickersView.getMeasuredWidth() : 0;
+    int spanCount = calculateSpanCount(width > 0 ? width : Screen.currentWidth(), Screen.currentHeight());
     if (this.spanCount != spanCount) {
       this.spanCount = spanCount;
       if (stickersView != null) {
@@ -813,8 +814,9 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
     }
   }
 
-  private Client.ResultHandler stickerSetsHandler (boolean needAddDefaultPremiumStar) {
+  private Client.ResultHandler stickerSetsHandler (boolean needAddDefaultPremiumStar, int generation) {
     return object -> {
+      if (!isCurrentStickerLoad(generation)) return;
       switch (object.getConstructor()) {
         case TdApi.StickerSets.CONSTRUCTOR: {
           TdApi.StickerSetInfo[] rawStickerSets = ((TdApi.StickerSets) object).sets;
@@ -894,6 +896,7 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
           }
 
           runOnUiThreadOptional(() -> {
+            if (!isCurrentStickerLoad(generation)) return;
             if (getArguments() != null) {
               getArguments().setStickerSets(stickerSets, false, recentStickers != null && recentStickers.length > 0, trendingStickers != null && trendingStickers.length > 0, !needAddDefaultPremiumStar);
             }
@@ -920,6 +923,24 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
 
   private boolean loadingStickers;
   private boolean stickersLoaded;
+  private volatile int stickerLoadGeneration;
+
+  private boolean isCurrentStickerLoad (int generation) {
+    return !isDestroyed() && generation == stickerLoadGeneration;
+  }
+
+  @Override
+  public void destroy () {
+    if (isDestroyed()) return;
+    stickerLoadGeneration++;
+    loadingStickers = false;
+    stickersLoaded = false;
+    trendingLoading = false;
+    canLoadMoreTrending = false;
+    if (lastScrollAnimator != null) lastScrollAnimator.cancel();
+    super.destroy();
+  }
+
   private Runnable onStickersLoadListener;
 
   public void setOnStickersLoadListener (Runnable onStickersLoadListener) {
@@ -927,9 +948,16 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
   }
 
   private void loadStickers () {
-    if (!loadingStickers) {
+    if (!loadingStickers && !isDestroyed()) {
+      final int generation = ++stickerLoadGeneration;
       loadingStickers = true;
       stickersLoaded = false;
+      trendingLoading = false;
+      canLoadMoreTrending = true;
+      trendingOffset = 0;
+      trendingSkip = 0;
+      lastTrendingStickerSet = null;
+      trendingSets.clear();
 
       if (StringUtils.isEmpty(currentTextSearchRequest) && StringUtils.isEmpty(currentEmojiSearchRequest)) {
         LongList recentEmojiList = new LongList(200);
@@ -938,14 +966,16 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
           getEmojiStatusList(new TdApi.GetRecentEmojiStatuses(), recentEmojiList, () ->
             getCustomEmojiStatusList(new TdApi.GetDefaultEmojiStatuses(), trendingEmojiList, () ->
               getCustomEmojiStickers(trendingEmojiList.get(), trendingStickersHandler(() ->
-                getCustomEmojiStickers(recentEmojiList.get(), serviceStickersHandler(null))))))
-        );
+                getCustomEmojiStickers(recentEmojiList.get(), serviceStickersHandler(null, generation), generation),
+                generation), generation), generation), generation), generation);
+
       } else {
         if (!StringUtils.isEmpty(currentEmojiSearchRequest)) {
-          tdlib.client().send(new TdApi.SearchStickers(new TdApi.StickerTypeCustomEmoji(), currentEmojiSearchRequest, null, U.getInputLanguages(), 0, 200), serviceStickersHandler(currentTextSearchRequest));
+          tdlib.client().send(new TdApi.SearchStickers(new TdApi.StickerTypeCustomEmoji(), currentEmojiSearchRequest, null, U.getInputLanguages(), 0, 200), serviceStickersHandler(currentTextSearchRequest, generation));
         } else {
           final String textQuery = currentTextSearchRequest;
           tdlib.send(new TdApi.SearchEmojis(textQuery, U.getInputLanguages()), (keywords, error) -> {
+            if (!isCurrentStickerLoad(generation)) return;
             if (error != null) {
               UI.showError(error);
               return;
@@ -953,9 +983,9 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
             String[] uniqueEmojis = Td.findUniqueEmojis(keywords.emojiKeywords);
             if (uniqueEmojis.length > 0) {
               String uniqueEmojisQuery = TextUtils.join(" ", uniqueEmojis);
-              tdlib.client().send(new TdApi.SearchStickers(new TdApi.StickerTypeCustomEmoji(), uniqueEmojisQuery, null, U.getInputLanguages(), 0, 200), serviceStickersHandler(currentTextSearchRequest));
+              tdlib.client().send(new TdApi.SearchStickers(new TdApi.StickerTypeCustomEmoji(), uniqueEmojisQuery, null, U.getInputLanguages(), 0, 200), serviceStickersHandler(currentTextSearchRequest, generation));
             } else {
-              tdlib.client().send(new TdApi.SearchInstalledStickerSets(new TdApi.StickerTypeCustomEmoji(), textQuery, 200), stickerSetsHandler(false));
+              tdlib.client().send(new TdApi.SearchInstalledStickerSets(new TdApi.StickerTypeCustomEmoji(), textQuery, 200), stickerSetsHandler(false, generation));
             }
           });
         }
@@ -963,8 +993,10 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
     }
   }
 
-  private void getEmojiStatusList (TdApi.Function<TdApi.EmojiStatuses> req, LongList longList, Runnable onReceive) {
+  private void getEmojiStatusList (TdApi.Function<TdApi.EmojiStatuses> req, LongList longList, Runnable onReceive, int generation) {
+    if (!isCurrentStickerLoad(generation)) return;
     tdlib.client().send(req, object2 -> {
+      if (!isCurrentStickerLoad(generation)) return;
       switch (object2.getConstructor()) {
         case TdApi.EmojiStatuses.CONSTRUCTOR: {
           TdApi.EmojiStatus[] emojiStatuses = ((TdApi.EmojiStatuses) object2).emojiStatuses;
@@ -988,8 +1020,10 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
 
   private static final int MAX_EMOJI_STATUS_COUNT = 1000;
 
-  private void getCustomEmojiStatusList (TdApi.Function<TdApi.EmojiStatusCustomEmojis> req, LongList longList, Runnable onReceive) {
+  private void getCustomEmojiStatusList (TdApi.Function<TdApi.EmojiStatusCustomEmojis> req, LongList longList, Runnable onReceive, int generation) {
+    if (!isCurrentStickerLoad(generation)) return;
     tdlib.client().send(req, object2 -> {
+      if (!isCurrentStickerLoad(generation)) return;
       switch (object2.getConstructor()) {
         case TdApi.EmojiStatusCustomEmojis.CONSTRUCTOR: {
           long[] customEmojiIds = ((TdApi.EmojiStatusCustomEmojis) object2).customEmojiIds;
@@ -1008,12 +1042,14 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
     });
   }
 
-  private void getCustomEmojiStickers (long[] emojiIds, Client.ResultHandler resultHandler) {
+  private void getCustomEmojiStickers (long[] emojiIds, Client.ResultHandler resultHandler, int generation) {
+    if (!isCurrentStickerLoad(generation)) return;
     tdlib.client().send(new TdApi.GetCustomEmojiStickers(emojiIds), resultHandler);
   }
 
-  private Client.ResultHandler trendingStickersHandler (Runnable after) {
+  private Client.ResultHandler trendingStickersHandler (Runnable after, int generation) {
     return object -> {
+      if (!isCurrentStickerLoad(generation)) return;
       switch (object.getConstructor()) {
         case TdApi.Stickers.CONSTRUCTOR: {
           pendingTrendingStickers = ((TdApi.Stickers) object).stickers;
@@ -1028,15 +1064,16 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
     };
   }
 
-  private Client.ResultHandler serviceStickersHandler (final String setsQuery) {
+  private Client.ResultHandler serviceStickersHandler (final String setsQuery, int generation) {
     return object -> {
+      if (!isCurrentStickerLoad(generation)) return;
       switch (object.getConstructor()) {
         case TdApi.Stickers.CONSTRUCTOR: {
           pendingRecentStickers = ((TdApi.Stickers) object).stickers;
           if (StringUtils.isEmpty(setsQuery)) {
-            tdlib.client().send(new TdApi.GetInstalledStickerSets(new TdApi.StickerTypeCustomEmoji()), stickerSetsHandler(true));
+            tdlib.client().send(new TdApi.GetInstalledStickerSets(new TdApi.StickerTypeCustomEmoji()), stickerSetsHandler(true, generation));
           } else {
-            tdlib.client().send(new TdApi.SearchInstalledStickerSets(new TdApi.StickerTypeCustomEmoji(), setsQuery, 200), stickerSetsHandler(false));
+            tdlib.client().send(new TdApi.SearchInstalledStickerSets(new TdApi.StickerTypeCustomEmoji(), setsQuery, 200), stickerSetsHandler(false, generation));
           }
           break;
         }
@@ -1089,7 +1126,7 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
       if (stickerSetIndex == 0) {
         scrollTop = 0;
       } else {
-        scrollTop = Math.max(0, stickersAdapter.measureScrollTop(stickerSetIndex, spanCount, futureSection, stickerSets, null, false) - EmojiLayout.getHeaderSize() - EmojiLayout.getHeaderPadding());
+        scrollTop = Math.max(0, stickersAdapter.measureScrollTop(stickerSetIndex, spanCount, futureSection, stickerSets, stickersView, false, true) - EmojiLayout.getHeaderSize() - EmojiLayout.getHeaderPadding());
       }
 
       final int currentScrollTop = getStickersScrollY();
@@ -1283,30 +1320,39 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
   private @Nullable TGStickerSetInfo lastTrendingStickerSet;
 
   private void loadNextTrending () {
-    if (!trendingLoading && stickersLoaded) {
+    if (!isDestroyed() && !trendingLoading && stickersLoaded && canLoadMoreTrending) {
       trendingLoading = true;
-      tdlib.client().send(new TdApi.GetTrendingStickerSets(new TdApi.StickerTypeCustomEmoji(), trendingOffset, 25), object -> {
+      final int generation = stickerLoadGeneration;
+      final int offset = trendingOffset;
+      tdlib.client().send(new TdApi.GetTrendingStickerSets(new TdApi.StickerTypeCustomEmoji(), offset, 25), object -> {
+        if (!isCurrentStickerLoad(generation)) return;
+        if (object.getConstructor() != TdApi.TrendingStickerSets.CONSTRUCTOR) {
+          runOnUiThreadOptional(() -> {
+            if (!isCurrentStickerLoad(generation)) return;
+            trendingLoading = false;
+            canLoadMoreTrending = false;
+            if (object.getConstructor() == TdApi.Error.CONSTRUCTOR) UI.showError(object);
+          });
+          return;
+        }
+        TdApi.TrendingStickerSets result = (TdApi.TrendingStickerSets) object;
+        final int receivedCount = result.sets.length;
         final ArrayList<TGStickerSetInfo> parsedStickerSets = new ArrayList<>();
         final ArrayList<MediaStickersAdapter.StickerItem> items = new ArrayList<>();
-        final int offset = trendingOffset;
-
-        if (object.getConstructor() == TdApi.TrendingStickerSets.CONSTRUCTOR) {
-          TdApi.TrendingStickerSets trendingStickerSets = (TdApi.TrendingStickerSets) object;
-          trendingOffset += trendingStickerSets.sets.length;
-
-          ArrayList<TdApi.StickerSetInfo> filtered = new ArrayList<>();
-          for (TdApi.StickerSetInfo set : trendingStickerSets.sets) {
-            if (!isContainStickerSet(set)) {
-              filtered.add(set);
-            } else {
-              trendingSkip += 1;
-            }
-          }
-
-          EmojiMediaListController.parseTrending(tdlib, parsedStickerSets, items,  stickersAdapter.getItemCount(), filtered.toArray(new TdApi.StickerSetInfo[0]), stickerSetsDataProvider(), null, false, true, null);
+        ArrayList<TdApi.StickerSetInfo> filtered = new ArrayList<>();
+        for (TdApi.StickerSetInfo set : result.sets) {
+          if (!isContainStickerSet(set)) filtered.add(set);
         }
-
+        EmojiMediaListController.parseTrending(tdlib, parsedStickerSets, items, stickersAdapter.getItemCount(),
+          filtered.toArray(new TdApi.StickerSetInfo[0]), stickerSetsDataProvider(), null, false, true, null);
         runOnUiThreadOptional(() -> {
+          if (!isCurrentStickerLoad(generation)) return;
+          trendingOffset = offset + receivedCount;
+          trendingSkip += receivedCount - filtered.size();
+          // A page containing only installed packs still advances. Stop on the raw empty page,
+          // an error, or a reached reliable total; unknown/inconsistent totals keep paging.
+          boolean knownTotal = result.totalCount > 0 && result.totalCount >= trendingOffset;
+          canLoadMoreTrending = receivedCount > 0 && (!knownTotal || trendingOffset < result.totalCount);
           addTrendingStickers(parsedStickerSets, items, offset);
         });
       });
@@ -1328,8 +1374,6 @@ public class EmojiStatusListController extends ViewController<EmojiLayout> imple
         stickerSets.add(info);
       }
     }
-    this.canLoadMoreTrending = trendingSets != null && !trendingSets.isEmpty();
-
     stickersAdapter.addItems(items);
 
     this.trendingLoading = false;
