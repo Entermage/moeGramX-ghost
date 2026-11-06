@@ -152,7 +152,7 @@ arm64 release APK 输出到 `app/build/outputs/apk/latestArm64/release/`。编�
 
 `./gradlew -p tests/external-share-android runChecks` 在独立 JVM 工程中读取当前 Manifest，调用 Android 16 框架的 `IntentFilter.match`，并直接编译生产 `ExternalShareUtils` 检查 URI 提取、MIME 优先级、打开文件的媒体/文档路由和路径边界。首次运行下载 `android-all` 测试依赖，不加入 APK；少量应用工具依赖使用测试替身。它不验证真实 ContentProvider 授权、分享界面操作、TDLib 上传或收件结果，不能代替手机端到端测试。
 
-`tests/VisibleUnreadAnchorTest.java` 直接运行生产分页策略，覆盖连续隐藏消息、短页、重复游标、稀疏 64 位消息 ID、相册成员和页数上限。`python3 -m unittest discover -s tests -p test_chat_navigation.py -v` 提取生产书签保存和默认定位方法，在 JVM 数据/布局替身下验证位置与偏移，并检查入口及取消逻辑的接线。两者不验证真实 TDLib 历史请求或 RecyclerView 渲染。用户占用手机时，不连接、安装或操作实体设备；可运行这些回归检查、CI 构建及下述独立模拟器测试。
+`tests/VisibleUnreadAnchorTest.java` 直接运行生产分页策略，覆盖连续隐藏消息、短页、重复游标、稀疏 64 位消息 ID、相册成员和页数上限。`python3 -m unittest discover -s tests -p test_chat_navigation.py -v` 提取生产书签保存和默认定位方法，在 JVM 数据/布局替身下验证位置与偏移，并检查入口及取消逻辑的接线。两者不验证真实 TDLib 历史请求或 RecyclerView 渲染。这些回归检查、CI 构建及下述独立模拟器测试可在不操作实体设备的情况下运行。
 
 `python3 -m unittest discover -s tests -p test_preview_filter.py -v` 编译生产 `MoexMessageFilter`、`ListManager`，并提取生产预览和配置方法，在 TDLib/UI 替身下验证通知、屏蔽/取消屏蔽、正则开关、账号隔离、异步回调、缩略图、预览目标和请求失败后的手动重试。另检查监听与置顶点击的接线。它不执行 Android 渲染或真实网络错误，相关显示及导航仍需模拟器验证。
 
@@ -160,65 +160,15 @@ arm64 release APK 输出到 `app/build/outputs/apk/latestArm64/release/`。编�
 
 `python3 -m unittest discover -s tests -p test_ghost_read.py -v` 在干净的固定版本 TDLib 源码上应用补丁，再编译实际原生策略及 Java 请求方法，覆盖错误目标、令牌重复使用、账号连接替换、请求失败和队列释放；它不连接 Telegram 服务，不能替代双账号云端回执验证。
 
-### WSL 隔离模拟器
+### 隔离 Android 测试环境
 
-本机使用 `Ubuntu-26.04` 的 Android SDK（`~/Android/Sdk`），模拟器作为 WSL 无窗口进程运行，由 Windows 便携版 scrcpy 显示和操作。Windows 只承担查看器角色，SDK、模拟器和构建仍在 WSL。AVD 名为 `moegramx_api35`，使用 Pixel 5 配置和 `system-images;android-35;google_apis;x86_64`。已安装的镜像声明支持 `x86_64,arm64-v8a`，通过 `libndk_translation.so` 运行同一份 ARM64 正式签名 APK，无需另外生成 x86 APK。运行用户须能读写 `/dev/kvm`；加入 `kvm` 组属于持久权限变更，只能在获得用户同意后执行。
+公开资料中的测试设备、账号、宿主机目录、AVD 名称、端口、网络地址和安装标识均已脱敏。具体值只保留在本地验证记录，不能从公开示例推断当前设备配置。
 
-为与其他项目的实体手机调试隔离，WSL ADB server 使用 `5038`，模拟器 console/adbd 使用 `5770/5771`，gRPC 使用带 JWT 的本地 `8556`。下列命令在 WSL Bash 中启动用户级临时 systemd 服务，不依赖命令终端持续打开；服务已运行时不要重复启动：
+可在 Linux/WSL 中运行独立 Android 模拟器，通过与实体设备分离的 ADB server 操作。SDK 根目录由 `ANDROID_SDK_ROOT` 指定；为模拟器选择独立的 ADB、console/adbd 与 gRPC 端口，并只连接明确指定的测试序列号。ADB 操作显式传入 `-P <ADB_PORT>` 和 `-s <TEST_SERIAL>`，不要依赖默认设备选择。Windows 查看器可通过同一独立 server 显示模拟器，不需要修改系统 PATH 或重启整个 WSL。
 
-```bash
-export ANDROID_SDK_ROOT=~/Android/Sdk
-export ANDROID_ADB_SERVER_PORT=5038
-export ADB_SERVER_SOCKET=tcp:localhost:5038
-export ADB_MDNS_AUTO_CONNECT=0
-export ADB_LOCAL_TRANSPORT_MAX_PORT=0
-"$ANDROID_SDK_ROOT/platform-tools/adb" -P 5038 --one-device moegramx-emulator-only start-server
-systemd-run --user --unit=moegramx-emulator --collect --property=Type=exec \
-  --setenv=ANDROID_SDK_ROOT="$ANDROID_SDK_ROOT" \
-  --setenv=ANDROID_ADB_SERVER_PORT=5038 \
-  --setenv=ADB_SERVER_SOCKET=tcp:localhost:5038 \
-  --setenv=ADB_MDNS_AUTO_CONNECT=0 --setenv=ADB_LOCAL_TRANSPORT_MAX_PORT=0 \
-  "$ANDROID_SDK_ROOT/emulator/emulator" -avd moegramx_api35 \
-  -ports 5770,5771 -grpc 8556 -grpc-use-jwt -accel on \
-  -gpu swangle -feature -Vulkan -memory 4096 -cores 4 \
-  -no-window -no-audio -no-metrics -no-snapshot -no-boot-anim \
-  -camera-back none -camera-front none
-```
+测试 ARM64 包时，镜像必须声明兼容 ARM64 或提供对应转译支持。图形后端、内存、窗口尺寸按测试目标配置；宿主渲染异常和 Android 客户端崩溃分别检查。模拟器尺寸变化不能代替真机折叠、厂商后台策略或功耗验证。
 
-可用 `systemctl --user status moegramx-emulator` 查看状态、`journalctl --user -u moegramx-emulator` 查看宿主日志、`systemctl --user stop moegramx-emulator` 停止模拟器。不要为处理显示问题重启整个 WSL，以免中断其他项目。
-
-`--one-device` 限制该独立 server 仅考虑指定 USB serial（这里使用不对应实体手机的占位 serial），关闭自动发现后再手动连接模拟器。安装、日志和自动化设备命令均使用 Linux SDK 内的 `adb`，同时带上 `-P 5038 -s 127.0.0.1:5771`，不能省略到默认 ADB，也不重启 Windows 的 ADB server：
-
-```bash
-~/Android/Sdk/platform-tools/adb -P 5038 connect 127.0.0.1:5771
-~/Android/Sdk/platform-tools/adb -P 5038 -s 127.0.0.1:5771 get-state
-~/Android/Sdk/platform-tools/adb -P 5038 -s 127.0.0.1:5771 install --no-streaming \
-  app/build/outputs/apk/latestArm64/release/moegramX-0.29.0.1799-arm64-v8a.apk
-~/Android/Sdk/platform-tools/adb -P 5038 -s 127.0.0.1:5771 shell am start -W \
-  -n com.ayx.mgx/org.thunderdog.challegram.MainActivity
-```
-
-Windows 查看器使用 [官方 scrcpy](https://github.com/Genymobile/scrcpy) 便携包（本机为 v4.1），不修改系统 PATH。在解压目录的 PowerShell 中设置仅当前进程生效的环境并启动：
-
-```powershell
-$env:ADB = Join-Path (Get-Location) 'adb.exe'
-$env:ANDROID_USER_HOME = Join-Path (Get-Location) 'emulator-adb-home'
-New-Item -ItemType Directory -Force -Path $env:ANDROID_USER_HOME | Out-Null
-$env:ADB_SERVER_SOCKET = 'tcp:127.0.0.1:5038'
-$env:ANDROID_ADB_SERVER_PORT = '5038'
-.\scrcpy.exe --serial=127.0.0.1:5771 --tunnel-host=127.0.0.1 `
-  --tunnel-port=27783 --port=27783 --force-adb-forward `
-  --no-audio --no-clipboard-autosync --max-size=1600 --max-fps=30 `
-  --window-title=moegramX-WSL-Emulator --window-width=460 --window-height=920
-```
-
-scrcpy 附带的 Windows ADB 客户端只连接上述 WSL `5038` server，不连接实体手机或默认 `5037` server。WSL 的 localhost 转发须可用；关闭查看器不会停止模拟器。当前 WSLg 曾出现共享内存打开失败、窗口有标题但不可见的问题，因此不依赖 WSLg 显示。自动化输入显式使用 `adb -P 5038 -s 127.0.0.1:5771 shell input -d 0 ...`，避免输入落到非目标显示器；点击前确认最新画面，不能把菜单打开前的坐标继续用于菜单操作。
-
-APK 文件名应与当前构建输出一致；覆盖安装时明确添加 `-r`，不得为测试清空已有登录数据。当前 WSL 环境使用 `swangle` 并禁用 Vulkan；默认图形配置曾导致模拟器宿主的 `RenderThread` 崩溃，应与客户端 Android 崩溃区分。`-no-snapshot` 禁用快照，不删除 AVD 用户数据。账号必须由用户在模拟器内自行登录，不复制实体手机会话，也不在脚本、日志或仓库保存验证码和密码。安装、欢迎页和登录页正常仅代表启动检查通过；论坛合并历史、书签、未读导航和 Shadow Ban 仍需登录后用真实聊天操作验证。测试前记录本地开关和屏蔽列表，只调整必要项并在结束后恢复；阅读位置可能随实际浏览推进，不把它当作可回滚设置。截图和设备日志仅保存在本地，避免把账号或聊天内容提交到仓库。模拟器不能代替真机性能、厂商后台策略与 FCM 唤醒测试。
-
-另有独立空白 16KB 测试 AVD `moegramx_pages16k`，镜像为 `system-images;android-35;google_apis_ps16k;x86_64`，实测 `getconf PAGE_SIZE` 为 `16384`，同样通过 ARM64 翻译运行正式 APK。复用上述启动方式时，服务名改为 `moegramx-16k-emulator`、AVD 改为 `moegramx_pages16k`、console/adbd 改为 `5772/5773`、gRPC 改为 `8557`；ADB server 仍为隔离的 `5038`，所有设备命令指定 `-s 127.0.0.1:5773`。该 AVD 不复制已有会话，测试后停止服务、保留数据；不能将其结果等同于原生 ARM64 真机表现。系统镜像自身的 Play 服务或搜索应用崩溃应根据日志的 `Cmdline` 与客户端崩溃区分。
-
-本地忽略目录 `.ci/verify-device/` 内的临时 instrumentation 可借助对应构建的 R8 mapping 检查未修改的 release APK。它使用现有正式证书仅为允许本地测试附加，不是应用功能或发布产物；测试后卸载 `dev.moegramx.runtimeprobe`，不得把该诊断 APK、mapping、账号日志或签名配置上传。媒体样本通过本地数据源输入实际 APK 播放器和 `mtproto:` HLS 提取分支，检查解码帧与播放结束；这不覆盖 Telegram 下载传输、多码率切换或全部硬件解码器。推送状态检查只输出状态、计数和时间，不输出 token；计数增加、进程被唤起及通知栏展示是三个不同验证目标，应分别报告证据。双账号云端回执和真实通话需要用户提供受控对端，不能随意向联系人发送测试内容。
+APK 使用当前构建输出，覆盖安装显式使用 `install -r` 并核对包名、签名、哈希及数据保留情况。账号通过正常登录流程使用，不复制实体手机会话。测试只调整必要的状态并在结束后恢复；原始截图、聊天内容、账号标识、安装记录和设备日志留在本地，不随源码或 Release 上传。受保护内容的 `FLAG_SECURE` 行为沿用系统与应用设置，投屏黑屏需结合窗口标记与进程状态判断。
 
 ### GitHub Actions 构建与交付
 

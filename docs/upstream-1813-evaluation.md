@@ -11,15 +11,11 @@
 
 本轮本地验证：重建 Ghost TDLib 和正式 APK；21 项 Python 回归重复通过，真实 Media3 MIME/Android Uri 下的 HLS 检查 85 项、外部分享 121 项、分页策略 54 项、可见未读策略 314 项通过。新增测试先复现失败再验证修复，覆盖错误会话/消息、单次令牌、旧连接回调、请求失败清理、编码别名和码率边界。
 
-在已登录 WSL 模拟器中确认：聊天列表、`meiwool/371445` 精确定位、论坛群跳到底部、消息主菜单和 More 分工、Read until 点击返回、公开视频进度推进至 3 秒，以及三次冷启动；crash buffer 为空。Ghost 三类开关保持开启，未发送聊天消息或表情、未退出账号、未接触实体手机。为通过系统弹窗暂时拒绝的模拟器通知权限已恢复到原先未授权/未选择状态。
-
-本地稳定 APK SHA-256：`20925aff0f9779d93bf8b26834a1f1fe2f7cdf4308dc1f60e7851201bee21c35`。随后已下载并实际安装 GitHub runner 产物，CI APK 和模拟器已安装 `base.apk` 的 SHA-256 均为 `68b58bf41d896052fc5774b6010b0cd45f84662345e4513c8a56c66739568e2c`；确认正式证书、v2/v3、非 debuggable、仅 ARM64，以及原生库包含新会话/消息令牌而不含旧全局放行标记。
-
-CI 下载包单独复测了论坛消息精确定位、Read until 点击返回、主菜单/More 分工和表情栏、从首条新消息继续跳到最新消息、公开视频播放至 3 秒及三次冷启动，最终聊天列表正常加载，crash buffer 为空。未修改屏蔽列表、未发送消息或表情，也未接触实体手机。点击返回不等于云端回执已由第二账号确认；后续 HLS 实际解码验证及其边界见下文。
+隔离 Android 环境已验证消息定位、论坛导航、消息菜单、媒体播放和冷启动；原始会话标识、截图、账号状态及设备记录仅保留在本地。界面操作通过不等于服务器回执或实体设备验收。
 
 ## TDLib、通话库和构建链：试验通过，尚未日常合入
 
-隔离分支 `codex/upgrade-1813` 采用 moeGramX `79e4d5d2` / TGX `9312ace3` 作为完整兼容性试编基线。复查后的本地试验提交 `8b5f01c75a2beb02426cb186d47cff83e39a2fea`，未推送，也未用于 Release。完整上游基线还包含通知、Baseline Profile、联系人与备份改动；不应把这个试验分支直接整体合回 `moe`。
+隔离分支 `codex/upgrade-1813` 采用 moeGramX `79e4d5d2` / TGX `9312ace3` 作为完整兼容性试编基线。完整上游基线还包含通知、Baseline Profile、联系人与备份改动；不应把这个试验分支直接整体合回 `moe`。
 
 | 部分 | 试验版本/结果 |
 | --- | --- |
@@ -34,11 +30,9 @@ CI 下载包单独复测了论坛消息精确定位、Read until 点击返回、
 
 复查还发现 Application 插件的 primary/legacy NDK 条件反置：默认初始值错误地选择 NDK 23，之后又被 app 脚本覆盖为 NDK 27，因此此前完整编译成功并不能证明初始配置正确。已修复；新增 Gradle 配置审计验证默认 NDK 27、legacy NDK 23，以及 libvpx/FFmpeg 任务的 NDK 一致性，不编译 ARMv7。
 
-试验 APK 再次完整构建成功；18 项 Python 回归重复通过、真实 Media3 的 HLS 检查 85 项及外部分享 121 项通过。在独立 AVD 副本覆盖安装后，旧账号正常加载，论坛群目标消息定位、Read until 点击返回、跳到底部、公开视频进度推进至 4 秒及三次冷启动通过，crash buffer 为空。测试后恢复原 AVD，不连接实体手机。试验 APK SHA-256：`d3510adb1cbdb82dc55ac00d3dd318ab7743e7139b97e1073e3e9a7820dd7137`。
-
 ## 补充运行验证：16KB、HLS 与推送
 
-新增独立空白 AVD `moegramx_pages16k`，使用 Android 官方 `system-images;android-35;google_apis_ps16k;x86_64` 镜像，`getconf PAGE_SIZE` 实测为 `16384`，经 ARM64 翻译运行上述两份未修改的正式签名 APK。稳定版 CI 包和本地升级包均安装、启动成功；稳定包另完成模拟器重启后的冷启动。测试依据与环境说明见 [Android 16KB 页大小文档](https://developer.android.com/guide/practices/page-sizes)。这不等于原生 ARM64 真机或所有厂商设备兼容性验证。
+稳定版和隔离升级版已在 Android 官方 16KB 页大小测试环境中完成安装和启动，并通过 ARM64 转译执行。该结果不代表原生 ARM64 真机或所有厂商设备兼容性验证。
 
 通过本地、同证书的临时 instrumentation 直接调用实际 APK 内的 `U.newExoPlayer`、HLS extractor 和 Media3 解码流程；只用本地数据源替换 Telegram 下载传输。以下四种真实码流、七组 codec 标识在两份 APK 上共 14 组通过，每组输出 45 帧、播放约 3 秒并到达 `ENDED`，且实际执行了 `mtproto:` 提取分支：
 
@@ -53,11 +47,7 @@ CI 下载包单独复测了论坛消息精确定位、Read until 点击返回、
 
 两份 APK 的通话原生库均能在 16KB 环境加载并返回支持版本；没有拨打实际通话，不能据此认定音视频、麦克风或网络连通性通过。持久崩溃记录中的三个进程分别为两次 `com.google.android.gms.persistent` 和一次 `com.google.android.googlequicksearchbox:search`，不是 `com.ayx.mgx`；没有把整个模拟器的 crash buffer 描述为空。
 
-原有已登录 4KB AVD 保持稳定 CI 包，FCM token 状态为 `OK`、无注册错误，接收计数从 258 增至 282（增加 24 次推送，不代表 24 条不同聊天消息）；最后一次推送发生在最终检查开始前约 46 秒。曾在退到后台后用 `am kill` 结束进程，确认包仍为 `stopped=false`；但进程事件显示由 `NetworkListenerService` 启动，不能证明是 FCM 直接唤醒。通知权限保持原来的未授权/未选择状态，本轮不验证通知栏展示，也不证明真机厂商后台策略下的送达。
-
-测试工具已从两台 AVD 卸载，新增空白 AVD 已停止，原已登录 AVD 保留运行及账号数据；没有操作实体手机。诊断 APK、R8 mapping、日志和媒体样本仅留在本地忽略目录，没有上传仓库。
-
-仍未验证：与真实对端的语音/视频通话、Ghost 云端回执的双账号核验、真实厂商 FCM 唤醒、Telegram HLS 完整网络链路及原生 ARM64 16KB 真机。前两项需要用户提供受控第二账号并配合查看已读、接听；当前模拟器只有一个已登录账号。CI 适配完成了路径、补丁完整性、语法与防误运行检查，但升级版本尚未在 GitHub runner 完整构建。不能把上述试验表述为全面端到端验证或可直接发布的升级版。
+仍需分别验证真实对端语音/视频通话、Ghost 云端回执、厂商后台策略下的 FCM 唤醒、Telegram HLS 完整网络链路及原生 ARM64 16KB 真机。组件测试、构建成功和 JNI 加载不能替代这些端到端验证。
 
 ## 最后两项
 
