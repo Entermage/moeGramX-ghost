@@ -100,6 +100,8 @@ public class MessagesLoader implements Client.ResultHandler {
   private boolean isLoading;
   private volatile boolean historyPreviewShown, historyPublished;
   private boolean historyPreviewAttempted;
+  // The local topic scan this page started, until it ends: blur, reuse and the history arriving end it.
+  private final java.util.concurrent.atomic.AtomicReference<LocalTopicHistory> localTopicScan = new java.util.concurrent.atomic.AtomicReference<>();
   private volatile boolean retainingHistory;
   private boolean retainedCanLoadTop, retainedCanLoadBottom;
   private int retainedScrollActions;
@@ -187,9 +189,13 @@ public class MessagesLoader implements Client.ResultHandler {
     }
   }
 
-  /** The page lost focus: drop the pending reload. Focus resumes it, still after any server wait. */
+  /**
+   * The page lost focus: drop the pending reload and end a local topic scan. Focus resumes the reload, still after any
+   * server wait; the topic keeps the normal loading state instead of the scan.
+   */
   public void pauseHistoryPreview () {
     cancelHistoryPreviewRetry();
+    endLocalTopicPreview();
   }
 
   /** An explicit user action re-arms a stalled snapshot, unless a delayed retry is pending. */
@@ -303,19 +309,37 @@ public class MessagesLoader implements Client.ResultHandler {
   // Without a recent window, show the topic's messages already stored for the chat until it arrives.
   private void tryLocalTopicPreview (MessageId from, boolean unreadEntry) {
     if (!(topicId instanceof TdApi.MessageTopicForum) || chat == null) return;
-    requestLocalTopicPage(contextId, new LocalTopicHistory(chat.id, historyPreviewTopic(), from.getMessageId(), unreadEntry), from, unreadEntry);
+    endLocalTopicPreview();
+    LocalTopicHistory scan = new LocalTopicHistory(chat.id, historyPreviewTopic(), from.getMessageId(), unreadEntry);
+    // No rows are shown yet to remove a message deleted while it reads, nor a stored window to invalidate:
+    // the scan follows deletions and edits of the chat itself until it ends.
+    if (!scan.track(tdlib)) return;
+    localTopicScan.set(scan);
+    requestLocalTopicPage(contextId, scan, from, unreadEntry);
+  }
+
+  /** Ends this page's local topic scan at once: its TDLib callback may come late or never, and finds it ended. */
+  private void endLocalTopicPreview () {
+    LocalTopicHistory scan = localTopicScan.getAndSet(null);
+    if (scan != null) scan.untrack(tdlib);
   }
 
   private void requestLocalTopicPage (long context, LocalTopicHistory scan, MessageId from, boolean unreadEntry) {
     tdlib.send(new TdApi.GetChatHistory(scan.chatId, scan.nextFromMessageId(), 0, LocalTopicHistory.PAGE_SIZE, true), (result, error) -> {
-      if (contextId != context || historyPublished) return;
+      if (contextId != context || historyPublished || localTopicScan.get() != scan) {
+        scan.untrack(tdlib);
+        return;
+      }
       TdApi.Chat current = chat;
       long chatLastMessageId = current != null && current.lastMessage != null ? current.lastMessage.id : 0;
       if (result != null && scan.accept(result.messages, chatLastMessageId)) {
         requestLocalTopicPage(context, scan, from, unreadEntry);
         return;
       }
-      if (!scan.publish(tdlib)) return;
+      // Ended by its owner meanwhile, it isn't published (it no longer follows the chat's changes).
+      boolean published = scan.publish(tdlib);
+      localTopicScan.compareAndSet(scan, null);
+      if (!published) return;
       // Same acceptance as a remembered window: an end entry needs the topic's tail, a position its row.
       final MessageHistoryPreview.Window window = MessageHistoryPreview.get(tdlib, scan.chatId, scan.topicId,
         from.getMessageId(), from.isHistoryEnd(), unreadEntry);
@@ -906,6 +930,7 @@ public class MessagesLoader implements Client.ResultHandler {
 
   public void reuse () {
     restoreRetainedHistory();
+    endLocalTopicPreview();
     historyPreviewShown = historyPublished = historyPreviewAttempted = false;
     // Closing or renavigating removes the pending reload itself; historyPreviewAllowedAt stays.
     cancelHistoryPreviewRetry();
@@ -2410,6 +2435,7 @@ public class MessagesLoader implements Client.ResultHandler {
       final int chunkSize = scrollItemIndexFinal == -1 ? CHUNK_SIZE_SMALL : CHUNK_SIZE_SEARCH;
       boolean willTryAgain = (loadingMode == MODE_INITIAL || loadingMode == MODE_REPEAT_INITIAL) && items.size() < chunkSize && items.size() > 0;
       historyPublished = true;
+      endLocalTopicPreview(); // The history is in: a scan still reading isn't needed.
       retainingHistory = false;
       boolean replacingPreview = historyPreviewShown;
       boolean previewToEnd = replacingPreview && historyPreviewToEnd;

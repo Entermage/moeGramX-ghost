@@ -211,6 +211,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   private static final int FLAG_ERROR = 1 << 30;
   private static final int FLAG_BEING_ADDED = 1 << 31;
 
+  // Merge results that change the built layout (group tail and extra padding rebuild themselves)
+  private static final int MERGE_LAYOUT_FLAGS = FLAG_HEADER_ENABLED | FLAG_SHOW_DATE | FLAG_SHOW_BADGE | FLAG_MERGE_FORWARD | FLAG_SHOW_TICKS | MESSAGE_FLAG_HAS_OLDER_MESSAGE | MESSAGE_FLAG_BELOW_HEADER;
+
   protected TdApi.Message msg;
   protected final TdApi.SponsoredMessage sponsoredMessage;
   private int flags;
@@ -746,6 +749,14 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public final boolean mergeWith (@Nullable TGMessage top, boolean isBottom) {
+    return mergeWith(top, isBottom, false);
+  }
+
+  /**
+   * @param keepBottomState true when a newer message stays below this one:
+   *                        that message's own merge decides whether this one ends its group.
+   */
+  public final boolean mergeWith (@Nullable TGMessage top, boolean isBottom, boolean keepBottomState) {
     if (top != null) {
       top.setNeedExtraPadding(false);
       top.setNeedExtraPresponsoredPadding(isSponsoredMessage() && BitwiseUtils.hasFlag(flags, FLAG_BELOW_ALL_MESSAGES));
@@ -762,12 +773,12 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     updateShowBadge();
     updateBadgeText();
 
-    setIsBottom(true);
+    if (!keepBottomState) {
+      setIsBottom(true);
+    }
 
     if (top == null || top.isThreadHeader() != isThreadHeader() || !(isEventLog() ? needHideEventDate() || (DateUtils.isSameHour(top.getComparingDate(), getComparingDate()) /*|| !(msg.content instanceof TdApiExt.MessageChatEvent)*/) : DateUtils.isSameDay(top.getComparingDate(), getComparingDate()))) {
-      if (top != null) {
-        top.setIsBottom(true);
-      }
+      clearMerge(top);
       setHeaderEnabled(!headerDisabled());
       if ((top != null || getDate() != 0 || isScheduled()) && !isSponsoredMessage() && (!isBelowHeader || messagesController().areScheduledOnly())) {
         flags |= FLAG_SHOW_DATE;
@@ -786,7 +797,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     TdApi.Message topMessage = top.getMessage();
     if (top.headerDisabled() || top.isSponsoredMessage() != isSponsoredMessage() || (flags & FLAG_SHOW_BADGE) != 0 || !tdlib.isSameSender(topMessage, msg) || !TD.isSameSource(topMessage, msg, forceForwardOrImportInfo()) || topMessage.viaBotUserId != msg.viaBotUserId || !StringUtils.equalsOrBothEmpty(topMessage.authorSignature, msg.authorSignature) || mergeDisabled() || (useBubbles ? top.isOutgoingBubble() != isOutgoingBubble() : top.getMessage().mediaAlbumId != msg.mediaAlbumId || msg.mediaAlbumId != 0)) {
       setHeaderEnabled(!headerDisabled());
-      top.setIsBottom(true);
+      clearMerge(top);
       return false;
     }
 
@@ -831,9 +842,52 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     }
 
     setHeaderEnabled(!headerDisabled());
-    top.setIsBottom(true);
+    clearMerge(top);
 
     return false;
+  }
+
+  private void clearMerge (@Nullable TGMessage top) {
+    // A local update may merge this message again: leave the same state as a fresh unmerged message
+    mergeTime = mergeIndex = 0;
+    flags &= ~(FLAG_MERGE_FORWARD | FLAG_SHOW_TICKS);
+    if (top != null) {
+      top.setMergeBottom(false);
+      top.setIsBottom(true);
+    }
+  }
+
+  /**
+   * Merges {@code items} (ordered newest first, like {@link org.thunderdog.challegram.component.chat.MessagesAdapter})
+   * again after a local change, without resetting group tails owned by newer messages.
+   * Messages from {@code fromIndex} down to {@code toIndex} are always merged with their older neighbours.
+   * Newer ones follow only while the merge time or index keeps changing, as they are merged against it.
+   * Messages older than {@code fromIndex} must already be merged.
+   *
+   * @return newest merged index
+   */
+  public static int remergeItems (List<TGMessage> items, int fromIndex, int toIndex) {
+    int index = fromIndex;
+    while (true) {
+      TGMessage message = items.get(index);
+      TGMessage top = index + 1 < items.size() ? items.get(index + 1) : null;
+      final int mergeTime = message.getMergeTime(), mergeIndex = message.getMergeIndex();
+      final int layoutFlags = message.flags & MERGE_LAYOUT_FLAGS;
+      final boolean required = index >= toIndex;
+      message.mergeWith(top, index == 0, index > 0);
+      if (index == 0) {
+        // No newer neighbour remains to own this forward-line continuation.
+        message.setMergeBottom(false);
+      }
+      if (required || layoutFlags != (message.flags & MERGE_LAYOUT_FLAGS)) {
+        message.rebuildLayout();
+      }
+      boolean chainChanged = mergeTime != message.getMergeTime() || mergeIndex != message.getMergeIndex();
+      if (index == 0 || (index <= toIndex && !chainChanged)) {
+        return index;
+      }
+      index--;
+    }
   }
 
   private static boolean showUnreadAlways (TGMessage msg) {

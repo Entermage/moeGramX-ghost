@@ -98,7 +98,9 @@ else
     -DOPENSSL_ROOT_DIR="$openssl_root" \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DANDROID_ABI=arm64-v8a \
     -DANDROID_STL=c++_shared -DANDROID_PLATFORM=android-23 \
-    -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON -DTD_ENABLE_JNI=ON
+    -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON -DTD_ENABLE_JNI=ON \
+    "-DCMAKE_C_FLAGS=-ffile-prefix-map=\"$repo_root\"=. -ffile-prefix-map=\"$ndk\"=/android-ndk" \
+    "-DCMAKE_CXX_FLAGS=-ffile-prefix-map=\"$repo_root\"=. -ffile-prefix-map=\"$ndk\"=/android-ndk"
   cmake --build "$td_build/arm64" --target tdjni --parallel "$CPU_COUNT"
   verify_tdjni "$td_build/arm64/libtdjni.so" || die 'Built TDLib is not an ARM64 Ghost library.'
   install -m 644 "$td_build/arm64/libtdjni.so" "$cache/libtdjni.so"

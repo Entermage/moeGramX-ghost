@@ -2,7 +2,7 @@
 
 ## 当前 1813 分支的边界
 
-`codex/upgrade-1813` 是独立的 1813 依赖升级工作树，以 moeGramX 的 `79e4d5d2` / TGX `9312ace3` 完整上游代码为兼容基线，包含上游通知 tag、联系人同步服务、备份限制和 Baseline Profile 等关联改动。它已用于实体手机上的 `0.29.0.1813` 本地安装，通知交接与 Google Maps SDK 配置修复均基于该工作树。1813 Release 从该分支的明确提交打标，仍与 `moe` 日常分支保持独立；通知、地图和既有回归检查的通过不代表全部上游功能都已完成兼容性验证。
+`codex/upgrade-1813` 是独立的 1813 依赖升级工作树，以 moeGramX 的 `79e4d5d2` / TGX `9312ace3` 完整上游代码为兼容基线，包含上游通知 tag、联系人同步服务、备份限制和 Baseline Profile 等关联改动。通知交接与 Google Maps SDK 配置修复均基于该工作树。1813 Release 从该分支的明确提交打标，仍与 `moe` 日常分支保持独立；通知、地图和既有回归检查的通过不代表全部上游功能都已完成兼容性验证。
 
 本工作树使用 TDLib wrapper `a032dcf1`（源码 `d1085f9c`）、Gradle 9.7.1、JDK 21、NDK `27.3.13750724`、SDK `android-37.2`。ARM64 使用 `c++_shared`；TDLib 和 OpenSSL 路径均增加 NDK 版本层。`patches/tdlib-ghost-mode.patch` 改为保留 3 行上下文的补丁，按函数重新移植到新 TDLib，不能把旧零上下文补丁直接套在新版本上。
 
@@ -14,7 +14,13 @@
 
 服务器读取边界不变时，新的未读数按服务器计数变化与本地已读差额合并；服务器边界与消息尾部同时变化、无法精确推断重叠时保守保留未读，加载历史后再校准。删除旧消息和新增消息可能抵消总数变化，尚未读到的新尾部不会仅因差额为零而被直接清成 0。群组 Ghost 开启时仍不发送 `ReadForumTopicQuery`；关闭时沿原有服务器读取流程。Shadow Ban 和正则过滤继续生效，修复不把单个话题读取扩大为整个群已读，也不新增论坛全历史扫描或后台轮询。
 
-聊天列表和搜索结果中按话题打开的论坛（话题列表或标签布局）不显示群级 `unread_count`：该值不是各话题未读之和，也不随读话题变化（包括 Ghost Mode 的本地已读），实测一个论坛为 20,553 而话题合计约 495，另一个为 1 而话题合计约 1080。与官方 Android／Desktop 相同，徽标改为有未读消息的话题个数；所有未读话题都静音时为灰色，任一未读话题按自身或继承的设置会通知时为正常颜色。按消息合并查看的论坛仍用群级计数。`ForumUnreadBadges` 在论坛行显示时经 `ForumRequests` 读取最新 20 个话题（`GetForumTopics` 第一页，与话题列表首页同键时合并），每个账号同时只读一个论坛，出队时已没有可见行的论坛跳过；失败后按服务器 `retry after` 或 30 秒，在下次显示时再试。取到之前，群级计数大于 0 时显示未读圆点。之后由 `ForumUnreadTopics` 在本机维护，平时不发请求：新消息与发送成功的消息按话题读取位置标记，`updateForumTopic` 的读取位置到达已知最后一条时清除，话题列表加载或刷新到的话题一并计入（第一页之外的话题因此在打开论坛后也会算入），本机删除话题时移除。群级读取位置移动（合并视图、All 标签或整群已读）或删除未读话题的最后一条消息时，2 秒后重新读取第一页一次。最多跟踪 64 个论坛，客户端关闭时清空。文件夹标签和应用总未读仍由原生 TDLib 按群级计数汇总，本次未修改。
+聊天列表和搜索结果中按话题打开的论坛显示“已知未读话题个数”，按消息合并查看的论坛仍用群级计数。群级 `unread_count` 不是 Topic 已读状态的依据，包括它变为 0 的情况；当前原生整群已读流程不读取各个 Topic。所有已知未读话题都静音时徽标为灰色，有会通知的话题时使用正常颜色。首次只读取最新 20 个话题，话题列表随后加载到的更多话题也计入；这里不通过全论坛扫描取得完整总数，文件夹标签和应用总未读仍由 TDLib 按群级计数汇总。
+
+`ForumUnreadBadges` 通过 `ForumRequests` 加载，账号内一次只处理一个论坛，有相同请求时合并；没有可见行的论坛出队时跳过。失败按服务器 `retry after` 或 30 秒等待，到行再次显示时再试，不在后台轮询。群级读取位置移动或未读话题最后一条消息被删除时，2 秒后刷新第一页；加载期间再次失效用代次保留，旧响应回来后补读一次。UI 超时不释放尚未真正回调的原生请求槽位。
+
+`ForumUnreadTopics` 对完整页替换全部已知话题，对不完整页只更新页内话题，保留页外状态。删除一条消息不等于该话题所有消息已读；最后消息被删除或缺席位置不确定的已知未读话题，每页最多挑 8 个，经同一队列逐个 `GetForumTopic` 核实。失败保留原状态；服务器明确回答话题不存在时移除。按创建时间排序的论坛可能合法缺席，核实后且最后消息未变时不重复查询。读取状态来自该话题自身更新或有效快照，原有请求层的 `ForumTopicSnapshotUpdates` 负责合并请求期间到达的新状态。较旧的最后消息不覆盖后来收到的消息，仍带已删最后消息的快照被拒绝。
+
+本机确认删除的话题由账号保存最近 64 个删除记录，徽标及话题列表的旧响应都检查该记录，避免迟到结果重新插入；客户端关闭时清空，General 不记入。最多缓存 64 个论坛；有可见监听的论坛不被强行淘汰。`BetterChatView` 随 attach／detach、换群、换账号及销毁订阅或退订；搜索关闭会销毁 RecyclerView 并移除 adapter。搜索行与普通聊天列表同样订阅论坛徽标，即使群级计数为 0，也不跳过查询。
 
 `MessagesController.scrollToForumUnreadOrStartMessage` 只使用当前 Topic 的读取边界。只有未读边界仍严格位于当前可见历史之后时才定位未读，否则走 `MessagesManager.scrollToStart(false)` 到最新或原有返回目标；读取比较包含部分可见消息和相册末尾，避免已经看到未读边界后仍被反复定位。普通聊天和评论线程的原策略不变。
 
@@ -36,7 +42,9 @@ Topic 搜索保留 350ms 输入防抖，以递增代次隔离取消、暂停和 
 
 `MessageHistoryPreview` 保存当前进程内的临时显示快照，以 Tdlib 实例、聊天 ID 和精确 Topic ID 隔离，每账号最多 6 个窗口、每窗口最多 80 条消息，原始保存时间超过 5 分钟后不再复用；读取副本不延长寿命。离开普通聊天时，从当前阅读位置附近复制消息数据；不保存控制器、View、图片接收器，也不写新的磁盘数据库。秘密聊天、评论线程、搜索／定时等特殊模式、待发送及正在自毁／自动删除的消息不进入该缓存。只有缓存内的消息被编辑、改变内容、删除或替换发送状态时，才清掉涉及的窗口；同群其他话题或窗口外消息更新不清空它。解析结果按窗口身份与版本校验，账号退出或客户端关闭清理缓存及监听器。
 
-Topic 首屏优先复用 `MessageHistoryPreview` 中实际保存的整段阅读窗口；列表的 `lastMessage` 只用于列表摘要，不注入聊天正文。没有有效窗口时，`MessagesLoader.tryLocalTopicPreview` 用 `GetChatHistory(onlyLocal=true)` 从该群本地消息库的末尾往回最多读 3 页（每页 100 条），由 `LocalTopicHistory` 筛出本话题的消息：最多 80 条，排除发送中、定时、自毁和自动删除的消息，被扫描上限截断的相册整组去掉；只有扫描起点正是群的最后一条消息时才把结果视为话题尾部。本地窗口只在能与正式历史打开同一位置时使用：至少 5 条，避免只显示一条摘要；未读入口必须同时包含已读边界两侧，并把第一条未读放在列表顶部（`MessageHistoryPreview.OFFSET_TOP`，与 `MessagesManager.scrollToMessage` 的未读定位相同）；恢复位置入口要求该位置落在窗口内；末尾入口要求已知尾部。符合条件的窗口作为普通显示快照存入 `MessageHistoryPreview`，沿用同样的后台解析、Shadow Ban 与正则过滤、编辑／删除失效、页面代次校验和正式页替换；不推进已读，不新增服务器请求、轮询或磁盘缓存。以话题列表浏览的大型论坛，本地库里从群末尾连续保存的消息往往很少，这时不显示本地窗口，只显示加载状态。
+Topic 首屏优先复用 `MessageHistoryPreview` 中实际保存的整段阅读窗口；列表的 `lastMessage` 只用于列表摘要，不注入聊天正文。没有有效窗口时，`MessagesLoader.tryLocalTopicPreview` 用 `GetChatHistory(onlyLocal=true)` 从该群本地消息库的末尾往回最多读 3 页（每页 100 条），由 `LocalTopicHistory` 筛出本话题的消息：最多 80 条，排除发送中、定时、自毁和自动删除的消息，被扫描上限截断的相册整组去掉；只有扫描起点正是群的最后一条消息时才把结果视为话题尾部。本地窗口只在能与正式历史打开同一位置时使用：至少 5 条，避免只显示一条摘要；未读入口必须同时包含已读边界两侧，并把第一条未读放在列表顶部（`MessageHistoryPreview.OFFSET_TOP`，与 `MessagesManager.scrollToMessage` 的未读定位相同）；恢复位置入口要求该位置落在窗口内；末尾入口要求已知尾部。符合条件的窗口作为普通显示快照存入 `MessageHistoryPreview`，沿用同样的后台解析、Shadow Ban 与正则过滤、编辑／删除失效、页面代次校验和正式页替换。
+
+扫描开始到窗口存入之间还没有可失效的窗口或行，由 `MessageHistoryPreview.Tracker` 记录该群的删除与编辑（账号尚无保存窗口时也订阅同一个全局监听）：已删除的候选从结果中去掉后重新判断是否可用，候选被编辑或记录超过 512 个 ID 时不发布；扫描由发起它的 `MessagesLoader` 持有（`localTopicScan`），页面失焦（`pauseHistoryPreview`，即 `MessagesManager.onBlur`）、`reuse`（离开、换话题、`MessagesManager.destroy`）和正式历史到达时立即结束，不等待可能迟到或永不返回的 TDLib 回调；迟到的回调发现自己已不是当前扫描就不再读下一页，`LocalTopicHistory.publish` 在已无 tracker（已结束或从未跟踪）时一律不发布，不会变成不受保护的发布；其余结束方式（发布、不可用、失败）同样停止跟踪。账号没有窗口也没有扫描时退订全局监听，账号关闭时随状态清除；同时最多跟踪 8 个扫描，超过时直接显示正常加载状态；失焦前已存入的窗口照常保留和显示；不推进已读，不新增服务器请求、轮询或磁盘缓存。以话题列表浏览的大型论坛，本地库里从群末尾连续保存的消息往往很少，这时不显示本地窗口，只显示加载状态。
 
 即时分栏切换与标题栏共用 `HeaderView.MODE_*` 常量，避免导航传入标题栏不识别的模式。显式无动画切换会恢复目标标题的透明度及 X/Y 位移，防止复用之前参与过转场的标题时留下不可见状态；普通单栏、资料页和弹层仍保留原动画。
 
@@ -50,15 +58,11 @@ Topic 首屏优先复用 `MessageHistoryPreview` 中实际保存的整段阅读�
 
 普通位置恢复的刷新保留当前可见消息和像素偏移；只有刷新前已经在最底部时才跟随尾部。`MessagesManager.onMessageHeightChanged` 接收具体 `TGMessage`，只补偿仍绑定该对象的可见行；`ScrollJumpCompensator` 的可选有效性检查在执行时再次核对绑定关系。这样，新旧对象拥有相同 ID 时，新对象初始测量不会误滚动旧列表，旧对象排队的布局补偿也不能影响替换后的视图。
 
-当前快照修复在同一真实话题的消息数据上，以进程内独立的未读入口参数、应用专属短时断网对比生产路径：旧包已有 33 条缓存却在约 2.2 秒等待中一直显示 0 行；当前包在 121ms 的采样时已有 33 行，且仍处于请求中，截图显示顶部 `Updating messages…` 与旧消息同时存在。恢复网络后替换完成、提示消失且行数未重复。该计时是约 80ms 间隔采样的首次命中，不是精确首帧时间；未读参数只作用于测试入口，未改服务器状态，不能冒充跨设备真实来信验收。普通实际点击重进也拍到了旧消息和更新提示同时显示。窗口外编辑、删除、缓存过期、账号／Topic 隔离、明确链接与迟到回调由生产逻辑 JVM 回归覆盖。证据见 `work/topic-preview-regression-20261028/validation.json`；此前网络恢复后保持阅读位置、媒体组去重等证据仍在 `work/chat-history-preview-20261028/`。
-
 右下角未读角标由当前话题的阅读进度驱动。`MessagesManager` 按实际可见消息推进屏幕内的读取位置；已加载完整消息尾部时统计其后剩余的传入消息，未加载完整时按本次新读到的消息递减并由元数据查询补齐。媒体组逐条计数，不以消息 ID 差值估算，也不混入其它话题、自己发送或定时消息。`ForumTopicCounters` 复制快照并保留较新的读取位置，防止共享对象和迟到查询把角标覆盖回旧值；这只是界面显示状态，不新增持久化已读数据库，也不绕过原有 Ghost Mode 服务器已读规则。当前话题新消息触发最多一次待执行的 1.5 秒刷新，持续消息不会无限推迟；离屏、切换话题或销毁后失效旧回调。
 
 话题系统消息的 `TGMessage.withTopicInfo` 以实际 `topicInfo` 为就绪条件，不把包含错误的缓存条目视为成功。资料不可用时继续显示现有通用系统提示，待真实信息到达后再替换含名称的文案；多位等待者共用一个观察者，回调登记与完成使用同一锁，避免重复调用和漏回调。此流程不额外重试或轮询。
 
 Topic 列表、标签及标题里的装饰性动态图标播放一次后停止；离屏时不启动图标动画，重新挂载按接收器生命周期恢复。此规则只作用于新增 Topic 图标，不修改聊天正文和表情选择器的播放策略。性能计数器只记录请求数量，不记录账号、聊天、查询词或消息内容。
-
-本功能由用户进行完整功能验收。话题返回与角标专项的 Android 验证覆盖既有已读话题的打开／返回、返回后空闲及后台清理；右下角角标还使用进程内临时计数驱动真实消息视图与角标，验证较早位置显示 2、跳到最新后为 0，以及旧读取回调不回退，随后恢复原对象。它属于设备上的组件与界面验证，不是跨设备真实未读同步验收；未改变服务器未读设置，不发送消息或创建／编辑话题。此前论坛列表滚动及宽窄屏验证见 Topic 移植证据。本包未安装到实体手机，真实来信、跨设备同步及真机折叠由用户验收。该专项的构建、性能样本、探针和源码差异在 `work/topic-return-fix-20261028/`，私人聊天截图和 ID 仅保存在本地。
 
 ## 上游修复的兼容边界
 
@@ -68,7 +72,7 @@ Topic 列表、标签及标题里的装饰性动态图标播放一次后停止�
 
 `TdlibFilesManager.canAutomaticallyDownload` 对没有 `ChatType` 的媒体使用已配置的私聊自动下载选择，仍检查当前网络的大小限制、排除类型、Data Saver、上传状态及手动取消。这取自 XGram `2b27a31b` 的相关策略修复；没有引入 XGram 专用内联视频播放器或改变普通视频点击播放流程。
 
-TGX 新构建链、TDLib API、原生通话/媒体库与 `libprisma` 没有整体升级；现有 Ghost Mode 原生补丁和 Shadow Ban 单请求占位机制继续使用当前依赖。XGram 的 Topic 功能已按上文单独移植到现有标准 TGX 界面；原生库保持当前版本，Topic 本地读取状态通过上述原生补丁保存到现有账号 binlog 键值存储。精确提交与选择记录见 Windows 工作区 `work/upstream-audit-20261027/upstream-review.json`，仅本轮源码差异见同目录 `upstream-backport.patch`。
+TGX 新构建链、TDLib API、原生通话/媒体库与 `libprisma` 没有整体升级；现有 Ghost Mode 原生补丁和 Shadow Ban 单请求占位机制继续使用当前依赖。XGram 的 Topic 功能已按上文单独移植到现有标准 TGX 界面；原生库保持当前版本，Topic 本地读取状态通过上述原生补丁保存到现有账号 binlog 键值存储。
 
 `tests/test_upstream_backports.py` 用生产方法的 JVM 替身测试键盘同步、自动下载限制、实时位置、投票消息、部分销毁的绘图视图和厂商就绪上报异常，并以旧行为作负对照。它不能替代真实位置共享、通话或邀请链接的端到端验收。
 
@@ -128,6 +132,8 @@ flowchart LR
 
 登录状态不是 Cookie 或 Web Session。账号授权密钥和消息缓存由 TDLib 保存在应用私有数据中；覆盖安装只有在包名和签名满足 Android 更新规则且未清除应用数据时才会保留这些数据。
 
+聊天列表按新到旧保存，连续消息分组由 `TGMessage.mergeWith(top, ...)` 与上方较旧消息比较得出：同一天、同一发送者／来源、可合并类型且距组首未超时（非气泡模式另限条数）才合并，合并结果累计到 `mergeTime`／`mergeIndex`；某条消息是否为组尾（气泡底角用默认大半径、底部间距较大）由其下方较新消息的合并结果决定。整页加载按从旧到新顺序合并。替换、删除、上下翻页接缝、翻页去重、按顺序插入和顶部插入线程标题等局部更新调用 `TGMessage.remergeItems`：先重算变化处及必须重算的较新邻居，保留由更新邻居决定的组尾标志，再仅在合并时间或序号变化时继续向较新方向传递；必须重算的范围总是重建布局，继续传播的消息只有标题、日期、徽标等布局标志变化才重建布局。未合并时清除旧的合并时间、序号、转发连线和勾号状态，与新建对象一致；最新一条重算时还会清除已无下邻居的转发连线延续标志。`addMessages` 向下翻页时若在已合并的新页内放置未读分隔条，会从该消息重新合并；内容类型变化需要替换消息容器时，`replaceItem` 先保留原有首条未读标记，再计算分组。未读位置、Ghost Mode 读取和服务器请求不变。发送方一侧固定小顶角为现有样式；媒体裁剪圆角、自定义主题大半径、`roundedStickers` 时间背景及 `DrawAlgorithms` 路径不在此逻辑内。`tests/test_message_bubble_grouping.py` 编译生产合并与适配器更新方法，以替身代替 TDLib／RecyclerView，把每次局部更新后的整表与从旧到新全新合并比较（含随机序列、跨日、不同发送者、相册、转发与计数上限），并带旧行为负向对照；来源比较替身允许比生产更宽的转发合并组合，所以相关用例只证明内部状态一致性，不证明普通群聊存在可见转发连线异常；它不替代 Android 上的实际删除、编辑、翻页和绘制验收。插入额外赞助消息（`MessagesManager.insertExtraSponsoredMessages`）仍沿用旧合并调用，未纳入本次修复。
+
 `PhoneController` 在校验号码时检查尚未创建的输入控件和空文本；授权成功后的测试账号请求只允许在该控制器仍有焦点时触发。HLS 播放路径通过 `HlsVideo` 统一把 h264/h265/hevc/av1/vp8/vp9 标识规范化为 RFC 6381 codec，并在播放格式中设置对应 sample MIME；已知名称忽略首尾空白及大小写，profile 字段保持原样，API 版本判断使用相同规范化结果。未知大小或无效时长使用默认码率，有效估计限制为正 Int 以防止零值及溢出。最终可播放性仍受设备解码器限制。
 
 ### 宽屏聊天分栏
@@ -156,37 +162,9 @@ flowchart LR
 
 文件夹功能介绍通过 `setPopupSourceController()` 传入左侧来源；`TdlibUi` 的链接选项、代理提示和语言安装提示优先保留调用者控制器。语言设置等后续导航仍沿原主导航执行，菜单归属与导航目的地分开处理。
 
-当前模拟器交付包为 Windows 工作区的 `builds/moegramX-0.29.1.1813-forum-topic-badge-20261104-arm64-v8a.apk`，SHA-256 为 `cb7ef47ccb61b974cd213f4bd8decf5f6b32028b9c06ae075622880a0590a0fd`，对应 mapping 为 `work/topic-unread-count-20261104/mapping.txt`（SHA-256 `b479e79e07055804457f8babe28dda226bdcb5b7e7d9f39e0a22a4a628066d84`）。它在下述 Topic 进入包之上，把聊天列表和搜索结果中论坛的未读徽标改为未读话题个数（见 Forum Topics 模块）；包名、版本号和签名证书不变，11 个原生库与 Topic 进入包逐字节相同。该包已保留数据覆盖安装到 Android 15 隔离模拟器，UID 与首次安装时间不变。模拟器实测时 Ghost Mode 与群组隐藏已读开启，阅读只在本机生效：上一包的聊天列表中两个论坛分别显示 20,553 和 1 至 6，与各话题对不上；新包冷启动后分别显示 9 与 20，灰色（话题全部静音），与话题列表中逐个数出的未读话题数一致；打开第二个论坛加载全部话题后仍为 20，读完其中只有 1 条未读的话题后变为 19；搜索结果 Recent 中两者为 9 和 19，普通群组数字不变；全程同一进程、无崩溃。主机回归新增 `tests/test_forum_unread_badge.py`（运行两个生产类，9 个负向对照）；CI 同款回归通过（Python 326 项，1 项按设计跳过）。本包未安装到实体手机。证据见 `work/topic-unread-count-20261104/`。
-
-此前 Topic 进入包为 Windows 工作区的 `builds/moegramX-0.29.1.1813-topic-entry-local-20261103-arm64-v8a.apk`，SHA-256 为 `94551e40572987a25731f3a49fbae57ffc6033128cb64b99cc4543b238da0e8d`，对应 mapping 为 `work/topic-entry-local-20261103/mapping.txt`（SHA-256 `5c98ef675ffcd01cb5adfbf76c0f8719c943682244195397b6ff011e9a87433b`）。它在下述菜单键修复包之上，把 Topic 进入改为与普通群组相同的即时导航，并加入上文的本地窗口；包名、版本号和签名证书不变，11 个原生库与菜单键修复包逐字节相同。该包已保留数据覆盖安装到 Android 15 隔离模拟器，UID 与首次安装时间不变。模拟器在一个真实论坛实测（冷启动、应用专属断网、录屏按 0.1 秒抽帧）：旧包点话题后列表停留约 0.5 秒才转场，断网时之后一直是空白加载页；新包约 0.2 秒内切到话题页。本地库能覆盖时（某话题的恢复位置）约 0.1 秒后显示本地窗口，恢复网络后正式页与其位置一致；覆盖不了要打开的位置时（另一话题的恢复位置、第三个话题的未读入口）只显示 `Loading messages…`，正式页直接出现在原位置或未读位置，不先显示其他内容再跳转。窄屏 750 宽时原生横向转场立即开始。第一版候选包（`first-pass-*`，未加可用性条件）实测会先显示单条摘要，或先显示最新几条再跳回很早的未读起点，因此加入了至少 5 条与未读边界两个条件。主机回归新增 `tests/test_topic_local_preview.py`（6 个负向对照），并按新约定更新三个 Topic 转场／首屏测试；CI 同款回归通过（Python 315 项，1 项按设计跳过）。本包未安装到实体手机。证据见 `work/topic-entry-local-20261103/`。
-
-此前菜单键修复包为 Windows 工作区的 `builds/moegramX-0.29.1.1813-menu-button-fold-fix-20261102-arm64-v8a.apk`，SHA-256 为 `602d356b9659fde4828096a99df63d3f74c85ec0dc964f72304c99b074adca74`，对应 mapping 为 `work/menu-button-fold-20261102/mapping.txt`（SHA-256 `75a7482ffcc94750ced8426c5c44dd3fa54ea27f18e31974a81baa425ea96d05`）。它在下述审查修复包之上只修改 `HeaderView.setTitle()`：宽屏关闭右栏聊天后折叠或变窄，左上角菜单键和右侧搜索按钮原先保持转场淡出后的透明状态，点击原位置也打不开抽屉。包名、版本号和签名证书不变，11 个原生库与审查修复包逐字节相同；保留数据覆盖安装到 Android 15 隔离模拟器，首次安装时间不变。旧包按“宽屏打开 Saved Messages → 返回 → 1600→750”实际复现了上述现象；新包同一流程菜单键与搜索按钮正常显示，点击打开抽屉。另检查了窄屏进出聊天、宽屏右栏聊天返回键，以及聊天打开时变窄再返回列表。`tests/test_two_pane_root_header.py` 运行生产的转场淡出与标题设置片段，带三个负向对照；CI 同款主机回归通过（Python 308 项，1 项按设计跳过）。该包已于 2026-11-03 保留数据覆盖安装到两台实体手机，两台实际 APK 哈希与之一致，UID、首次安装时间、数据目录 inode 与 boot ID 不变，未启动应用，记录见 `work/menu-button-fold-20261102/phone-install/`；真机折叠由用户验收。证据见 `work/menu-button-fold-20261102/`。
-
-此前审查修复包为 Windows 工作区的 `builds/moegramX-0.29.1.1813-claude-review-fixes-20261102-arm64-v8a.apk`，SHA-256 为 `5386f298ee04a9c42aa08729bf18edf045b64f512627c07235d11472fdb20ee8`，对应 mapping 为 `work/claude-fixes-20261102/mapping.txt`（SHA-256 `1b451c197b94f7236fc4f1598296b8cc64e91ccd0f3aa4b364b6d079fa5d0184`）。它包含审查修复 F01–F10、R01 及 `OfferedUris` 登记时机修正，包名、版本号和签名证书不变。该包曾保留数据覆盖安装到 Android 15 隔离模拟器，UID、首次安装时间和数据目录 inode 不变。模拟器上实际验证了：应用专属短时断网时快照显示后拖动、恢复网络后替换为正式页；快照下单击向下箭头一次到达最新；快照显示后立即关闭页面、重新进入并切到后台，恢复网络回到前台后正式页正常发布且行数不重复；越界 `account_id` 的 `OPEN_CHAT`／`OPEN_MAIN`／`OPEN_PLAYER` 不再崩溃；外部分享拒绝本应用 provider（含 `0@` 前缀）和设备加密存储中的私有文件，第三方测试 provider 正常进入分享面板；`OfferedUris` 只在实际交出后放行确切 URI；已打开 Topic 的 1600→750→1600 切换。同一源码的 CI 同款主机回归通过（Python 304 项，1 项按设计跳过）。真实 TDLib 客户端关闭／重启时序、FLOOD_WAIT、论坛分享发送、静音话题中的提及通知、注销后槽位复用和删除 Topic 需要服务端写入或改变账号状态，没有在设备上验证；本包未安装到实体手机，真机折叠由用户验收。证据见 `work/claude-fixes-20261102/` 及 `Documents/Codex/2026-11-02/task/tgx-claude-continue/`。
-
-此前 Topic 原生进入专项包为 `builds/moegramX-0.29.1.1813-topic-native-entry-20261028-arm64-v8a.apk`，SHA-256 为 `e7b69ddc6cfdf34325dcaf64b4bb838c0104462e6c757fd219f1e4df5d557726`。保留数据覆盖安装到 Android 15 隔离模拟器，实际安装哈希与原签名已核验；11 个原生库与上一包相同。35 项相关主机回归通过；精确 APK 的 Android 组件观测确认 Topic 进入恢复原生内容准备及转场、返回列表直接完成、标题正确，普通聊天及论坛列表仍直接切换。自然 ADB 点击录屏验证首次进入、返回重进，不再出现单条摘要切换成整页的首屏；应用专属短时断网时重进仍显示整段旧消息与顶部更新提示，恢复网络后正常完成。1600→750→1600 的话题页面也已检查。诊断观测器已卸载，临时 IPv4／IPv6 规则已移除。本包未安装到实体手机；冷启动完整历史仍受网络影响，未宣称全部 Topic 同步问题已验收。证据见 `work/topic-native-entry-20261028/validation.json`。
-
 本版 TDLib 的 `GetForumTopicHistory` 首次请求经过服务器查询，进程重启或没有近期显示快照时不能保证立即呈现整页历史。Topic 进入与普通聊天一样立即导航：同一进程内复用阅读快照，其余情况只在群本地消息足以覆盖要打开的位置时显示本地窗口，否则在历史到达前显示加载状态；标题模式修复独立保留。未启用 MessageThreadDb，也没有新增 Topic 专用的磁盘历史。
 
-此前右栏转场专项在 Android 15 隔离模拟器、1600 × 1200／密度 240 下测得该专项 APK 从生产入口到导航完成的三次 Topic 进入为 27～43ms、返回为 28～32ms；旧包分别为 452～502ms、432～463ms。该专项每次采样都没有淡黑遮罩、投影或导航动画锁，普通右栏聊天也使用同一直接切换路径。此数值衡量页面切换，不是首批消息／话题资料的网络到达时间；首次无缓存或联网较慢时，资料仍可能稍后显示。750 宽度保留原生横向转场；该专项又实际检查了已打开话题的 1600→750→1600 切换及返回按钮、菜单显示。
-
-首屏修复包在上述 Android 15／1600 × 1200／密度 240 模拟器中，一个真实话题的正文两段约 15 秒空闲样本 CPU 为 3.526%～4.377%，重绘为 3.462～3.591 帧/秒；约 15 秒后台样本为 2.289%、0 帧/秒，当前进程 crash buffer 为空。环境为 8 GB／4 核、swangle、ARM64 转译，100% 表示占满一核。不同话题与来信活动会影响数值，此为短时占用核查，不是同场景功耗对比或长期泄漏验收。
-
-此前转场专项包在一个真实话题的历史页验证了向下箭头：请求期间原有 33 行保留，重复点击保持同一加载代次，完成后替换为最新窗口的 69 行。之后使用实际点击验证箭头到尾部、标题栏返回、重新进入、宽窄切换与进程重启；相同最新消息下未读角标没有复现，其他话题的未读仍保留。网络错误恢复、重复请求合并和等待中主动滚动的取消边界由生产方法回归覆盖；该专项没有另做真实断网／跨设备同步验收。实际截图、生产导航计时、安装和占用证据见 `work/topic-native-transition-20261028/validation.json`。 上一消息快照修复包另外通过了真实触摸操作的滚动、箭头、返回、重进及 1600→750→1600 切换。
-
-此前原生本地已读专项验证覆盖一个真实话题的箭头点击、返回列表、重新进入、反复元数据查询和进程重启：初始未读 82，读到尾部后为 0，重启后的同一尾部仍为 0；最终包又收到真实新消息，未读为 7，阅读后降为 0；下一次重启保留相同读取位置，同时新尾部带来 1 条未读，确认本地进度没有吞掉新来信。诊断包只发送 GetOption、GetChat、GetForumTopics 和 GetForumTopic 等读取请求，打开话题和点击箭头沿生产界面执行；测试开始确认原生群组 Ghost Mode 已开启，没有直接发送服务器已读、发言或修改话题。最终 APK、安装、界面、原生查询、回归、失败候选诊断及性能证据见 `work/topic-scroll-latest-20261028/validation.json`。跨设备同时阅读、历史删除和完全被过滤的空话题未做真实端到端验收；对应计数边界由主机测试覆盖的部分不能视为云端验收。
-
-此前 Topic 元数据并发更新、搜索恢复及草稿同步的专项证据见 `work/topic-sync-audit-20261028/validation.json`；断网导航、宽窄屏和近期消息快照见对应专题目录。真实跨设备改名、草稿、静音和系统通知送达仍由用户验收。
-
-此前 chat-render-fix 静止渲染专项中，同一模拟器、同一纯文字聊天每轮约 15 秒：旧生产包宽屏 CPU 为 35.6%～39.4%，优化包为 7.7%～11.1%；窄屏从 44.7%～47.6% 降到 5.0%～6.5%（单核占用 100% 为一核）。诊断旧包约 49 帧/秒，优化包静止约 2 帧/秒；回复、搜索、滚动和后台返回后复测约 2.6 帧/秒，后台为 0。最终 APK 实测回复打开/取消、输入后清空、已有回复时的宽窄切换、消息滚动、搜索隐藏/恢复回复栏、置顶预览和后台返回；测试文字及回复草稿已清空，当前进程 crash buffer 为空。此为 ARM64 转译与 swangle 模拟器数据，不能换算成真机耗电改善；未宣称 PSS 差异来自本修复，也未完成长期泄漏或原生网络工作审计。精确记录见 Windows 工作区 `work/chat-render-optimization-20261027/validation.json`。
-
-弹窗布局的独立专项验证使用 `popup-pane-audit-fix-20261026` 包，36 项分栏与 15 项 Emoji Status 回归通过；其 Android UI 已验证右栏表情包详情及嵌套 More、网格滚动和外部关闭，发送按钮长按菜单、下级定时选项和日期选择器，播放速度菜单，以及上述主要弹层打开时 1600 × 1200 → 750 × 1200 → 1600 × 1200 的切换。日期三列按实际面板宽度分配，宽窄屏均未重叠，无需额外修改。另完成消息互动菜单、链接选项、左栏 Read on Server 确认框及紧凑 Emoji Status 的实际回归；当前进程 crash buffer 为空。测试临时输入已清空，播放已停止，深色主题、原文件夹及分隔宽度已保留。未确认发送、定时、反应、Read All 或设置变更。
-
-文件夹首次功能介绍、代理和语言安装提示、最近频道／录制按钮／选中附件后的长按菜单未完成各自入口的实际 UI 验收；播放器在未选聊天时的归属只有方法回归。上一轮消息反应成员、翻译和附件等完整界面验证见 `work/interaction-pane-20261026/validation.json`；该弹窗专项证据与精确覆盖范围见 `work/popup-audit-20261026/validation.json`。当前包未安装到实体手机，模拟器尺寸变化不能代替真机开合及厂商窗口行为验证。
-
 `tests/test_two_pane_bottom_sheet.py` 提取生产底部面板方法，在 JVM 替身中验证来源栏边距、嵌套归属、宽度估算、外部点击坐标、宽度变化重排与反应标题尺寸，并用旧行为作失败对照；`tests/test_two_pane_overlays.py` 复用共享边界回调验证附件布局收敛。完整分栏回归入口为 `python3 -m unittest discover -s tests -p 'test_two_pane_*.py' -v`。这类几何与生命周期回归不替代 Android 实际触摸、搜索、折叠或真机验证。
-
-普通菜单专项验证包为 Windows 工作区的 `builds/moegramX-0.29.1.1813-two-pane-fix7-20261025-arm64-v8a.apk`，SHA-256 为 `028db7bfd2d87f057fefbe6f54b9202a6a32e075a31434d8b576e9ac2ce11b8c`，已保留数据覆盖安装到隔离模拟器和实体手机，两者实际安装包哈希均一致。最终包已在模拟器验证 Read on Server 的左栏内容及遮罩、打开时 1600 × 1200 → 750 × 1200 → 1600 × 1200 的变化、关闭重开，以及帮助入口关闭抽屉后不残留全屏遮罩。本次同源候选包还实际验证了文件夹图标网格和带勾选项确认面板的宽窄切换、左栏多选更多菜单、右栏更多菜单；候选包与最终包仅差帮助及代理入口关闭抽屉的两处调用。32 项分栏方法回归通过；未执行批量已读、清空、删除或选择新图标。加入文件夹、代理菜单和仅在底部文件夹布局出现的全局筛选入口未完成实际 UI 验收，不能用共用代码或方法回归代替。记录位于 Windows 工作区 `work/left-pane-popups-20261025/validation.json`。12dp 分隔留白和拖动交互的独立验证见 `work/options-pane-20261025/validation.json`。该专项验证时实体手机完成 fix7 安装、保存图案解锁和首页核验；手机较新的安装记录见下文。
 
 媒体查看器使用全屏弹层。`MessagesController` 和 `SharedBaseController` 先生成来源 View 内的缩略图矩形，再由 `MediaViewThumbLocation.offsetToWindow()` 按实际窗口位置转换打开与关闭动画的坐标；每次重新计算局部矩形，避免缓存对象累计偏移。动画起止位置随分隔条、RTL、窗口大小和来源 View 的平移变化，原有裁剪与圆角保持不变。
 
@@ -199,10 +177,6 @@ flowchart LR
 `python3 -m unittest discover -s tests -p test_two_pane_layout.py -v` 直接编译生产 `MoexTwoPaneLayoutPolicy`，覆盖进入/退出门槛、横屏手机、最小栏宽、拖动夹取、系统左右边距和 RTL。它验证布局策略，不替代真实 Android 上的导航、拖动和尺寸切换测试。`python3 -m unittest discover -s tests -p test_two_pane_gestures.py -v` 使用最小导航状态替身编译生产返回路由类，验证抽屉、左右边缘、空右栏及左栏子页面的返回选择，不发送真实手势。
 
 `tests/test_two_pane_overlays.py` 提取生产浮层回调验证布局能稳定收敛，并以旧回调作为负面对照；`tests/test_startup_notification_permissions.py` 验证拒绝后反复恢复、双栏与多账号请求合并及显式重试。两者均为方法级回归，系统窗口和权限拒绝后的实际行为仍需 Android 验证。`tests/test_two_pane_reselect.py` 验证当前左列表再次选择、普通参数门禁、账号/导航栈/特殊聊天限制及原箭头方法路由，实际点击效果另在模拟器验证。 `tests/test_two_pane_media_origin.py` 编译实际缩略图计算与聊天/共享媒体入口，验证单栏、分栏、拖动、RTL、窗口偏移、重复打开/关闭和裁剪，并确认旧坐标算法会失败。`tests/test_two_pane_player.py` 检查全局栏归属与空聊天页面的层级；`tests/test_video_pip_position.py` 检查连续拖动、吸边及矩形 PiP 尺寸变化时的坐标处理。方法级回归不替代 Android 界面验收；聊天图片的实际动画起点和媒体条唯一性已有模拟器核对。
-
-媒体修复的已验收包保存在 Windows 工作区的 `builds/moegramX-0.29.1.1813-two-pane-fix3-20261025-arm64-v8a.apk`，SHA-256 为 `113a99f2f1699e48653a292e85c3863aaf0727ccfd511c121e297e7a6a37b73c`，已安装到隔离模拟器。该包的矩形 PiP 已完成 4 次连续跨边拖动，以及 1600 × 1200 → 900 × 1600 → 1600 × 1200 的窗口尺寸变化，截图确认各阶段正常贴边；采样显示每次新吸边均沿用本次拖动偏移，未观察到重放上次坐标。900 像素宽时仍显示双栏，这组尺寸变化不代表单栏切换或真实折叠验收。圆形 PiP 已覆盖代码回归，尚未通过真实视频播放和触摸验收。
-
-两台实体手机最近一次已核验的安装为 2026-11-03 的菜单键修复包（见上文，安装前两台均为审查修复包），记录见 Windows 工作区 `work/menu-button-fold-20261102/phone-install/`。更早一次其中一台的安装为从 fix7 使用 `adb install -r` 保留数据覆盖安装 `builds/moegramX-0.29.1.1813-shadow-timeout-fix-20261026-arm64-v8a.apk`。手机实际 APK 的 SHA-256 为 `ad5a0c5d5be4d6c9e26bd9553183bdfcd6a8c4dd6fb5adbf0b0ea7ddc9554130`，与已验证的修复包一致。安装前后 UID `10399`、首次安装时间 `2026-09-23 04:51:33`、数据目录 `/data/user/0/com.ayx.mgx` 及 CE/DE inode `54704`/`56622` 均不变，boot ID 相同；未卸载、清除数据或重启手机。此次仅完成安装和包信息核验，没有解锁、启动应用或验收真机 UI，运行效果由用户自行测试。记录见 Windows 工作区 `work/shadow-timeout-fix-20261026/n6-install/installation.json`，fix7 APK 保留在 `builds/` 作为回退包。
 
 ### 推送通知向完整消息通知的交接
 
@@ -224,10 +198,6 @@ Emoji Status 页面进入搜索、取消表情筛选或清空筛选时不主动�
 
 热门表情分页按服务端原始条目数推进，空页、错误或到达有效总数时停止；一页全是已安装表情包时仍继续到下一页。每次搜索重载使用独立加载代次，旧回调不能覆盖新结果；关闭面板时显式销毁未挂入 View 树的表情布局和列表控制器，停止后续分页和滚动动画，避免空页忙循环及关闭后残留任务。初始列表仍顺序向 TDLib 获取状态和已安装表情包，未增加跨面板缓存或并行请求。
 
-Emoji Status 专项验证包为 `builds/moegramX-0.29.1.1813-two-pane-fix5-20261025-arm64-v8a.apk`，SHA-256 为 `14fb9e5eefa676c0facda8e8e2f519feaf10edb49ea5fa5131f5c5be919a4553`，专项验证时曾安装到隔离模拟器和实体手机，当时两者实际安装包哈希均一致。15 项生产方法回归通过；模拟器已验证固定宽度浮窗、完整分组条、分组跳转、网格滚动、文字搜索、手动点击输入框唤起键盘、取消和清空不自动弹键盘、关闭重开，以及打开面板时 1600 × 1200 → 750 × 1200 → 1600 × 1200 的宽窄切换。关闭面板后的两次约 3 秒稳态采样，应用 CPU 从旧包约 103% 单核降到约 2.3%～2.7%；此结果不等于冷启动或网络加载时长基准。未选择或设置账号状态；该专项验证时实体手机已完成安装与启动核验，实际折叠和界面交互仍待真机验证。记录见 Windows 工作区 `work/emoji-status-pane-20261025/validation.json`。
-
-Read on Server 入口的独立验证包为 `builds/moegramX-0.29.1.1813-two-pane-fix4-20261025-arm64-v8a.apk`，SHA-256 为 `452f6dcbb4e50e9a0989d89c7a29791b3bbc47bca285218ce1efb4d0de74091d`。仅安装到隔离模拟器，已核对宽屏、单栏的菜单顺序及宽屏确认框和取消路径；未确认执行批量已读，真实服务器回执尚未验收。验证记录位于 Windows 工作区 `work/read-on-server-20261025/validation.json`。
-
 手动 `Read until` 与配置写入、自动本地已读共用操作队列。Java 将 `x_moex_ghost_read_once` 设置为精确的 `chatId:messageId`，原生只在匹配的单条、强制、聊天历史请求中消费一次许可；其他聊天、普通自动已读、评论线程及话题已读不能借用许可。设置令牌、发起请求、清理令牌始终使用同一个 TDLib Client，账号重启不能把旧操作转移到新连接。新客户端启动时清理遗留令牌。这不是逐条独立已读：原有 TDLib 发送流程仍可能将云端位置推进到更靠后的当前本地已读位置，而不是严格停在点选消息。
 
 聊天设置中的“交互时已读”（`Read on interact`）默认关闭，持久化为 `MoexConfig` 的 `ghost_read_on_interact`。开启后，仅当 Ghost 总开关及当前会话类型的隐藏已读均生效时，发送消息成功、添加/撤销普通表情反应成功、投票/撤销投票成功会自动对当前会话执行上述已读流程；浏览、打开菜单、输入状态、失败操作、定时/离线自动发送、Secret Chat 和收藏夹不触发。`UpdateMessageSendSucceeded` 覆盖文字、媒体和转发的成功发送；`TGReactions` 与 `Tdlib.send` 分别把表情和投票接入统一的 `sendMessageInteraction`，不把普通新消息更新当成主动交互。反应和投票以请求开始时的开关为准，并在成功回调、排队执行和令牌设置完成后重新检查当前开关及账号连接，取消尚未发出的过期已读请求；已经提交给服务器的已读不能撤回。自动路径复用 `Read until` 的本地/云端位置限制，不临时关闭全局 Ghost，也不改变在线状态隐身。
@@ -242,7 +212,7 @@ Read on Server 入口的独立验证包为 `builds/moegramX-0.29.1.1813-two-pane
 
 可见聊天行和当前会话的未读数字使用同一套按需计算结果：私聊直接排除被 Shadow Ban 或 Telegram 主黑名单屏蔽的对端；普通群组由 `MoexShadowUnreadManager` 按账号合并手动名单和主黑名单，并在未读较少时扫描共享历史、未读很多时按被屏蔽发送者定向搜索。相同聊天在多个文件夹中的行会复用结果和进行中的请求。若未读中仍有正常用户消息，只修改本地显示数字，不推进连续已读游标；若剩余未读全部来自被屏蔽用户，则 Java 层生成包含聊天、顶部消息、旧已读位置和原始未读数的单次快照令牌，原生 TDLib 校验快照后把本地未读数明确设为 0，并且不发送历史已读回执。`UpdateChatLastMessage` 以及未读数或 `lastReadInboxMessageId` 发生变化且仍有未读时都会触发 150ms 合并检查，因此“混合未读在用户读掉正常消息后只剩隐藏消息”的下降转折也会立即重新计算。自动处理保留用户手动“标为未读”的状态；Secret Chat 为避免触发自毁计时不自动推进，频道、论坛群仍不进入这套隐藏未读自动计数扫描。过滤或黑名单配置变更后会失效共享结果，并立即重建已缓存聊天文件夹的摘要和派生未读数字。Shadow Ban 名单按本地账号槽位 ID 存储；该槽位真正注销、进入未授权状态并执行 `onPerformUserCleanup` 时删除名单并通知已打开的过滤状态，之后复用该槽位登录的账号从空名单开始。普通关闭、重连和前后台模式切换不删除名单。
 
-当前同步实现的回归入口为 `python3 -m unittest discover -s tests -p 'test_shadow*.py' -v`。同步事件、分页、刷新并发及超时生命周期共 24 项／820 次断言通过。该同步专项验证包 `moegramX-0.29.1.1813-shadow-block-sync-fix-20261026-arm64-v8a.apk` 的 SHA-256 为 `11384b011a47f3f3f5d0150ebcf6a6af7819759298aa007068208fe67b065559`；Windows 工作区 `work/shadow-block-sync-20261026/validation.json` 分开记录实际黑名单页面修复进程内缺失缓存的对照、21 位主名单用户核对、群历史过滤和 12 次真实 UI 滚动。真实服务器屏蔽／解除屏蔽操作没有执行，相关成功／失败回调在生产方法替身测试中验证；实体手机本轮未更新。
+当前同步实现的回归入口为 `python3 -m unittest discover -s tests -p 'test_shadow*.py' -v`，覆盖名单同步、分页、刷新并发及超时生命周期。生产方法替身不代表真实服务器屏蔽／解除屏蔽或厂商后台行为已经完成验收。
 
 `MoexShadowUnreadManager` 的历史扫描、发送者搜索和主黑名单分页共用每个 `Tdlib` 账号实例的一枚实际 API 在途令牌。30 秒截止时间结束该账号所有当前与排队等待者并返回未知/失败，保留原生请求令牌；原 API 尚未结束时，新需求只合并去重并立即返回未知/失败，不继续积存等待回调，已知缓存仍可正常返回。一次自动重试和新的扫描需求继续合并在队列中，直到原 API 真正回调才释放令牌并恢复调度，因此不会因 Java 超时每隔 45 秒再叠加一个尚未完成的 API 请求。迟到响应只释放自身令牌，不能覆盖新快照或释放另一请求；相同原生客户端的迟到错误仍遵循至少 15 秒冷却及服务器返回的 `retry after`。普通账号切换、联网恢复、手动名单变化和开始登出都不会提前释放令牌。只有收到 `AuthorizationStateClosed` 才清理已关闭客户端的在途占位，令牌编号保持递增，旧回调不能影响重新打开后的请求；不同账号互不阻塞。底层永久不返回且客户端没有关闭时，队列会继续等待而不是重复发请求，等待者已在截止时间结束，后续可通过既有账号关闭/重开生命周期恢复。该令牌限制的是未完成的 TDLib API 调用；`GetChatHistory` 返回本地消息后由 TDLib 自行执行的后台预取仍沿用原生合并和重试机制。
 
@@ -344,9 +314,9 @@ Google 构建通过 `FirebaseListenerService` 接收 FCM，再唤醒账号和 TD
 
 `app/build.gradle.kts` 优先读取环境变量 `GOOGLE_MAPS_API_KEY`，否则读取被 Git 忽略的 `local.properties` 中的 `google.maps_api_key`，通过 Manifest placeholder 写入唯一的 `com.google.android.geo.API_KEY`。缺少 Key 时构建立即失败，避免继续打包不能用于当前签名的上游 Key。Key 不写入源码；它仍会随 APK 分发，因此 Google Cloud 端的应用及 API 限制是必要的。
 
-地图使用独立 Google Cloud 项目 `moegramx-maps-952391`，专用 Key 只允许 `maps-android-backend.googleapis.com`（Maps SDK for Android），以及包名 `com.ayx.mgx`、正式证书 SHA-1 `D3:E7:07:77:F0:31:F7:57:0E:8C:91:59:51:8D:44:6A:10:0A:9C:26`。Firebase 继续使用 `app/google-services.json` 中的原项目及 Key。更换包名或签名后，需要重新配置相应的 Maps Key 授权；debug 证书不在正式 Key 的允许列表里。
+地图使用独立 Google Cloud 项目（标识已脱敏），专用 Key 只允许 `maps-android-backend.googleapis.com`（Maps SDK for Android），以及包名 `com.ayx.mgx`、正式证书 SHA-1 `D3:E7:07:77:F0:31:F7:57:0E:8C:91:59:51:8D:44:6A:10:0A:9C:26`。Firebase 继续使用 `app/google-services.json` 中的原项目及 Key。更换包名或签名后，需要重新配置相应的 Maps Key 授权；debug 证书不在正式 Key 的允许列表里。
 
-Google 官方接入说明要求 Maps Key 所属项目启用 SDK 并关联有效结算账户。普通 Maps SDK 底图当前为免费不限量；街景、云端 Map ID 或其他 Maps 服务按各自 SKU 规则计费。独立地图项目已启用 SDK 并配置受限 Key，目前未关联结算账户，回读为 `billingEnabled=false`。在这一实际状态下，正式签名 APK 已通过 Android 15 虚拟机的发送位置底图、道路文字、跨区域拖动、缩放及重新进入验证，日志没有 `Authorization failure`。这仅记录当前普通底图的观察，不能外推其他 Maps 功能或今后的服务政策。完整地图查看页、聊天静态缩略图及修复 APK 的实机效果仍需分别验证。
+地图配置应按所用 Google Cloud 项目的 SDK 启用状态、API／应用限制和服务要求管理。底图加载、拖动与缩放已有独立 Android 组件验证，但该结果不能外推其他 Maps 服务、收费状态、所有账号或实体手机；项目账户信息与原始验证日志不公开。
 
 ## 数据与配置
 
@@ -382,11 +352,13 @@ git -C tdlib/source/td apply ../../../patches/tdlib-ghost-mode.patch
 ./gradlew assembleLatestArm64Release
 ```
 
+原生编译使用 `-ffile-prefix-map` 将源码、生成目录及 Android 工具链路径映射为相对路径或通用路径，保留断言和日志中的源码位置，同时避免在 APK 中嵌入构建主机目录。应用 JNI 由 `app/jni/CMakeLists.txt` 设置；独立构建的 FFmpeg、libvpx 由对应 Gradle 任务设置；`scripts/ci-prepare-native.sh` 为 TDLib 设置相同映射。FFmpeg 的 `FFMPEG_CONFIGURATION` 和 libvpx 的 `vpx_codec_build_config()` 在编译前替换目录元数据，实际构建路径和功能开关不变。本地手动构建 TDLib 时也必须为 C/C++ 编译传入仓库和 NDK 的路径映射，含空格的路径需在 flags 内再加引号。发布前解包扫描整个 APK，不能只检查源码文档。
+
 arm64 release APK 输出到 `app/build/outputs/apk/latestArm64/release/`。编译成功只证明代码和资源可打包；涉及 Intent、推送、已读和 UI 的修改还应在实际 Android 设备上安装并完成端到端操作验证。
 
 `./gradlew -p tests/external-share-android runChecks` 在独立 JVM 工程中读取当前 Manifest，调用 Android 16 框架的 `IntentFilter.match`，并直接编译生产 `ExternalShareUtils` 检查 URI 提取、MIME 优先级、打开文件的媒体/文档路由和路径边界。首次运行下载 `android-all` 测试依赖，不加入 APK；少量应用工具依赖使用测试替身。它不验证真实 ContentProvider 授权、分享界面操作、TDLib 上传或收件结果，不能代替手机端到端测试。
 
-`tests/VisibleUnreadAnchorTest.java` 直接运行生产分页策略，覆盖连续隐藏消息、短页、重复游标、稀疏 64 位消息 ID、相册成员和页数上限。`python3 -m unittest discover -s tests -p test_chat_navigation.py -v` 提取生产书签保存和默认定位方法，在 JVM 数据/布局替身下验证位置与偏移，并检查入口及取消逻辑的接线。两者不验证真实 TDLib 历史请求或 RecyclerView 渲染。用户占用手机时，不连接、安装或操作实体设备；可运行这些回归检查、CI 构建及下述独立模拟器测试。
+`tests/VisibleUnreadAnchorTest.java` 直接运行生产分页策略，覆盖连续隐藏消息、短页、重复游标、稀疏 64 位消息 ID、相册成员和页数上限。`python3 -m unittest discover -s tests -p test_chat_navigation.py -v` 提取生产书签保存和默认定位方法，在 JVM 数据/布局替身下验证位置与偏移，并检查入口及取消逻辑的接线。两者不验证真实 TDLib 历史请求或 RecyclerView 渲染。这些回归检查、CI 构建及下述独立模拟器测试可在不操作实体设备的情况下运行。
 
 `python3 -m unittest discover -s tests -p test_preview_filter.py -v` 编译生产 `MoexMessageFilter`、`ListManager`，并提取生产预览和配置方法，在 TDLib/UI 替身下验证通知、屏蔽/取消屏蔽、正则开关、账号隔离、异步回调、缩略图、预览目标和请求失败后的手动重试。另检查监听与置顶点击的接线。它不执行 Android 渲染或真实网络错误，相关显示及导航仍需模拟器验证。
 
@@ -394,61 +366,17 @@ arm64 release APK 输出到 `app/build/outputs/apk/latestArm64/release/`。编�
 
 `python3 -m unittest discover -s tests -p test_read_on_interact.py -v` 提取生产交互和已读队列方法，在 JVM 客户端替身下检查三类会话、发送/反应/投票成功与失败、默认关闭、会话范围、定时与离线消息、Secret Chat/收藏夹、账号连接替换、开关变化、串行执行及取消时的令牌清理；同时检查设置持久化及事件接线。它不模拟 Telegram 服务，仍需在模拟器检查真实界面，并用指定测试会话单独验证服务器已读回执。
 
-### WSL 隔离模拟器
+### 隔离 Android 测试环境
 
-本机使用 `Ubuntu-26.04` 的 Android SDK（`~/Android/Sdk`），模拟器作为 WSL 无窗口进程运行，由 Windows 便携版 scrcpy 显示和操作。Windows 只承担查看器角色，SDK、模拟器和构建仍在 WSL。AVD 名为 `moegramx_api35`，使用 Pixel 5 配置和 `system-images;android-35;google_apis;x86_64`。已安装的镜像声明支持 `x86_64,arm64-v8a`，通过 `libndk_translation.so` 运行同一份 ARM64 正式签名 APK，无需另外生成 x86 APK。运行用户须能读写 `/dev/kvm`；加入 `kvm` 组属于持久权限变更，只能在获得用户同意后执行。
+公开资料中的测试设备、账号、宿主机目录、AVD 名称、端口、网络地址和安装标识均已脱敏。具体值只保留在本地验证记录，不能从公开示例推断当前设备配置。
 
-为与其他项目的实体手机调试隔离，WSL ADB server 使用 `5038`，模拟器 console/adbd 使用 `5770/5771`，gRPC 使用带 JWT 的本地 `8556`。下列命令在 WSL Bash 中启动用户级临时 systemd 服务，不依赖命令终端持续打开；服务已运行时不要重复启动：
+可在 Linux/WSL 中运行独立 Android 模拟器，通过与实体设备分离的 ADB server 操作。SDK 根目录由 `ANDROID_SDK_ROOT` 指定；为模拟器选择独立的 ADB、console/adbd 与 gRPC 端口，并只连接明确指定的测试序列号。ADB 操作显式传入 `-P <ADB_PORT>` 和 `-s <TEST_SERIAL>`，不要依赖默认设备选择。Windows 查看器可通过同一独立 server 显示模拟器，不需要修改系统 PATH 或重启整个 WSL。
 
-```bash
-export ANDROID_SDK_ROOT=~/Android/Sdk
-export ANDROID_ADB_SERVER_PORT=5038
-export ADB_SERVER_SOCKET=tcp:localhost:5038
-export ADB_MDNS_AUTO_CONNECT=0
-export ADB_LOCAL_TRANSPORT_MAX_PORT=0
-"$ANDROID_SDK_ROOT/platform-tools/adb" -P 5038 --one-device moegramx-emulator-only start-server
-systemd-run --user --unit=moegramx-emulator --collect --property=Type=exec \
-  --setenv=ANDROID_SDK_ROOT="$ANDROID_SDK_ROOT" \
-  --setenv=ANDROID_ADB_SERVER_PORT=5038 \
-  --setenv=ADB_SERVER_SOCKET=tcp:localhost:5038 \
-  --setenv=ADB_MDNS_AUTO_CONNECT=0 --setenv=ADB_LOCAL_TRANSPORT_MAX_PORT=0 \
-  "$ANDROID_SDK_ROOT/emulator/emulator" -avd moegramx_api35 \
-  -ports 5770,5771 -grpc 8556 -grpc-use-jwt -accel on \
-  -gpu swangle -feature -Vulkan -memory 4096 -cores 4 \
-  -no-window -no-audio -no-metrics -no-snapshot -no-boot-anim \
-  -camera-back none -camera-front none
-```
+测试 ARM64 包时，镜像必须声明兼容 ARM64 或提供对应转译支持。图形后端、内存、窗口尺寸按测试目标配置；宿主渲染异常和 Android 客户端崩溃分别检查。模拟器尺寸变化不能代替真机折叠、厂商后台策略或功耗验证。
 
-可用 `systemctl --user status moegramx-emulator` 查看状态、`journalctl --user -u moegramx-emulator` 查看宿主日志、`systemctl --user stop moegramx-emulator` 停止模拟器。不要为处理显示问题重启整个 WSL，以免中断其他项目。
+APK 使用当前构建输出，覆盖安装显式使用 `install -r` 并核对包名、签名、哈希及数据保留情况。账号通过正常登录流程使用，不复制实体手机会话。测试只调整必要的状态并在结束后恢复；原始截图、聊天内容、账号标识、安装记录和设备日志留在本地，不随源码或 Release 上传。受保护内容的 `FLAG_SECURE` 行为沿用系统与应用设置，投屏黑屏需结合窗口标记与进程状态判断。
 
-`--one-device` 限制该独立 server 仅考虑指定 USB serial（这里使用不对应实体手机的占位 serial），关闭自动发现后再手动连接模拟器。安装、日志和自动化设备命令均使用 Linux SDK 内的 `adb`，同时带上 `-P 5038 -s 127.0.0.1:5771`，不能省略到默认 ADB，也不重启 Windows 的 ADB server：
-
-```bash
-~/Android/Sdk/platform-tools/adb -P 5038 connect 127.0.0.1:5771
-~/Android/Sdk/platform-tools/adb -P 5038 -s 127.0.0.1:5771 get-state
-~/Android/Sdk/platform-tools/adb -P 5038 -s 127.0.0.1:5771 install --no-streaming \
-  app/build/outputs/apk/latestArm64/release/moegramX-0.29.0.1799-arm64-v8a.apk
-~/Android/Sdk/platform-tools/adb -P 5038 -s 127.0.0.1:5771 shell am start -W \
-  -n com.ayx.mgx/org.thunderdog.challegram.MainActivity
-```
-
-Windows 查看器使用 [官方 scrcpy](https://github.com/Genymobile/scrcpy) 便携包（本机为 v4.1），不修改系统 PATH。在解压目录的 PowerShell 中设置仅当前进程生效的环境并启动：
-
-```powershell
-$env:ADB = Join-Path (Get-Location) 'adb.exe'
-$env:ANDROID_USER_HOME = Join-Path (Get-Location) 'emulator-adb-home'
-New-Item -ItemType Directory -Force -Path $env:ANDROID_USER_HOME | Out-Null
-$env:ADB_SERVER_SOCKET = 'tcp:127.0.0.1:5038'
-$env:ANDROID_ADB_SERVER_PORT = '5038'
-.\scrcpy.exe --serial=127.0.0.1:5771 --tunnel-host=127.0.0.1 `
-  --tunnel-port=27783 --port=27783 --force-adb-forward `
-  --no-audio --no-clipboard-autosync --max-size=1600 --max-fps=30 `
-  --window-title=moegramX-WSL-Emulator --window-width=460 --window-height=920
-```
-
-scrcpy 附带的 Windows ADB 客户端只连接上述 WSL `5038` server，不连接实体手机或默认 `5037` server。WSL 的 localhost 转发须可用；关闭查看器不会停止模拟器。当前 WSLg 曾出现共享内存打开失败、窗口有标题但不可见的问题，因此不依赖 WSLg 显示。
-
-APK 文件名应与当前构建输出一致；覆盖安装时明确添加 `-r`，不得为测试清空已有登录数据。当前 WSL 环境使用 `swangle` 并禁用 Vulkan；默认图形配置曾导致模拟器宿主的 `RenderThread` 崩溃，应与客户端 Android 崩溃区分。`-no-snapshot` 禁用快照，不删除 AVD 用户数据。账号必须由用户在模拟器内自行登录，不复制实体手机会话，也不在脚本、日志或仓库保存验证码和密码。安装、欢迎页和登录页正常仅代表启动检查通过；论坛合并历史、书签、未读导航和 Shadow Ban 仍需登录后用真实聊天操作验证。测试前记录本地开关和屏蔽列表，只调整必要项并在结束后恢复；阅读位置可能随实际浏览推进，不把它当作可回滚设置。截图和设备日志仅保存在本地，避免把账号或聊天内容提交到仓库。模拟器不能代替真机性能、厂商后台策略与 FCM 唤醒测试。 当前宽屏交互测试使用 `-memory 8192 -skin 1600x1200`。聊天列表的可见摘要也参加 `TdlibMessageViewer` 防截屏判断；滚到开启内容保护的群或保密聊天时，`BaseActivity` 会给整个窗口加 `FLAG_SECURE`。scrcpy 属于投屏捕获，此时会显示黑色；将受保护条目滚出后标记解除、画面恢复。这一现象不等于应用崩溃或内存耗尽，诊断时应同时核对窗口标记、进程和内存，不能靠加大 RAM 判断已修复。 当前隔离 AVD 是 `ro.debuggable=1` 的 userdebug 镜像，已按用户要求将用户 0 的 `Settings.Secure.disable_secure_windows` 设为 1；`dumpsys window` 回读 `mDisableSecureWindows=true`，受保护群仍请求 `FLAG_SECURE` 时投屏也能正常显示。此为模拟器系统调试设置，不改变 APK 或真机逻辑；恢复执行 `adb -P 5038 -s emulator-5770 shell settings --user 0 put secure disable_secure_windows 0`。
+群聊分组回归通过生产方法替身、负向对照及 Android 实际组件绘制验证。合成消息场景不等同于真实服务器编辑／删除或跨设备已读验收；发布前仍需验证将要交付的确切 APK。公共说明保留验证范围与限制，不附带个人测试环境信息。
 
 ### GitHub Actions 构建与交付
 

@@ -46,6 +46,9 @@ abstract class BuildFfmpegTask : BuildNativeLibraryTask() {
 
     val extraParams = mutableListOf<String>()
     val cFlags = mutableListOf(
+      "-ffile-prefix-map=${input.absolutePath}=.",
+      "-ffile-prefix-map=${buildDir.get().asFile.absolutePath}=./build",
+      "-ffile-prefix-map=${sdkDir.get().asFile.absolutePath}=/android-sdk",
       "-O2",
       "-fPIC",
       "-fpie",
@@ -328,7 +331,30 @@ abstract class BuildFfmpegTask : BuildNativeLibraryTask() {
       env,
       build,
       logFile,
-      commands
+      mapOf("configure" to commands.getValue("configure"))
     )
+
+    // This diagnostic macro reports the configure command, including absolute
+    // paths. Redact only its string value; build settings and makefiles stay intact.
+    val configHeader = requireFile(build.resolve("config.h"))
+    val publicPaths = mapOf(
+      sdkDir.get().asFile.absolutePath to "<ANDROID_SDK>",
+      input.absolutePath to "<SOURCE_DIR>",
+      build.absolutePath to "<BUILD_DIR>",
+      output.absolutePath to "<OUTPUT_DIR>",
+      libvpx.absolutePath to "<LIBVPX_DIR>"
+    )
+    val publicConfig = configHeader.readText().replace(
+      Regex("^#define FFMPEG_CONFIGURATION .*$", RegexOption.MULTILINE)
+    ) { match ->
+      publicPaths.entries.fold(match.value) { text, (path, placeholder) ->
+        text.replace(path, placeholder)
+      }
+    }
+    writeToFile(configHeader) { h ->
+      h.append(publicConfig)
+    }
+
+    runCommands(TAG, env, build, logFile, commands.filterKeys { it != "configure" })
   }
 }

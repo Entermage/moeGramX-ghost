@@ -341,6 +341,9 @@ public final class ForumTopicList implements ChatListener, MessageListener, Dest
         }
       } else {
         for (TdApi.ForumTopic topic : result.topics) {
+          if (ForumUnreadBadges.isTopicDeleted(tdlib, chatId, topic.info.forumTopicId)) {
+            continue; // Deleted here after the page was asked for: it doesn't come back.
+          }
           XgramTopicReadOutbox.set(tdlib, chatId, topic);
           XgramTopicMute.onSettings(tdlib, chatId, topic);
           ForumUnreadBadges.onTopicLoaded(tdlib, chatId, topic);
@@ -546,6 +549,10 @@ public final class ForumTopicList implements ChatListener, MessageListener, Dest
       } else if (XgramForums.isTopicGone(error)) {
         retriedOnce.remove(forumTopicId);
         removeTopic(forumTopicId);
+        // Deleted elsewhere: the badge stops counting it too. General can't be deleted, so it isn't kept as deleted.
+        if (forumTopicId != XgramForums.GENERAL_TOPIC_ID) {
+          ForumUnreadBadges.onTopicDeleted(tdlib, chatId, forumTopicId);
+        }
 
       } else {
         long delay = XgramTopicFlood.onError(tdlib, error, 5000);
@@ -567,6 +574,9 @@ public final class ForumTopicList implements ChatListener, MessageListener, Dest
 
   @UiThread
   private void putTopicImpl (TdApi.ForumTopic topic) {
+    if (ForumUnreadBadges.isTopicDeleted(tdlib, chatId, topic.info.forumTopicId)) {
+      return; // Deleted here after it was asked for: an older answer doesn't bring it back.
+    }
     XgramForums.normalizeUnread(tdlib, topic);
     XgramTopicReadOutbox.set(tdlib, chatId, topic);
     XgramTopicMute.onSettings(tdlib, chatId, topic);

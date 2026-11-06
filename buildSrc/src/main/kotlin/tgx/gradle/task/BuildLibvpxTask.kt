@@ -39,6 +39,9 @@ abstract class BuildLibvpxTask : BuildNativeLibraryTask() {
 
     val extraParams = mutableListOf<String>()
     val cFlags = mutableListOf(
+      "-ffile-prefix-map=${input.absolutePath}=.",
+      "-ffile-prefix-map=${buildDir.get().asFile.absolutePath}=./build",
+      "-ffile-prefix-map=${sdkDir.get().asFile.absolutePath}=/android-sdk",
       "-O3",
       "-fpic",
       "-fpie",
@@ -214,6 +217,16 @@ abstract class BuildLibvpxTask : BuildNativeLibraryTask() {
         )
       )
     )
+
+    // configure embeds these host paths in vpx_codec_build_config(). They are
+    // diagnostic metadata only; keep all feature flags and actual build paths.
+    val configSource = requireFile(build.resolve("vpx_config.c"))
+    val publicConfig = configSource.readText()
+      .replace(sysroot.absolutePath, "<ANDROID_SYSROOT>")
+      .replace(output.absolutePath, "<OUTPUT_DIR>")
+    writeToFile(configSource) { c ->
+      c.append(publicConfig)
+    }
 
     // set CONFIG_LIBYUV to 1
     val configHeader = requireFile(

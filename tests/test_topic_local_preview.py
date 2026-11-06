@@ -8,19 +8,25 @@ CHAT = base.SRC / 'component/chat'
 class TopicLocalPreviewTest(unittest.TestCase):
     run_java = base.HistoryPreviewTest.run_java
 
-    def sources(self, scan_edit=None, loader_edit=None):
+    def sources(self, scan_edit=None, loader_edit=None, preview_edit=None):
         scan = (CHAT / 'LocalTopicHistory.java').read_text()
         if scan_edit:
             self.assertIn(scan_edit[0], scan)
             scan = scan.replace(*scan_edit)
         loader = (CHAT / 'MessagesLoader.java').read_text()
-        methods = base.method(loader, '  private void tryLocalTopicPreview (') + '\n' + \
-            base.method(loader, '  private void requestLocalTopicPage (')
+        field = next(line for line in loader.splitlines() if 'LocalTopicHistory> localTopicScan' in line)
+        methods = '\n'.join([field] + [base.method(loader, signature) for signature in [
+            '  private void tryLocalTopicPreview (', '  private void endLocalTopicPreview (',
+            '  private void requestLocalTopicPage (', '  public void pauseHistoryPreview (', '  public void reuse () {']])
         if loader_edit:
             self.assertIn(loader_edit[0], methods)
             methods = methods.replace(*loader_edit)
+        preview = (CHAT / 'MessageHistoryPreview.java').read_text()
+        if preview_edit:
+            self.assertIn(preview_edit[0], preview)
+            preview = preview.replace(*preview_edit)
         return {
-          'org/thunderdog/challegram/component/chat/MessageHistoryPreview.java': (CHAT / 'MessageHistoryPreview.java').read_text(),
+          'org/thunderdog/challegram/component/chat/MessageHistoryPreview.java': preview,
           'org/thunderdog/challegram/component/chat/LocalTopicHistory.java': scan,
           'android/os/SystemClock.java': 'package android.os; public class SystemClock {public static long uptimeMillis(){return 0;}}',
           'org/drinkless/tdlib/TdApi.java': '''package org.drinkless.tdlib; public class TdApi {
@@ -85,7 +91,65 @@ class TopicLocalPreviewTest(unittest.TestCase):
             'return true;'))
 
     def test_stale_generation_rejected(self):
-        self.rejected('left page|published page', loader_edit=('if (contextId != context || historyPublished) return;', ''))
+        self.rejected('left page|published page', loader_edit=(
+            'if (contextId != context || historyPublished || localTopicScan.get() != scan) {\n        scan.untrack(tdlib);\n        return;\n      }', ''))
+
+    def test_scan_deletion_untracked_rejected(self):
+        self.rejected('deleted message 280 was published', preview_edit=(
+            'if (tracker.chatId == chatId) tracker.record(deletion ? tracker.deleted : tracker.changed, messageIds);', ''))
+
+    def test_deleted_row_kept_rejected(self):
+        self.rejected('scan with a deleted message not published without it', scan_edit=(
+            'result.removeIf(message -> MessageHistoryPreview.isDeleted(changes, message.id));', ''))
+
+    def test_scan_edit_untracked_rejected(self):
+        self.rejected('edited message published', preview_edit=(
+            'if (deleted.contains(message.id) || changed.contains(message.id)) return true;',
+            'if (deleted.contains(message.id)) return true;'))
+
+    def test_left_scan_leak_rejected(self):
+        self.rejected('ended local scans kept following', loader_edit=('        scan.untrack(tdlib);\n', ''))
+
+    def test_unusable_scan_leak_rejected(self):
+        self.rejected('ended local scans kept following', scan_edit=(
+            '    if (!isUsable(messages)) {\n      MessageHistoryPreview.untrack(tdlib, changes);\n', '    if (!isUsable(messages)) {\n'))
+
+    def test_unbounded_scans_rejected(self):
+        self.rejected('local scans followed without a bound', preview_edit=('MAX_TRACKERS = 8', 'MAX_TRACKERS = 100'))
+
+    def test_blur_keeps_scan_rejected(self):
+        # Round 1: blur only dropped the reload; the scan was released by its callback, if it came.
+        self.rejected('blur left scan tracking active until a TDLib callback arrives',
+                      loader_edit=('    cancelHistoryPreviewRetry();\n    endLocalTopicPreview();\n', '    cancelHistoryPreviewRetry();\n'))
+
+    def test_blur_slots_kept_rejected(self):
+        r = self.run_harness(loader_edit=('    cancelHistoryPreviewRetry();\n    endLocalTopicPreview();\n', '    cancelHistoryPreviewRetry();\n'))
+        self.assertNotEqual(r.returncode, 0)
+        # The first blur check already fails; the slot check is the same release seen from the bound.
+        self.assertRegex(r.stderr, 'blur left scan tracking|blurred pages kept their tracking slots')
+
+    def test_reuse_keeps_scan_rejected(self):
+        self.rejected('reused page left its scan tracking', loader_edit=('    restoreRetainedHistory();\n    endLocalTopicPreview();\n', '    restoreRetainedHistory();\n'))
+
+    def test_owner_check_missing_rejected(self):
+        self.rejected('blurred scan read on or published', loader_edit=(' || localTopicScan.get() != scan) {', ') {'))
+
+    def test_ended_scan_published_rejected(self):
+        # A cancel that only drops the tracker must not turn a late scan into an unprotected publish.
+        self.rejected('ended scan published without following changes', scan_edit=('    if (changes == null) return false;\n', ''))
+
+    def test_idle_state_kept_listening_rejected(self):
+        self.rejected('blurred scan kept the account listening', preview_edit=(
+            '      idle = state != null && state.trackers.remove(tracker) ? removeIfIdle(tdlib, state) : null;',
+            '      idle = null; if (state != null) state.trackers.remove(tracker);'))
+
+    def test_history_arrival_ends_scan(self):
+        # processMessages is too large to run here: the authoritative publication ends the scan where it is set.
+        loader = (CHAT / 'MessagesLoader.java').read_text()
+        self.assertIn('      historyPublished = true;\n      endLocalTopicPreview();', loader)
+
+    def test_change_overflow_rejected(self):
+        self.rejected('changes passed the bound', preview_edit=('overflow = true; deleted.clear(); changed.clear();', ''))
 
 
 HARNESS = r'''
@@ -125,6 +189,39 @@ public class Harness {
     static Background instance() { return b; } void post(Runnable r) { tasks.add(r); }
     void flush() { ArrayList<Runnable> copy = new ArrayList<>(tasks); tasks.clear(); copy.forEach(Runnable::run); }
   }
+  // The rest of reuse() and pauseHistoryPreview(): what they touch besides the scan.
+  static final boolean DEBUG_HANDLER = false;
+  static final int MERGE_MODE_NONE = 0;
+  static class Log { static void w(String s, Object o) {} static Object generateException(int i) { return null; } }
+  static class MoexShadowUnreadManager { interface HiddenUsersCallback {} static void cancelHiddenUsers(Tdlib t, HiddenUsersCallback c) {} }
+  static class Controller { void setHistoryLoading(boolean loading, boolean hasRows) {} }
+  static class Manager { final Controller c = new Controller(); Controller controller() { return c; } }
+  static class Cancellable { void cancel() {} }
+  final Manager manager = new Manager();
+  final Object lock = new Object();
+  boolean historyPreviewShown, historyPreviewAttempted, historyPreviewToEnd, unreadNavigationPending, resolvedUnreadTarget,
+    unreadNavigationStopped, unreadAnchorUnavailable, resumeUnreadOnFocus, foundUnreadAtLeastOnce,
+    loadingSupportsFilteredContinuation, loadingLocal, loadingAllowMoreTop, loadingAllowMoreBottom, canLoadTop, canLoadBottom, isLoading;
+  MoexShadowUnreadManager.HiddenUsersCallback hiddenUsersCallback; Runnable retryHiddenUsersLoad;
+  Object visibleUnreadAnchor, scrollMessageId, lastFromMessageId, mergeChunk, lastHandler;
+  final TreeMap<Long, Object> unreadAnchorMessages = new TreeMap<>();
+  int scrollHighlightMode, knownTotalMessageCount, filteredPageContinuationCount, mergeMode, retryCancels;
+  Cancellable sponsoredResultHandler;
+  void restoreRetainedHistory() {}
+  void cancelHistoryPreviewRetry() { retryCancels++; }
+
+  /** Scans followed for the account now. */
+  static int trackers(Tdlib t) {
+    try {
+      java.lang.reflect.Field f = MessageHistoryPreview.class.getDeclaredField("states"); f.setAccessible(true);
+      Object state = ((Map<?, ?>) f.get(null)).get(t);
+      if (state == null) return 0;
+      java.lang.reflect.Field tf = state.getClass().getDeclaredField("trackers"); tf.setAccessible(true);
+      return ((List<?>) tf.get(state)).size();
+    } catch (ReflectiveOperationException x) { throw new AssertionError(x); }
+  }
+  static TdApi.Messages full() { return new TdApi.Messages(page(300, 201, 300, 290, 280, 270, 260, 250)); }
+
   Tdlib tdlib = new Tdlib();
   TdApi.MessageTopic topicId = new TdApi.MessageTopicForum(5);
   TdApi.Chat chat = new TdApi.Chat();
@@ -153,7 +250,7 @@ public class Harness {
     stale.accept(new TdApi.Message[] {m(100, 5, 181)}, 300); // only the repeated start: stored history ends
     check(!stale.isTail(), "stale local history shown as the topic tail");
     Tdlib d = new Tdlib();
-    check(stale.publish(d), "stale scan still usable for its own rows");
+    check(stale.track(d) && stale.publish(d), "stale scan still usable for its own rows");
     check(MessageHistoryPreview.get(d, 100, 5, 0, true) == null, "stale local history shown as the topic tail (end entry)");
     MessageHistoryPreview.Window restored = MessageHistoryPreview.get(d, 100, 5, 265, false);
     check(restored != null && restored.anchorId == 260 && restored.offset == 0, "position inside the window anchors at or before it");
@@ -162,14 +259,14 @@ public class Harness {
     LocalTopicHistory lone = new LocalTopicHistory(100, 5, 0, false);
     lone.accept(page(300, 201, 300), 300); lone.accept(new TdApi.Message[0], 300);
     Tdlib e = new Tdlib();
-    check(!lone.publish(e) && MessageHistoryPreview.get(e, 100, 5, 0, true) == null, "lone message shown before the history");
+    check(lone.track(e) && !lone.publish(e) && MessageHistoryPreview.get(e, 100, 5, 0, true) == null, "lone message shown before the history");
     LocalTopicHistory unread = new LocalTopicHistory(100, 5, 250, true);
     unread.accept(page(300, 201, 300, 290, 280, 270, 260, 250, 240), 300);
     TdApi.Message[] u = unread.messages();
     check(unread.isUsable(u) && unread.anchorId(u) == 260 && unread.anchorOffset() == MessageHistoryPreview.OFFSET_TOP,
       "unread entry opens at its first unread row, at the top");
     Tdlib f = new Tdlib();
-    check(unread.publish(f), "unread window across the read boundary is used");
+    check(unread.track(f) && unread.publish(f), "unread window across the read boundary is used");
     MessageHistoryPreview.Window w = MessageHistoryPreview.get(f, 100, 5, 250, false, true);
     check(w != null && w.anchorId == 260 && w.offset == MessageHistoryPreview.OFFSET_TOP, "unread placement kept in the window");
     LocalTopicHistory far = new LocalTopicHistory(100, 5, 100, true);
@@ -277,6 +374,198 @@ public class Harness {
     h.topicId = null;
     h.tryLocalTopicPreview(new MessageId(0, true), false);
     check(h.tdlib.sent.isEmpty(), "ordinary chats never scan for a topic");
+
+    // ---- message changes while the scan reads: nothing shown or stored yet to invalidate ----
+    h = new Harness();
+    check(h.tdlib.l.listener == null, "setup: no window stored for the account");
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    check(h.tdlib.l.listener != null, "scan without a stored window follows no message changes");
+    h.tdlib.reply(new TdApi.Messages(page(300, 201, 300, 290, 280, 270, 260, 250)));
+    h.tdlib.l.listener.onMessagesDeleted(100, new long[] {280});
+    h.tdlib.l.listener.onMessagesDeleted(101, new long[] {290});                // another chat
+    h.tdlib.l.listener.onMessageContentChanged(100, 299, new TdApi.MessageContent()); // another topic's row
+    h.tdlib.reply(new TdApi.Messages());
+    Background.b.flush();
+    check(h.parsedMessages == null || Arrays.stream(h.parsedMessages).noneMatch(x -> x.id == 280),
+      "deleted message 280 was published from an in-progress local scan");
+    check(h.parsed == 1 && Arrays.equals(ids(h.parsedMessages), new long[] {300, 290, 270, 260, 250}),
+      "scan with a deleted message not published without it");
+
+    // As the review found it: another topic's window exists, this one has none.
+    h = new Harness();
+    MessageHistoryPreview.put(h.tdlib, 100, 9, new TdApi.Message[] {m(100, 9, 800)}, 800, 0, true);
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    h.tdlib.reply(new TdApi.Messages(page(300, 201, 300, 290, 280, 270, 260, 250)));
+    h.tdlib.l.listener.onMessagesDeleted(100, new long[] {280});
+    h.tdlib.reply(new TdApi.Messages());
+    Background.b.flush();
+    check(h.parsedMessages == null || Arrays.stream(h.parsedMessages).noneMatch(x -> x.id == 280),
+      "deleted message 280 was published from an in-progress local scan (other window)");
+
+    h = new Harness();
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    h.tdlib.reply(new TdApi.Messages(page(300, 201, 300, 290, 280, 270, 260, 250)));
+    h.tdlib.l.listener.onMessageEdited(100, 270, 0, new TdApi.ReplyMarkup());
+    h.tdlib.reply(new TdApi.Messages());
+    Background.b.flush();
+    check(h.parsed == 0, "edited message published from an in-progress local scan");
+
+    h = new Harness();
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    h.tdlib.reply(new TdApi.Messages(page(300, 201, 300, 290, 280, 270, 260)));
+    h.tdlib.l.listener.onMessagesDeleted(100, new long[] {260});
+    h.tdlib.reply(new TdApi.Messages());
+    Background.b.flush();
+    check(h.parsed == 0, "scan left with too few rows by a deletion published");
+
+    // Control: a deletion after the window is stored invalidates it, as before.
+    h = new Harness();
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    h.tdlib.reply(new TdApi.Messages(page(300, 201, 300, 290, 280, 270, 260, 250)));
+    h.tdlib.reply(new TdApi.Messages());
+    h.tdlib.l.listener.onMessagesDeleted(100, new long[] {280});
+    Background.b.flush();
+    check(h.parsed == 0, "deleted message of a stored window parsed");
+
+    h = new Harness();
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    h.tdlib.reply(new TdApi.Messages(page(300, 201, 300, 290, 280, 270, 260, 250)));
+    long[] many = new long[600];
+    for (int i = 0; i < many.length; i++) many[i] = 10_000 + i;
+    h.tdlib.l.listener.onMessagesDeleted(100, many);
+    h.tdlib.reply(new TdApi.Messages());
+    Background.b.flush();
+    check(h.parsed == 0, "scan published after its changes passed the bound");
+
+    h = new Harness();
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    h.tdlib.reply(new TdApi.Messages(page(300, 201, 300, 290, 280, 270, 260, 250)));
+    MessageHistoryPreview.clear(h.tdlib);
+    check(h.tdlib.l.listener == null, "closed account kept its listener");
+    h.tdlib.reply(new TdApi.Messages());
+    Background.b.flush();
+    check(h.parsed == 0 && h.tdlib.l.listener == null, "scan published after the account closed");
+
+    // ---- every way a scan ends stops following; at most a few at once ----
+    Tdlib shared = new Tdlib();
+    for (int i = 0; i < 10; i++) {
+      h = new Harness(); h.tdlib = shared;                      // published
+      h.tryLocalTopicPreview(new MessageId(0, true), false);
+      shared.reply(new TdApi.Messages(page(300, 201, 300, 290, 280, 270, 260, 250)));
+      shared.reply(new TdApi.Messages());
+      h = new Harness(); h.tdlib = shared;                      // too few rows
+      h.tryLocalTopicPreview(new MessageId(0, true), false);
+      shared.reply(new TdApi.Messages(page(300, 201, 300)));
+      shared.reply(new TdApi.Messages());
+      h = new Harness(); h.tdlib = shared;                      // left
+      h.tryLocalTopicPreview(new MessageId(0, true), false);
+      h.contextId++;
+      shared.reply(new TdApi.Messages(page(300, 201, 300)));
+      h = new Harness(); h.tdlib = shared;                      // history arrived
+      h.tryLocalTopicPreview(new MessageId(0, true), false);
+      h.historyPublished = true;
+      shared.reply(new TdApi.Messages(page(300, 201, 300)));
+      h = new Harness(); h.tdlib = shared;                      // failed
+      h.tryLocalTopicPreview(new MessageId(0, true), false);
+      shared.reply(null);
+    }
+    check(shared.pending.isEmpty(), "setup: every scan ended");
+    int before = shared.sent.size();
+    h = new Harness(); h.tdlib = shared;
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    check(shared.sent.size() == before + 1, "ended local scans kept following message changes");
+    shared.reply(null);
+    Background.b.flush();
+
+    Tdlib busy = new Tdlib();
+    for (int i = 0; i < 9; i++) {
+      h = new Harness(); h.tdlib = busy;
+      h.tryLocalTopicPreview(new MessageId(0, true), false);
+    }
+    check(busy.sent.size() == 8, "local scans followed without a bound: " + busy.sent.size());
+
+    // ---- the page owns its scan: blur, reuse and close end it although its callback never returns ----
+    Tdlib owner = new Tdlib();
+    h = new Harness(); h.tdlib = owner;
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    check(trackers(owner) == 1, "setup: scan followed");
+    h.pauseHistoryPreview(); // MessagesManager.onBlur; an end entry has no unread navigation to cancel
+    check(h.retryCancels == 1, "blur no longer drops the pending reload");
+    check(trackers(owner) == 0, "blur left scan tracking active until a TDLib callback arrives");
+    check(owner.l.listener == null, "blurred scan kept the account listening");
+    owner.reply(full()); // the callback comes after all
+    Background.b.flush();
+    check(owner.sent.size() == 1 && h.parsed == 0 && MessageHistoryPreview.get(owner, 100, 5, 0, true) == null,
+      "blurred scan read on or published");
+    check(owner.l.listener == null && trackers(owner) == 0, "late callback of a blurred scan followed changes again");
+
+    h = new Harness(); h.tdlib = owner;
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    owner.reply(full());
+    check(owner.sent.size() == 3, "setup: second page asked for");
+    h.pauseHistoryPreview(); // blurred between pages
+    owner.reply(new TdApi.Messages());
+    Background.b.flush();
+    check(h.parsed == 0 && MessageHistoryPreview.get(owner, 100, 5, 0, true) == null, "scan blurred between pages published");
+
+    h = new Harness(); h.tdlib = owner;
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    h.reuse(); // left, another topic, or MessagesManager.destroy
+    check(trackers(owner) == 0, "reused page left its scan tracking until a TDLib callback arrives");
+    owner.reply(full()); owner.reply(new TdApi.Messages());
+    Background.b.flush();
+    check(h.parsed == 0 && owner.l.listener == null, "late callback of a reused page published or listened");
+    h.tryLocalTopicPreview(new MessageId(0, true), false); // the reused loader opens a topic again
+    check(trackers(owner) == 1, "reused loader can't scan again");
+    MessageHistoryPreview.clear(owner); // the client closed with the callback pending
+    h.pauseHistoryPreview();
+    check(owner.l.listener == null && trackers(owner) == 0, "ending a scan after close listened again");
+    owner.reply(full()); owner.reply(new TdApi.Messages());
+    Background.b.flush();
+    check(h.parsed == 0 && owner.l.listener == null, "scan published after the client closed");
+
+    // A published window stays: blur after it is only the snapshot being kept.
+    h = new Harness();
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    h.tdlib.reply(full()); h.tdlib.reply(new TdApi.Messages());
+    h.pauseHistoryPreview();
+    Background.b.flush();
+    check(h.parsed == 1, "blur after the window was stored dropped the snapshot");
+
+    // An ended scan is never stored: without its tracker it doesn't know what changed meanwhile.
+    Tdlib g = new Tdlib();
+    LocalTopicHistory cancelled = new LocalTopicHistory(100, 5, 0, false);
+    check(cancelled.track(g), "setup: scan followed");
+    cancelled.accept(page(300, 201, 300, 290, 280, 270, 260, 250), 300); cancelled.accept(new TdApi.Message[0], 300);
+    cancelled.untrack(g);
+    check(!cancelled.publish(g) && MessageHistoryPreview.get(g, 100, 5, 0, true) == null, "ended scan published without following changes");
+    check(g.l.listener == null, "ended scan listened again");
+    LocalTopicHistory untracked = new LocalTopicHistory(100, 5, 0, false);
+    untracked.accept(page(300, 201, 300, 290, 280, 270, 260, 250), 300); untracked.accept(new TdApi.Message[0], 300);
+    check(!untracked.publish(g) && MessageHistoryPreview.get(g, 100, 5, 0, true) == null, "scan never followed published");
+
+    // Every slot taken by pages whose callbacks never return: blurring them frees the slots at once.
+    Tdlib slots = new Tdlib();
+    Harness[] open = new Harness[8];
+    for (int i = 0; i < open.length; i++) {
+      open[i] = new Harness(); open[i].tdlib = slots;
+      open[i].tryLocalTopicPreview(new MessageId(0, true), false);
+    }
+    check(slots.sent.size() == 8 && trackers(slots) == 8, "setup: every slot taken");
+    h = new Harness(); h.tdlib = slots;
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    check(slots.sent.size() == 8, "a ninth scan started past the bound");
+    for (Harness x : open) x.pauseHistoryPreview();
+    check(trackers(slots) == 0, "blurred pages kept their tracking slots");
+    h = new Harness(); h.tdlib = slots;
+    h.tryLocalTopicPreview(new MessageId(0, true), false);
+    check(slots.sent.size() == 9 && trackers(slots) == 1, "new topic can't scan while blurred pages' callbacks are pending");
+    for (int i = 0; i < open.length; i++) slots.reply(full());
+    check(slots.sent.size() == 9 && trackers(slots) == 1, "late callbacks of ended scans read on or ended another scan");
+    slots.reply(full()); slots.reply(new TdApi.Messages());
+    Background.b.flush();
+    check(h.parsed == 1 && trackers(slots) == 0, "the new scan didn't publish from its own pages");
+    for (Harness x : open) check(x.parsed == 0, "an ended scan published");
     System.out.println(checks + " local topic preview checks passed");
   }
 }

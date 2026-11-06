@@ -225,23 +225,16 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesHolder> {
 
   public void replaceItem (int index, TGMessage msg) {
     if (items != null) {
-      items.get(index).onDestroy();
+      TGMessage previous = items.get(index);
+      if (previous.isFirstUnread()) {
+        msg.setShowUnreadBadge(true);
+      }
+      previous.onDestroy();
       items.set(index, msg);
-      boolean includeTop = index > 0;
-      if (includeTop) {
-        TGMessage bottomMessage = items.get(index - 1);
-        bottomMessage.mergeWith(msg, index == 1);
-        bottomMessage.rebuildLayout();
-      }
-      if (index + 1 < items.size()) {
-        msg.mergeWith(items.get(index + 1), index == 0);
-        msg.rebuildLayout();
-        notifyItemRangeChanged(includeTop ? index - 1 : index, includeTop ? 3 : 2);
-      } else {
-        msg.mergeWith(null, index == 0);
-        msg.rebuildLayout();
-        notifyItemRangeChanged(includeTop ? index - 1 : index, includeTop ? 2 : 1);
-      }
+      // The newer neighbour has never been merged with the replacement
+      int newestIndex = TGMessage.remergeItems(items, index, Math.max(index - 1, 0));
+      int oldestIndex = Math.min(index + 1, items.size() - 1);
+      notifyItemRangeChanged(newestIndex, oldestIndex - newestIndex + 1);
     }
   }
 
@@ -380,18 +373,11 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesHolder> {
     msg.onDestroy();
     notifyItemRemoved(index);
     if (items.size() != 0) {
-      TGMessage currentMessage = getMessage(index);
-      TGMessage bottomMessage = getMessage(index - 1);
-
-      if (bottomMessage != null) {
-        bottomMessage.mergeWith(currentMessage, index == 1);
-        bottomMessage.rebuildLayout();
-        notifyItemChanged(index - 1);
-      } else if (currentMessage != null) {
-        currentMessage.mergeWith(getMessage(index + 1), index == 0);
-        currentMessage.rebuildLayout();
-        notifyItemChanged(index);
-      }
+      int fromIndex = Math.max(index - 1, 0);
+      int newestIndex = TGMessage.remergeItems(items, fromIndex, fromIndex);
+      // The older neighbour may now end its group
+      int oldestIndex = index > 0 ? Math.min(index, items.size() - 1) : fromIndex;
+      notifyItemRangeChanged(newestIndex, oldestIndex - newestIndex + 1);
     } else {
       notifyItemRangeInserted(0, getItemCount());
     }
@@ -481,12 +467,9 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesHolder> {
         items.add(index, message);
         notifyItemInserted(index);
 
-        // FIXME for some reason bubble merging on bottom side does not work
-
         if (bottomMessage != null) {
-          bottomMessage.mergeWith(message, index - 1 == 0);
-          bottomMessage.rebuildLayout();
-          notifyItemChanged(index - 1);
+          int newestIndex = TGMessage.remergeItems(items, index - 1, index - 1);
+          notifyItemRangeChanged(newestIndex, index - newestIndex);
         }
 
         if (message.isScheduled() && message.isNotSent() && index != 0) {
@@ -511,12 +494,7 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesHolder> {
       }
     }
 
-    if (top) {
-      if (topMessage != null) {
-        topMessage.mergeWith(message, getMessageCount() == 1);
-        topMessage.rebuildLayout();
-      }
-    } else {
+    if (!top) {
       if (!message.isOld()) {
         message.markAsBeingAdded(true);
       }
@@ -549,7 +527,9 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesHolder> {
         notifyItemChanged(0);
       } else {
         notifyItemInserted(items.size() - 1);
-        notifyItemChanged(items.size() - 2);
+        // The previous top message may now merge with the new one, so its newer neighbours may change too
+        int newestIndex = TGMessage.remergeItems(items, prevSize - 1, prevSize - 1);
+        notifyItemRangeChanged(newestIndex, prevSize - newestIndex);
       }
     } else {
       int insertionIndex = hasFollowingSponsoredMessage ? 1 : 0;
@@ -635,9 +615,8 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesHolder> {
           TGMessage msg = items.get(i);
           if ((!Config.TEST_MULTI_SPONSORED_MESSAGES || !msg.isSponsoredMessage()) && indexOfMessageContainer(msg.getId()) != -1) {
             items.remove(i);
-            if (i > 0) {
-              items.get(i - 1).mergeWith(items.size() > i ? items.get(i) : null, !fromTop && i - 1 == 0);
-              items.get(i - 1).rebuildLayout();
+            if (!items.isEmpty()) {
+              TGMessage.remergeItems(items, Math.max(i - 1, 0), Math.max(i - 1, 0));
             }
           }
         }
@@ -647,9 +626,8 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesHolder> {
             TGMessage newItem = items.get(i);
             if ((!Config.TEST_MULTI_SPONSORED_MESSAGES || !newItem.isSponsoredMessage()) && item.isDescendantOrSelf(newItem.getId())) {
               items.remove(i);
-              if (i > 0) {
-                items.get(i - 1).mergeWith(items.size() > i ? items.get(i) : null, !fromTop && i - 1 == 0);
-                items.get(i - 1).rebuildLayout();
+              if (!items.isEmpty()) {
+                TGMessage.remergeItems(items, Math.max(i - 1, 0), Math.max(i - 1, 0));
               }
               break;
             }
@@ -664,20 +642,18 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesHolder> {
     final int oldItemCount = getItemCount();
 
     if (fromTop) {
-      if (newCount > 0 && count > 0) {
-        TGMessage combine = items.get(0);
-        TGMessage msg = this.items.get(count - 1);
-        msg.mergeWith(combine, false);
-        msg.rebuildLayout();
-        notifyItemChanged(count - 1);
-      }
       this.items.addAll(items);
+      if (newCount > 0 && count > 0) {
+        int newestIndex = TGMessage.remergeItems(this.items, count - 1, count - 1);
+        notifyItemRangeChanged(newestIndex, count - newestIndex);
+      }
       if (count == 0) {
         U.notifyItemsReplaced(this, oldItemCount);
       } else {
         notifyItemRangeInserted(count, items.size());
       }
     } else {
+      int unreadIndex = -1;
       if (!hasUnreadSeparator()) {
         for (int i = items.size() - 1; i >= 0; i--) {
           TGMessage message = items.get(i);
@@ -690,19 +666,23 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesHolder> {
               } else {
                 message.setShowUnreadBadge(chat.unreadCount > 0);
               }
+              unreadIndex = i;
             }
             break;
           }
         }
       }
       if (newCount > 0 && count > 0) {
-        TGMessage combine = this.items.get(0);
-        TGMessage msg = items.get(newCount - 1);
-        msg.mergeWith(combine, false);
-        msg.rebuildLayout();
         notifyItemChanged(0);
       }
       this.items.addAll(0, items);
+      if (newCount > 0 && count > 0) {
+        TGMessage.remergeItems(this.items, newCount - 1, newCount - 1);
+      }
+      if (unreadIndex != -1) {
+        // The page was merged before the separator was placed
+        TGMessage.remergeItems(this.items, unreadIndex, unreadIndex);
+      }
       if (count == 0) {
         U.notifyItemsReplaced(this, oldItemCount);
       } else {

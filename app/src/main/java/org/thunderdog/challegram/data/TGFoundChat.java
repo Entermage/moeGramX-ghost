@@ -360,8 +360,23 @@ public class TGFoundChat {
     return notificationsEnabled;
   }
 
+  public Tdlib tdlib () {
+    return tdlib;
+  }
+
+  /** Whether the row's badge counts the forum's unread topics, as in the chat list. */
+  public boolean usesForumTopicBadge () {
+    return (flags & FLAG_NO_UNREAD) == 0 && chat != null && ForumUnreadBadges.usesTopics(tdlib, chat.id);
+  }
+
+  /** Whether the badge is drawn muted: for a forum's topics, unless one of the unread topics notifies. */
+  public boolean isUnreadMuted () {
+    boolean muted = !notificationsEnabled;
+    return usesForumTopicBadge() ? ForumUnreadBadges.isBadgeMuted(tdlib, chat.id, muted) : muted;
+  }
+
   public int getUnreadCount () {
-    if ((flags & FLAG_NO_UNREAD) == 0 && chat != null && ForumUnreadBadges.usesTopics(tdlib, chat.id)) {
+    if (usesForumTopicBadge()) {
       // As in the chat list: the unread topics, known once a row of the forum was shown there.
       return ForumUnreadBadges.badgeCount(tdlib, chat);
     }

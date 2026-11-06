@@ -73,11 +73,12 @@ import me.vkryl.android.util.SingleViewProvider;
 import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.Destroyable;
+import moe.kirao.mgx.topics.ForumUnreadBadges;
 import tgx.td.ChatId;
 import tgx.td.MessageId;
 import tgx.td.Td;
 
-public class BetterChatView extends BaseView implements Destroyable, RemoveHelper.RemoveDelegate, ChatListener, TdlibCache.UserDataChangeListener, TdlibCache.SupergroupDataChangeListener, TdlibCache.BasicGroupDataChangeListener, NotificationSettingsListener, TdlibCache.UserStatusChangeListener, DrawableProvider, TooltipOverlayView.LocationProvider, TdlibUi.MessageProvider {
+public class BetterChatView extends BaseView implements Destroyable, RemoveHelper.RemoveDelegate, ChatListener, TdlibCache.UserDataChangeListener, TdlibCache.SupergroupDataChangeListener, TdlibCache.BasicGroupDataChangeListener, NotificationSettingsListener, TdlibCache.UserStatusChangeListener, DrawableProvider, TooltipOverlayView.LocationProvider, TdlibUi.MessageProvider, ForumUnreadBadges.Listener {
   private static final int FLAG_FAKE_TITLE = 1;
   private static final int FLAG_SECRET = 1 << 1;
   private static final int FLAG_ONLINE = 1 << 2;
@@ -123,16 +124,22 @@ public class BetterChatView extends BaseView implements Destroyable, RemoveHelpe
     avatarReceiver.setBounds(Screen.dp(11f), Screen.dp(10f), Screen.dp(11f) + Screen.dp(52f), Screen.dp(10f) + Screen.dp(52f));
   }
 
+  private boolean isAttached;
+
   public void attach () {
     avatarReceiver.attach();
     subtitleMediaReceiver.attach();
     emojiStatusHelper.attach();
+    isAttached = true;
+    updateForumBadge();
   }
 
   public void detach () {
     avatarReceiver.detach();
     subtitleMediaReceiver.detach();
     emojiStatusHelper.detach();
+    isAttached = false;
+    updateForumBadge();
   }
 
   @Override
@@ -540,6 +547,38 @@ public class BetterChatView extends BaseView implements Destroyable, RemoveHelpe
     } else {
       setPreviewChatId(null, 0, null);
     }
+    updateForumBadge();
+  }
+
+  // Forum badge: the unread topics, as in the chat list, followed while the row is shown
+
+  private @Nullable Tdlib forumBadgeTdlib;
+  private long forumBadgeChatId;
+
+  private void updateForumBadge () {
+    TdApi.Chat chat = lastChat != null ? lastChat.getChat() : null;
+    Tdlib tdlib = lastChat != null ? lastChat.tdlib() : null;
+    // As the chat list row: whatever the chat's own counter says, as reading the whole forum reads none of its topics.
+    boolean follow = isAttached && chat != null && lastChat.usesForumTopicBadge();
+    long chatId = follow ? chat.id : 0;
+    if (forumBadgeChatId == chatId && forumBadgeTdlib == (follow ? tdlib : null)) {
+      return;
+    }
+    if (forumBadgeTdlib != null) {
+      ForumUnreadBadges.detach(forumBadgeTdlib, forumBadgeChatId, this);
+    }
+    forumBadgeTdlib = follow ? tdlib : null;
+    forumBadgeChatId = chatId;
+    if (follow) {
+      ForumUnreadBadges.attach(tdlib, chatId, this);
+    }
+  }
+
+  @Override
+  public void onForumUnreadTopicsChanged (long chatId) {
+    if (lastChat != null && forumBadgeChatId == chatId && lastChat.getId() == chatId) {
+      setUnreadCount(lastChat.getUnreadCount(), lastChat.isUnreadMuted(), isAttached);
+    }
   }
 
   public void setChat (@Nullable TGFoundChat chat) {
@@ -564,7 +603,9 @@ public class BetterChatView extends BaseView implements Destroyable, RemoveHelpe
     updateSubtitle();
     lastChat.requestAvatar(avatarReceiver, AvatarReceiver.Options.SHOW_ONLINE);
     setTime(null);
-    setUnreadCount(lastChat.getUnreadCount(), !lastChat.notificationsEnabled(), update);
+    // The chat may have started or stopped being shown as topics.
+    updateForumBadge();
+    setUnreadCount(lastChat.getUnreadCount(), lastChat.isUnreadMuted(), update);
   }
 
   private void updateSubtitle () {

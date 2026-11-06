@@ -60,7 +60,10 @@ else()
 endif()
 set(ORIGINAL_CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS}")
 
+# Keep source locations useful without embedding the build host checkout path.
 add_compile_options(
+  "$<$<COMPILE_LANGUAGE:C,CXX>:-ffile-prefix-map=${TGX_ROOT_DIR}=.>"
+  "$<$<COMPILE_LANGUAGE:C,CXX>:-ffile-prefix-map=${ANDROID_NDK}=/android-ndk>"
   "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-ffunction-sections>"
   "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fdata-sections>"
   "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fvisibility=hidden>"

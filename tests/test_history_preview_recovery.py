@@ -244,6 +244,8 @@ public class Harness {
       historyPublished = true; historyPreviewShown = false; historyPreviewToEnd = false;
       lastHandler = null; isLoading = false; canLoadTop = true;
     }
+    // The local topic scan pauseHistoryPreview() and reuse() end: run in test_topic_local_preview.
+    private void endLocalTopicPreview () { }
     /* LOADER_METHODS */
   }
 

@@ -37,7 +37,7 @@ public class FilteredAnchorHarness {
   static int checks;
   static void check(boolean v,String m) { checks++; if(!v) throw new AssertionError(m); }
   public static void main(String[] args) {
-    long anchor=371445L<<20;
+    long anchor=123L<<20;
     check(canContinueFilteredHistory(MODE_INITIAL,-19,anchor,anchor),"initial cached filtered anchor needs an older window");
     check(canContinueFilteredHistory(MODE_REPEAT_INITIAL,-19,anchor,anchor),"repeat navigation has same recovery");
     check(canContinueFilteredHistory(MODE_INITIAL,-19,anchor,anchor+7),"centered page may contain only newer hidden messages");
@@ -73,6 +73,7 @@ public class FilteredAnchorHarness {
         harness = r'''
 import java.util.*;
 public class ChatAnchorHarness {
+  static final long SYNTHETIC_GROUP_CHAT_ID=-1000000000042L;
   @interface Nullable {}
   static final int CHATS_THRESHOLD=1, HIGHLIGHT_MODE_NONE=0, HIGHLIGHT_MODE_UNREAD=2,
     HIGHLIGHT_MODE_POSITION_RESTORE=3;
@@ -88,13 +89,13 @@ public class ChatAnchorHarness {
     static class MessageTopic {}
     static class Message { long id=200; boolean isOutgoing; }
     static class Chat {
-      long id=-1002462267293L, lastReadInboxMessageId=100, lastReadOutboxMessageId=0;
+      long id=SYNTHETIC_GROUP_CHAT_ID, lastReadInboxMessageId=100, lastReadOutboxMessageId=0;
       int unreadCount=19; Message lastMessage=new Message();
     }
   }
   static class ThreadInfo {
     TdApi.MessageTopic topic=new TdApi.MessageTopic();
-    long getChatId() { return -1002462267293L; }
+    long getChatId() { return SYNTHETIC_GROUP_CHAT_ID; }
     long getLastReadInboxMessageId() { return 110; }
     long getNewestMessageId() { return 100; }
     boolean hasUnreadMessages(TdApi.Chat c) { return true; }
@@ -122,7 +123,7 @@ public class ChatAnchorHarness {
   static class TGMessage {
     long id; boolean sponsored;
     TGMessage(long i) { id=i; }
-    long getChatId() { return -1002462267293L; }
+    long getChatId() { return SYNTHETIC_GROUP_CHAT_ID; }
     long getBiggestId() { return id; }
     long getSmallestId() { return id-1; }
     long[] getOtherMessageIds(long id) { return new long[] {id-1}; }
@@ -152,7 +153,7 @@ public class ChatAnchorHarness {
   }
   static class Loader {
     boolean moreBottom, moreTop=true; TdApi.MessageTopic topic;
-    long getChatId() { return -1002462267293L; }
+    long getChatId() { return SYNTHETIC_GROUP_CHAT_ID; }
     TdApi.MessageTopic getMessageTopicId() { return topic; }
     TdApi.MessageTopic xgramTopicKey() { return topic; }
     boolean canLoadBottom() { return moreBottom; }

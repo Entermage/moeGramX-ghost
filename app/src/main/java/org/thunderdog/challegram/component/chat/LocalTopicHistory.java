@@ -10,6 +10,11 @@ import java.util.ArrayList;
  * Pages arrive newest first, from the end of the chat's stored history; the scan is bounded.
  * Forums read as topics often store little chat history, so the window is only used where the
  * loading history will open at the same place.
+ * <p>
+ * Messages deleted or edited while the scan runs are followed by a {@link MessageHistoryPreview.Tracker} from
+ * {@link #track} until {@link #publish} or {@link #untrack}, as a stored window is followed afterwards. Its owner
+ * ends it as soon as the scan isn't wanted, whether or not TDLib's callback ever comes; an ended scan is never
+ * published.
  */
 public final class LocalTopicHistory {
   public static final int PAGE_SIZE = 100, MAX_PAGES = 3, MAX_MESSAGES = MessageHistoryPreview.MAX_MESSAGES;
@@ -23,6 +28,8 @@ public final class LocalTopicHistory {
   private long nextFromId;
   private int pages;
   private boolean tail, truncated;
+  // Set on the owner's thread, ended from the UI or the callback thread.
+  private volatile MessageHistoryPreview.Tracker tracker;
 
   /** @param requestedId the read boundary of an unread entry, else the message to restore */
   public LocalTopicHistory (long chatId, long topicId, long requestedId, boolean unreadEntry) {
@@ -30,6 +37,19 @@ public final class LocalTopicHistory {
     this.topicId = topicId;
     this.requestedId = requestedId;
     this.unreadEntry = unreadEntry;
+  }
+
+  /** Follows the chat's message changes until the scan ends; false when they can't be followed, so it mustn't start. */
+  public boolean track (Tdlib tdlib) {
+    tracker = MessageHistoryPreview.track(tdlib, chatId);
+    return tracker != null;
+  }
+
+  /** The scan ends without a window: left, blurred, replaced by the history or failed. It can't be published after. */
+  public void untrack (Tdlib tdlib) {
+    MessageHistoryPreview.Tracker changes = tracker;
+    tracker = null;
+    if (changes != null) MessageHistoryPreview.untrack(tdlib, changes);
   }
 
   /** Where the next local page starts: the chat's last message, then the oldest message seen. */
@@ -68,9 +88,16 @@ public final class LocalTopicHistory {
     return actual == topicId || (topicId == 1 && actual == 0);
   }
 
-  /** Messages for the window, newest first; an album cut by the scan bound is left out. */
+  /** Messages for the window, newest first, without those deleted since; an album cut by the scan bound is left out. */
   public TdApi.Message[] messages () {
+    return messages(tracker);
+  }
+
+  private TdApi.Message[] messages (MessageHistoryPreview.Tracker changes) {
     ArrayList<TdApi.Message> result = new ArrayList<>(found);
+    if (changes != null) {
+      result.removeIf(message -> MessageHistoryPreview.isDeleted(changes, message.id));
+    }
     if (truncated && !result.isEmpty()) {
       long album = result.get(result.size() - 1).mediaAlbumId;
       if (album != 0) result.removeIf(message -> message.mediaAlbumId == album);
@@ -110,11 +137,20 @@ public final class LocalTopicHistory {
     return tail;
   }
 
-  /** Stores the result as the topic's preview window; false when it cannot stand in for the history. */
+  /**
+   * Stores the result as the topic's preview window and ends tracking; false when it cannot stand in for the
+   * history, including when one of its messages was edited, or deleted after it was left out, since the scan began,
+   * and when the scan already ended or was never followed: what changed meanwhile isn't known then.
+   */
   public boolean publish (Tdlib tdlib) {
-    TdApi.Message[] messages = messages();
-    if (!isUsable(messages)) return false;
-    MessageHistoryPreview.put(tdlib, chatId, topicId, messages, anchorId(messages), anchorOffset(), tail);
-    return true;
+    MessageHistoryPreview.Tracker changes = tracker;
+    tracker = null;
+    if (changes == null) return false;
+    TdApi.Message[] messages = messages(changes);
+    if (!isUsable(messages)) {
+      MessageHistoryPreview.untrack(tdlib, changes);
+      return false;
+    }
+    return MessageHistoryPreview.put(tdlib, chatId, topicId, messages, anchorId(messages), anchorOffset(), tail, changes);
   }
 }
