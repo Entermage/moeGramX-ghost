@@ -2195,13 +2195,13 @@ public class MessagesController extends ViewController<MessagesController.Argume
     final boolean nameMention = StringUtils.isEmpty(username);
     int mentionLength = 0;
     if (!nameMention) {
-      insert = new SpannableStringBuilder("@").append(username).append(' ');
+      insert = new SpannableStringBuilder("@").append(username);
     } else {
       final String name = !StringUtils.isEmpty(user.firstName) ? user.firstName : TD.getUserName(user.firstName, user.lastName);
       if (StringUtils.isEmpty(name)) {
         return false;
       }
-      insert = new SpannableStringBuilder(name).append(' ');
+      insert = new SpannableStringBuilder(name);
       mentionLength = name.length();
     }
     final android.text.Editable editable = inputView.getText();
@@ -2212,7 +2212,11 @@ public class MessagesController extends ViewController<MessagesController.Argume
     final org.thunderdog.challegram.util.TextSelection selection = inputView.getTextSelection();
     final int start = selection != null ? Math.max(0, Math.min(selection.start, length)) : length;
     final int end = selection != null ? Math.max(start, Math.min(selection.end, length)) : length;
-    final boolean needsSpace = start > 0 && !Character.isWhitespace(editable.charAt(start - 1));
+    final boolean reuseTrailingWhitespace = end < length && (Character.isWhitespace(editable.charAt(end)) || Character.isSpaceChar(editable.charAt(end)));
+    if (!reuseTrailingWhitespace) {
+      insert.append(' ');
+    }
+    final boolean needsSpace = start > 0 && !Character.isWhitespace(editable.charAt(start - 1)) && !Character.isSpaceChar(editable.charAt(start - 1));
     if (needsSpace) {
       insert.insert(0, " ");
     }
@@ -2221,7 +2225,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
       insert.setSpan(TD.toSpan(new TdApi.TextEntityTypeMentionName(userId)), mentionStart, mentionStart + mentionLength, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
     }
     editable.replace(start, end, insert);
-    inputView.setSelection(Math.min(editable.length(), start + insert.length()));
+    inputView.setSelection(Math.min(editable.length(), start + insert.length() + (reuseTrailingWhitespace ? 1 : 0)));
     showKeyboard();
     return true;
   }
