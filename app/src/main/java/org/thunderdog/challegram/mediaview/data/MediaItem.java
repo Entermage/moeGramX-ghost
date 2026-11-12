@@ -1765,13 +1765,13 @@ public class MediaItem implements MessageSourceProvider, InvalidateContentProvid
     return false;
   }
 
-  private TdApi.MessageProperties lastProperties;
+  private final MediaMessageProperties messageProperties = new MediaMessageProperties();
 
   public boolean canBeShared () {
     if (msg != null) {
-      TdApi.MessageProperties properties = lastProperties != null ? lastProperties : tdlib.getMessagePropertiesSync(msg);
-      lastProperties = properties;
-      return properties.canBeForwarded;
+      // Not kept forever: a pending message gets its server id later, and a failed request may succeed next time.
+      TdApi.MessageProperties properties = messageProperties.get(msg, tdlib::getMessagePropertiesSyncOrNull);
+      return properties != null && properties.canBeForwarded;
     }
     return getShareFile() != null;
   }

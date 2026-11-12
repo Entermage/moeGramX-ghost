@@ -2083,12 +2083,20 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   }
 
   public @NonNull TdApi.MessageProperties getMessagePropertiesSync (long chatId, long messageId) {
-    TdApi.MessageProperties properties = clientExecuteT(new TdApi.GetMessageProperties(chatId, messageId), false);
+    TdApi.MessageProperties properties = getMessagePropertiesSyncOrNull(chatId, messageId);
     if (properties != null) {
       return properties;
     } else {
       return defaultMessageProperties();
     }
+  }
+
+  /**
+   * @return {@code null} when TDLib returned an error, so callers that keep the answer
+   * can tell a failed request from properties that are really all {@code false}.
+   */
+  public @Nullable TdApi.MessageProperties getMessagePropertiesSyncOrNull (long chatId, long messageId) {
+    return clientExecuteT(new TdApi.GetMessageProperties(chatId, messageId), false);
   }
 
   private static TdApi.MessageProperties defaultMessageProperties () {
