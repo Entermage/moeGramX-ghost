@@ -756,6 +756,9 @@ public class InputView extends NoClipEditText implements InlineSearchContext.Cal
     if (c == null && inputListener instanceof ViewController<?>) {
       c = (ViewController<?>) inputListener;
     }
+    if (c == null) {
+      c = boundController; // Share comments use an anonymous listener; use their owning controller.
+    }
     if (c != null) {
       String existingUrl = existingSpan != null ? existingSpan.getURL() : null;
       c.openInputAlert(Lang.getString(R.string.CreateLink), Lang.getString(R.string.URL), R.string.CreateLinkDone, R.string.CreateLinkCancel, existingUrl, (inputView, result) -> {
@@ -783,6 +786,9 @@ public class InputView extends NoClipEditText implements InlineSearchContext.Cal
     ViewController<?> c = controller;
     if (c == null && inputListener instanceof ViewController<?>) {
       c = (ViewController<?>) inputListener;
+    }
+    if (c == null) {
+      c = boundController; // Same fallback for pasting a link into the selected text.
     }
     if (c != null) {
       if (StringUtils.isEmpty(result)) {

@@ -2134,6 +2134,98 @@ public class MessagesController extends ViewController<MessagesController.Argume
     }
   }
 
+  // XGram (061781b2): long press on a sender's avatar (moe.kirao.mgx.XgramAvatarMenu)
+
+  /** Whether this controller is the one shown in its navigation stack (a delayed menu click must not act on another page). */
+  public boolean xgramIsCurrentStackItem () {
+    NavigationController navigation = navigationController();
+    return !isDestroyed() && navigation != null && navigation.getCurrentStackItem() == this;
+  }
+
+  /**
+   * Whether "Messages from X" can run here: the same chats as the message menu's option (groups, not direct messages),
+   * outside previews, scheduled lists, selection and editing. The search keeps the open thread/topic.
+   */
+  public boolean xgramCanSearchMessagesFromSender () {
+    return chat != null && headerView != null && xgramIsCurrentStackItem() &&
+      !inPreviewMode && !isInForceTouchMode() && !areScheduled && !messagesHidden &&
+      !isEditingMessage() && (!inTransformMode() || inSearchMode()) &&
+      tdlib.isMultiChat(chat.id) && !tdlib.isDirectMessagesChat(chat.id);
+  }
+
+  /** Searches this chat for the user's messages, anchored at {@code anchor} (like the message menu's "Messages from X"). */
+  public boolean xgramSearchMessagesFromSender (@NonNull TGMessage anchor, long userId) {
+    if (userId == 0 || anchor.isDestroyed() || anchor.messagesController() != this || anchor.getChatId() != getChatId() || !xgramCanSearchMessagesFromSender()) {
+      return false;
+    }
+    cancelSheduledKeyboardOpeningAndHideAllKeyboards();
+    foundMessageId = new MessageId(anchor.getChatId(), anchor.getId());
+    searchFromUserMessageId = foundMessageId;
+    manager.setHighlightMessageId(foundMessageId, MessagesManager.HIGHLIGHT_MODE_NORMAL);
+    viewMessagesFromSender(new TdApi.MessageSenderUser(userId), true);
+    return true;
+  }
+
+  /**
+   * Whether the composer takes a mention right now: shown, enabled and writable, not blocked (sending, recording,
+   * off screen) and not editing, selecting, searching or previewing. Secret chats are left out (no name mentions there).
+   */
+  public boolean xgramCanInsertMention () {
+    final InputView inputView = this.inputView;
+    return inputView != null && chat != null && !isSecretChat() && xgramIsCurrentStackItem() &&
+      canWriteMessages() && hasSendBasicMessagePermission() && inputView.isEnabled() &&
+      !isSendingText && inputBlockFlags == 0 &&
+      !isEditingMessage() && !inPreviewMode && !isInForceTouchMode() && !inTransformMode();
+  }
+
+  /**
+   * Puts a mention of the user in the composer in place of the current selection (or at the cursor, or at the end):
+   * "@username", or with no username their name as a name mention (the entity the @ list inserts, see
+   * {@link InputView#onMentionPick}). The text is edited in place, so the draft, the other entities and custom
+   * emoji stay as they are and the change is saved as a user edit.
+   */
+  public boolean xgramInsertMention (long userId) {
+    final InputView inputView = this.inputView;
+    final TdApi.User user = userId != 0 ? tdlib.cache().user(userId) : null;
+    if (inputView == null || user == null || TD.isUserDeleted(user) || !xgramCanInsertMention()) {
+      return false;
+    }
+    final String username = Td.primaryUsername(user);
+    final SpannableStringBuilder insert;
+    final boolean nameMention = StringUtils.isEmpty(username);
+    int mentionLength = 0;
+    if (!nameMention) {
+      insert = new SpannableStringBuilder("@").append(username).append(' ');
+    } else {
+      final String name = !StringUtils.isEmpty(user.firstName) ? user.firstName : TD.getUserName(user.firstName, user.lastName);
+      if (StringUtils.isEmpty(name)) {
+        return false;
+      }
+      insert = new SpannableStringBuilder(name).append(' ');
+      mentionLength = name.length();
+    }
+    final android.text.Editable editable = inputView.getText();
+    if (editable == null) {
+      return false;
+    }
+    final int length = editable.length();
+    final org.thunderdog.challegram.util.TextSelection selection = inputView.getTextSelection();
+    final int start = selection != null ? Math.max(0, Math.min(selection.start, length)) : length;
+    final int end = selection != null ? Math.max(start, Math.min(selection.end, length)) : length;
+    final boolean needsSpace = start > 0 && !Character.isWhitespace(editable.charAt(start - 1));
+    if (needsSpace) {
+      insert.insert(0, " ");
+    }
+    if (nameMention) {
+      int mentionStart = needsSpace ? 1 : 0;
+      insert.setSpan(TD.toSpan(new TdApi.TextEntityTypeMentionName(userId)), mentionStart, mentionStart + mentionLength, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+    }
+    editable.replace(start, end, insert);
+    inputView.setSelection(Math.min(editable.length(), start + insert.length()));
+    showKeyboard();
+    return true;
+  }
+
   @Override
   @SuppressWarnings("deprecation")
   public void onClick (View v) {
@@ -2306,38 +2398,76 @@ public class MessagesController extends ViewController<MessagesController.Argume
         return;
       }
 
+      if (showSlowModeRestriction(sendButton != null ? sendButton : inputView, sendOptions) ||
+          (!musicEntries.isEmpty() && showRestriction(sendButton, RightId.SEND_AUDIO))) {
+        return;
+      }
+
       final List<TdApi.Message> sentMessages = new ArrayList<>(selectedItems.size());
       final ReplyInfo replyTo = getCurrentReplyId();
+      final Object sendingArguments = getArguments();
       final ArrayList<TdApi.Function<?>> functions = new ArrayList<>();
-      final boolean[] isTimeout = new boolean[1];
-      final long chatId = getChatId();
 
-      setIsSendingText(true);
+      final long draftChatId = messageThread != null ? messageThread.getChatId() : getChatId();
+      final TdApi.MessageTopic draftTopicId = messageThread != null ? messageThread.getMessageTopicId() : getMessageTopicId();
+      final ThreadInfo draftThread = messageThread;
+      final TdApi.FormattedText draftText = inputView != null ? inputView.getOutputText(false) : null;
+      final TdApi.InputMessageReplyTo draftReply = replyTo != null ? replyTo.toInputMessageReply() : null;
+      final Runnable clearSentDraft = () -> clearSentAttachmentDraft(draftChatId, draftTopicId, draftThread, draftText, draftReply);
+      setIsSendingText(true, false);
       manager.setSentMessages(sentMessages);
-      Runnable clearInputRunnable = () -> {
-        if (getChatId() == chatId) {
-          clearInputAfterSend(true, true, replyTo, true);
+      // File preparation blocks duplicate sends and input edits, but does not
+      // own the navigation lock. Leaving the page keeps the confirmed send.
+      // A storage delay is not a successful send: keep the draft on failure.
+      Runnable slowFileAccessRunnable = () -> {
+        if (!isDestroyed() && getArguments() == sendingArguments) {
           UI.showToast(Lang.getString(R.string.SlowFileAccess), Toast.LENGTH_LONG);
-          isTimeout[0] = true;
         }
       };
+      UI.post(slowFileAccessRunnable, MathUtils.clamp(50 * selectedItems.size(), 200, 500));
 
-      UI.post(clearInputRunnable, MathUtils.clamp(50 * selectedItems.size(), 200, 500));
-
-      final List<TdApi.Function<?>> musicFunctions = getSendMusicFunctions(sendButton, musicEntries, true, !musicEntries.isEmpty(), caption, sendOptions);
-      sendFiles(sendButton, files, true, true, !musicEntries.isEmpty() && !files.isEmpty() ? null : caption, sendOptions, filesFunctions -> {
-        if (filesFunctions != null) {
-          functions.addAll(filesFunctions);
+      final List<TdApi.Function<?>> musicFunctions = musicEntries.isEmpty() ?
+        Collections.emptyList() : getSendMusicFunctions(sendButton, musicEntries, true, true, caption, sendOptions, true);
+      sendFiles(sendButton, files, true, true, !musicEntries.isEmpty() && !files.isEmpty() ? null : caption, sendOptions, true, filesFunctions -> {
+        UI.cancel(slowFileAccessRunnable);
+        // Prepare the whole selection before sending any of it. A rejected half
+        // must not silently disappear when the other half succeeds.
+        if (filesFunctions == null || musicFunctions == null) {
+          clearInputAfterSend(false, true, replyTo, true);
+          return;
         }
-        if (musicFunctions != null) {
-          functions.addAll(musicFunctions);
+        functions.addAll(filesFunctions);
+        functions.addAll(musicFunctions);
+        if (functions.isEmpty()) {
+          clearInputAfterSend(false, true, replyTo, true);
+          return;
         }
-        executeSendMessageFunctions(functions, sentMessages, sendOptions != null && sendOptions.schedulingState != null, success -> UI.post(() -> {
-          if (!isTimeout[0] && getChatId() == chatId) {
-            clearInputAfterSend(true, true, replyTo, true);
+        if (isDestroyed() || getArguments() != sendingArguments) {
+          // The functions already carry the original chat/topic/reply. Leaving
+          // the page must not silently cancel the user's confirmed send.
+          for (TdApi.Function<?> function : functions) {
+            tdlib.client().send(function, result -> {
+              tdlib.messageHandler().onResult(result);
+              if (result instanceof TdApi.Message || (result instanceof TdApi.Messages && ((TdApi.Messages) result).totalCount > 0)) {
+                tdlib.ui().post(clearSentDraft);
+              }
+            });
           }
-          UI.cancel(clearInputRunnable);
-        }));
+          clearInputAfterSend(false, false, null, false);
+          return;
+        }
+        executeSendMessageFunctions(functions, sentMessages, sendOptions != null && sendOptions.schedulingState != null, success -> {
+          if (success || !sentMessages.isEmpty()) {
+            clearSentDraft.run();
+          }
+          if (getArguments() == sendingArguments) {
+            // Do not offer already accepted messages for a duplicate retry if a
+            // later function fails. TDLib owns their pending/failed send state.
+            clearInputAfterSend(success || !sentMessages.isEmpty(), true, replyTo, true);
+          } else {
+            clearInputAfterSend(false, false, null, false);
+          }
+        });
       });
     } else {
       sendText(applyMarkdown, sendOptions);
@@ -10145,13 +10275,59 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   private boolean isSendingText;
+  private boolean sendOwnsStackLock;
 
   private void setIsSendingText (boolean isSendingText) {
+    setIsSendingText(isSendingText, true);
+  }
+
+  private void setIsSendingText (boolean isSendingText, boolean lockStack) {
     if (this.isSendingText != isSendingText) {
       this.isSendingText = isSendingText;
-      setStackLocked(isSendingText);
+      if (isSendingText && lockStack && !isStackLocked()) {
+        sendOwnsStackLock = true;
+        setStackLocked(true);
+      } else if (!isSendingText && sendOwnsStackLock) {
+        sendOwnsStackLock = false;
+        setStackLocked(false);
+      }
       inputView.setInputBlocked(isSendingText);
+    }
+  }
 
+  /** Clear only the still-matching draft of an accepted attachment send, including after leaving its page. */
+  private void clearSentAttachmentDraft (long chatId, @Nullable TdApi.MessageTopic topicId, @Nullable ThreadInfo thread,
+                                        @Nullable TdApi.FormattedText text, @Nullable TdApi.InputMessageReplyTo replyTo) {
+    RunnableData<TdApi.DraftMessage> clearIfUnchanged = draft -> {
+      if (draft != null && Td.equalsTo(Td.textContent(draft), text) && Td.equalsTo(draft.replyTo, replyTo)) {
+        tdlib.send(new TdApi.SetChatDraftMessage(chatId, topicId, null), (ok, error) -> {
+          if (ok != null && thread != null) {
+            tdlib.ui().post(() -> {
+              if (Td.equalsTo(thread.getDraft(), draft)) {
+                thread.setDraft(null);
+              }
+            });
+          } else if (error != null) {
+            UI.showError(error);
+          }
+        });
+      }
+    };
+    if (thread != null) {
+      long anchorMessageId = thread.getOldestMessageId();
+      if (anchorMessageId != 0) {
+        tdlib.send(new TdApi.GetMessageThread(chatId, anchorMessageId), (currentThread, error) -> {
+          if (currentThread != null) clearIfUnchanged.runWithData(currentThread.draftMessage);
+        });
+      }
+    } else if (topicId instanceof TdApi.MessageTopicForum) {
+      tdlib.send(new TdApi.GetForumTopic(chatId, ((TdApi.MessageTopicForum) topicId).forumTopicId), (topic, error) -> {
+        if (topic != null) clearIfUnchanged.runWithData(topic.draftMessage);
+      });
+    } else {
+      tdlib.send(new TdApi.GetChat(chatId), (chat, error) -> {
+        if (chat != null) clearIfUnchanged.runWithData(chat.draftMessage);
+      });
     }
   }
 
@@ -10245,6 +10421,11 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   private void executeSendMessageFunctions (List<TdApi.Function<?>> functions, List<TdApi.Message> sentMessages, final boolean isSchedule, RunnableBool onDone) {
+    if (functions.isEmpty()) {
+      tdlib.ui().post(() -> onDone.runWithBool(false));
+      return;
+    }
+    final Object sendingArguments = getArguments();
     final int expectedCount = functions.size();
     final int[] sentFunctionsCount = new int[1];
 
@@ -10310,11 +10491,12 @@ public class MessagesController extends ViewController<MessagesController.Argume
             }
             List<TGMessage> parsedMessages = manager.parseMessages(sentMessages);
             tdlib.ui().post(() -> {
-              if (isSchedule == areScheduled) {
+              boolean samePage = !isDestroyed() && getArguments() == sendingArguments;
+              if (samePage && isSchedule == areScheduled) {
                 manager.addSentMessages(parsedMessages);
               }
               onDone.runWithBool(sentFunctionsCount[0] == expectedCount);
-              if (!areScheduled && isSchedule && isFocused()) {
+              if (samePage && !areScheduled && isSchedule && isFocused()) {
                 viewScheduledMessages(true);
               }
             });
@@ -10436,6 +10618,10 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   private List<TdApi.Function<?>> getSendMusicFunctions (View view, List<MediaBottomFilesController.MusicEntry> musicFiles, boolean needGroupMedia, boolean allowReply, @Nullable TdApi.FormattedText lastFileCaption, TdApi.MessageSendOptions initialSendOptions) {
+    return getSendMusicFunctions(view, musicFiles, needGroupMedia, allowReply, lastFileCaption, initialSendOptions, false);
+  }
+
+  private List<TdApi.Function<?>> getSendMusicFunctions (View view, List<MediaBottomFilesController.MusicEntry> musicFiles, boolean needGroupMedia, boolean allowReply, @Nullable TdApi.FormattedText lastFileCaption, TdApi.MessageSendOptions initialSendOptions, boolean keepReply) {
     if (!showSlowModeRestriction(view, initialSendOptions) && !showRestriction(view, RightId.SEND_AUDIO)) {
       TdApi.InputMessageContent[] content = new TdApi.InputMessageContent[musicFiles.size()];
       for (int i = 0; i < content.length; i++) {
@@ -10443,7 +10629,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
         MediaBottomFilesController.MusicEntry musicFile = musicFiles.get(i);
         content[i] = tdlib.filegen().createThumbnail(new TdApi.InputMessageAudio(new TdApi.InputAudio(TD.createInputFile(musicFile.getPath(), musicFile.getMimeType()), null, (int) (musicFile.getDuration() / 1000l), musicFile.getTitle(), musicFile.getArtist()), caption), isSecretChat());
       }
-      ReplyInfo replyInfo = allowReply ? obtainReplyTo() : null;
+      ReplyInfo replyInfo = allowReply ? (keepReply ? getCurrentReplyId() : obtainReplyTo()) : null;
       TdApi.InputMessageReplyTo replyTo = replyInfo != null ? replyInfo.toInputMessageReply() : null;
       TdApi.MessageTopic topicId = getMessageTopicId(replyInfo);
       TdApi.MessageSendOptions finalSendOptions = Td.newSendOptions(
@@ -10664,6 +10850,10 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   private void sendFiles (View view, final List<String> paths, boolean needGroupMedia, boolean allowReply, @Nullable TdApi.FormattedText lastFileCaption, TdApi.MessageSendOptions initialSendOptions, RunnableData<List<TdApi.Function<?>>> onReadyToSend) {
+    sendFiles(view, paths, needGroupMedia, allowReply, lastFileCaption, initialSendOptions, false, onReadyToSend);
+  }
+
+  private void sendFiles (View view, final List<String> paths, boolean needGroupMedia, boolean allowReply, @Nullable TdApi.FormattedText lastFileCaption, TdApi.MessageSendOptions initialSendOptions, boolean keepReply, RunnableData<List<TdApi.Function<?>>> onReadyToSend) {
     if (showSlowModeRestriction(view, initialSendOptions)) {
       onReadyToSend.runWithData(null);
       return;
@@ -10671,7 +10861,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
 
     final long chatId = chat.id;
     final boolean isSecretChat = isSecretChat();
-    ReplyInfo replyInfo = allowReply ? obtainReplyTo() : null;
+    ReplyInfo replyInfo = allowReply ? (keepReply ? getCurrentReplyId() : obtainReplyTo()) : null;
     TdApi.InputMessageReplyTo replyTo = replyInfo != null ? replyInfo.toInputMessageReply() : null;
     TdApi.MessageTopic topicId = getMessageTopicId(replyInfo);
     final TdApi.MessageSendOptions finalSendOptions = Td.newSendOptions(

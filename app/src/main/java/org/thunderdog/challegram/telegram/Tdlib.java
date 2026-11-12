@@ -3566,11 +3566,14 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   }
 
   private TdApi.Countries countries;
+  private long countriesGeneration; // Guarded by dataLock, like countries.
 
   public void getCountries (@Nullable RunnableData<TdApi.CountryInfo[]> callback) {
     TdApi.Countries cachedCountries;
+    final long generation;
     synchronized (dataLock) {
       cachedCountries = this.countries;
+      generation = countriesGeneration;
     }
     if (cachedCountries != null) {
       if (callback != null) {
@@ -3578,8 +3581,16 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       }
     } else {
       send(new TdApi.GetCountries(), (countries, error) -> {
+        final boolean stale;
         synchronized (dataLock) {
-          this.countries = countries;
+          stale = generation != countriesGeneration;
+          if (!stale) {
+            this.countries = countries;
+          }
+        }
+        if (stale) {
+          getCountries(callback);
+          return;
         }
         if (callback != null) {
           if (countries != null) {
@@ -5883,15 +5894,18 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   }
 
   private boolean setLanguagePackIdImpl (@NonNull String languagePackId, boolean dispatch) {
-    if (!StringUtils.equalsOrBothEmpty(languagePackId, languagePackId)) {
-      this.languagePackId = languagePackId;
-      if (dispatch) {
-        updateLanguageParameters(client(), false);
-        this.countries = null; // Reset locale-specific names.
+    synchronized (dataLock) {
+      if (StringUtils.equalsOrBothEmpty(this.languagePackId, languagePackId)) {
+        return false;
       }
-      return true;
+      this.languagePackId = languagePackId;
+      this.countries = null; // Reset locale-specific names, including in-flight replies.
+      this.countriesGeneration++;
     }
-    return false;
+    if (dispatch) {
+      updateLanguageParameters(client(), false);
+    }
+    return true;
   }
 
   public @Nullable String suggestedLanguagePackId () {
@@ -6005,7 +6019,17 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       client.send(new TdApi.SetOption("language_pack_database_path", new TdApi.OptionValueString(context.languageDatabasePath())), okHandler());
       client.send(new TdApi.SetOption("localization_target", new TdApi.OptionValueString(BuildConfig.LANGUAGE_PACK)), okHandler());
     }
-    client.send(new TdApi.SetOption("language_pack_id", new TdApi.OptionValueString(languagePackId)), okHandler());
+    client.send(new TdApi.SetOption("language_pack_id", new TdApi.OptionValueString(languagePackId)), result -> {
+      if (result instanceof TdApi.Ok) {
+        // A GetCountries queued just before SetOption may have observed the old
+        // locale after the first invalidation. Invalidate again on acceptance.
+        synchronized (dataLock) {
+          countries = null;
+          countriesGeneration++;
+        }
+      }
+      okHandler().onResult(result);
+    });
   }
 
   public void applyLanguage (TdApi.LanguagePackInfo languagePack, RunnableBool callback, boolean needSync) {

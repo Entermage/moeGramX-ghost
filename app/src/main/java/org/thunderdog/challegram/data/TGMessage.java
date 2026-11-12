@@ -2972,6 +2972,33 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return CLICK_TYPE_NONE;
   }
 
+  // XGram (061781b2): long press on a sender's avatar (moe.kirao.mgx.XgramAvatarMenu)
+
+  /**
+   * The user whose own avatar is drawn under (x, y) beside this message, or 0. Uses the same hit test as a tap on the
+   * avatar (so the reply, header icons etc. keep priority) and only the avatar shown on top of the message group.
+   * 0 when the avatar isn't the sender's user: forward/import origins shown as the author
+   * ({@link #forceForwardOrImportInfo()}), ads, channels, anonymous admins and demo senders.
+   */
+  public final long xgramAvatarUserAt (MessageView view, float x, float y) {
+    if (!hasAvatar || isSponsoredMessage() || forceForwardOrImportInfo() || isDemoChat() || sender.isDemo() || !sender.isUser()) {
+      return 0;
+    }
+    return getClickType(view, x, y) == CLICK_TYPE_AVATAR ? sender.getUserId() : 0;
+  }
+
+  /** XGram: ends the touch the avatar menu took over, so lifting the finger doesn't also open the profile. */
+  public final void xgramCancelAvatarTouch (View view, float x, float y) {
+    clickHelper.cancel(view, x, y);
+    clickType = CLICK_TYPE_NONE;
+    if (hAuthorNameT != null) {
+      hAuthorNameT.cancelTouch();
+    }
+    if (fAuthorNameT != null) {
+      fAuthorNameT.cancelTouch();
+    }
+  }
+
   private final ClickHelper clickHelper = new ClickHelper(new ClickHelper.Delegate() {
     @Override
     public boolean needClickAt (View view, float x, float y) {

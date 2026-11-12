@@ -1510,6 +1510,14 @@ public class MessageView extends SparseDrawableView implements Destroyable, Draw
   }
 
   private void onLongPress () {
+    // XGram (061781b2): long press on a sender's avatar: View Profile, Send Message, Mention, Messages from X.
+    // Anything else (and every state the menu refuses) keeps the message's own long press below.
+    if (msg != null && (flags & (FLAG_CAUGHT_CLICK | FLAG_CAUGHT_MESSAGE_TOUCH)) != 0 && moe.kirao.mgx.XgramAvatarMenu.show(this, msg, touchX, touchY)) {
+      msg.xgramCancelAvatarTouch(this, touchX, touchY);
+      flags &= ~(FLAG_CAUGHT_CLICK | FLAG_CAUGHT_MESSAGE_TOUCH);
+      setLongPressed(true);
+      return;
+    }
     if ((flags & FLAG_CAUGHT_CLICK) != 0) {
       if (performLongPress()) {
         flags &= ~FLAG_CAUGHT_CLICK;
