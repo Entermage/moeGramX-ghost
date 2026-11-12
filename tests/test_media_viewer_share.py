@@ -253,7 +253,7 @@ class MediaViewerShareTest(unittest.TestCase):
       old = subprocess.run(['git', '-C', str(ROOT), 'show', f'{BASELINE}:{ITEM}'],
                            check=True, capture_output=True, text=True).stdout
     except subprocess.CalledProcessError:
-      self.skipTest('baseline commit not available')
+      self.fail(f'baseline commit {BASELINE} not available; see PROJECT_GUIDE_CN.md')
     classes = self.build(old)
     expected = {
       'sent-while-open': 'sent forward still has no Share in the open viewer',
