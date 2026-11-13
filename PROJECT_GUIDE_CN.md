@@ -182,6 +182,8 @@ flowchart LR
 
 全屏查看消息媒体时，右上角“更多”菜单只有在消息 `canBeSaved` 且 TDLib `GetMessageProperties.canBeForwarded` 为真时才显示“分享”；秘密聊天和相册选择模式不显示，受保护内容、不可保存、自毁、定时及发送中／发送失败的消息也不显示。`MediaItem.canBeShared()` 通过 `MediaMessageProperties` 缓存属性，缓存只对查询时的 chatId／messageId 有效：发送中或发送失败的消息直接视为不可转发且不缓存；从当前聊天消息列表打开查看器时，发送成功事件经该聊天的 `MessagesManager` 交给 `TGMessage`，就地更新同一 `TdApi.Message` 的 id 和发送状态，查看器下次打开菜单时按新 id 重新查询。若独立入口持有的对象没有收到该聊天的更新，则需重新打开查看器以取得新消息。查询失败（`Tdlib.getMessagePropertiesSyncOrNull` 返回 null）不会被当成“不可转发”长期保存，随后再次检查权限时可以重试，包括重新打开“更多”菜单；此查询仍沿用同步等待 TDLib 的既有路径。其他调用方仍使用 `getMessagePropertiesSync` 的全 false 兜底。`tests/test_media_viewer_share.py` 用真实 `TdApi` 编译生产 `canBeShared`、缓存类与 `Tdlib` 属性方法，覆盖发送后出现分享、失败重试、受保护内容保持隐藏，并对基线代码做失败对照；它不替代 Android 上的实际菜单与分享面板测试。
 
+查看器“更多 → 分享”打开 `ShareController` 联系人选择面板后，面板右上角的小分享按钮负责把文件交给 Android 系统分享选择器。`MODE_MESSAGES` 的文件资格只取决于消息可保存权限、发送状态、媒体类型／自毁限制、同批 MIME 和文件可用性；隐藏转发来源 `MessageOriginHiddenUser` 没有原作者 ID，并不代表文件不可分享。作者信息仍影响现有导出附文：未知原作者的消息不携带原图片说明文字；收藏夹不添加附文，私聊会附上会话对象的名称／公开用户名，其他会话沿现有来源名称或消息链接分支处理。这是分享给外部应用的文字内容，不会冒用当前转发者作为原作者。未下载完的文件保留分享按钮，点击后下载完成再导出。大图菜单原有的可保存／可转发检查继续生效；面板导出资格也独立检查 `message.canBeSaved`，其他入口直接打开面板时也不能导出受保护文件。`tests/test_share_export.py` 运行生产资格判断并以旧实现作失败对照；它覆盖小按钮的条件，不替代 Android 系统选择器与接收方读取 URI 的功能验证。
+
 播放器、通话和生日提示共用主导航的一套全局 ongoing bar。辅助列表导航通过 `NavigationController.ownsGlobalOngoingBar=false` 禁止建立和显示这些全局栏，左栏不为它们预留高度。宽屏时控制条显示在右栏主导航的标题区域；右侧尚未选择聊天时，空页面位于主导航标题下方，控制条仍可显示和操作。窗口变窄后继续使用同一主导航的控制条，不生成第二套播放器。
 
 矩形视频 PiP 由 `MediaViewController` 管理，圆形视频浮窗由 `RoundVideoController` 管理。每次拖动后的吸边都取消上一段位置动画，再创建独立动画，从本次拖动结束位置计算目标，避免复用旧动画时重放先前的像素位移。矩形 PiP 遇到窗口尺寸变化时取消旧窗口坐标动画及拖动状态，保留归一化的目标边和上下停靠位置，在新窗口中重新布局；已吸到隐藏侧边时也按该边恢复。圆形浮窗采用相同的独立吸边动画规则。

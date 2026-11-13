@@ -3186,7 +3186,7 @@ public class ShareController extends TelegramViewController<ShareController.Args
   // Settings
 
   private String getExportMimeType (TdApi.Message message) {
-    if (message == null || message.sendingState != null) {
+    if (message == null || !message.canBeSaved || message.sendingState != null) {
       return null;
     }
     TdApi.File file = getFile(message);
@@ -3249,8 +3249,6 @@ public class ShareController extends TelegramViewController<ShareController.Args
   private static final int EXPORT_AVAILABLE = 1;
   private static final int EXPORT_DISABLED = 2;
 
-  private static final boolean ALLOW_SHARED_PRIVATE = true;
-
   private boolean canExportContent () {
     return getExportContentState() != EXPORT_NONE;
   }
@@ -3286,7 +3284,6 @@ public class ShareController extends TelegramViewController<ShareController.Args
         if (args.messages.length == 1 && canExportStaticContent(args.messages[0]))
           return EXPORT_AVAILABLE;
         String lastMimeType = null;
-        long lastAuthorId = 0;
         List<TdApi.File> awaitingFiles = null;
         for (TdApi.Message message : args.messages) {
           String mimeType = getExportMimeType(message);
@@ -3296,13 +3293,8 @@ public class ShareController extends TelegramViewController<ShareController.Args
             lastMimeType = mimeType;
           else if (!lastMimeType.equals(mimeType))
             return EXPORT_NONE;
-          long authorId = Td.getMessageAuthorId(message);
-          if (authorId == 0)
-            return EXPORT_NONE;
-          if (lastAuthorId == 0)
-            lastAuthorId = authorId;
-          else if (lastAuthorId != authorId && (!ALLOW_SHARED_PRIVATE && ChatId.isUserChat(message.chatId) && !tdlib.isSelfChat(message.chatId)))
-            return EXPORT_NONE;
+          // Hidden forward origins have no author id, but can still have exportable files.
+          // exportContent() handles author-dependent captions and attribution separately.
           TdApi.File file = getFile(message);
           if (file == null)
             return EXPORT_NONE;
